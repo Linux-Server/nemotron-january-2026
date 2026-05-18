@@ -1,0 +1,116 @@
+[2026-05-18T22:47:22.833Z] Starting Codex Task.
+[2026-05-18T22:47:25.172Z] Starting Codex task thread.
+[2026-05-18T22:47:25.830Z] Thread ready (019e3d45-cf64-7a80-98a2-853a622e3c8e).
+[2026-05-18T22:47:25.845Z] Turn started (019e3d45-cf93-7cd3-8587-9b1d37ee15fd).
+[2026-05-18T22:47:43.365Z] Assistant message captured: I’ll keep this strictly read-only: full two-file diff, surrounding source, and the relevant P...
+
+[2026-05-18T22:47:43.365Z] Assistant message
+I’ll keep this strictly read-only: full two-file diff, surrounding source, and the relevant PLAN.md sections only.
+[2026-05-18T22:47:43.406Z] Running command: /bin/bash -lc 'rg -n "Step 6b|6b|Step 7|7a|7b|7c|7d|Step 8|broken|buffer-prepend|warm-up|warm...
+[2026-05-18T22:47:43.417Z] Command completed: /bin/bash -lc 'rg -n "Step 6b|6b|Step 7|7a|7b|7c|7d|Step 8|broken|buffer-prepend|warm-up|warm... (exit 0)
+[2026-05-18T22:47:43.417Z] Running command: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py src/nemotron_speech/tts_server.py'
+[2026-05-18T22:47:43.417Z] Command completed: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py src/nemotron_speech/tts_server.py' (exit 0)
+[2026-05-18T22:47:54.543Z] Assistant message captured: The diff is small, but the server hunk touches constructor state, model load/decoding, and se...
+
+[2026-05-18T22:47:54.543Z] Assistant message
+The diff is small, but the server hunk touches constructor state, model load/decoding, and session initialization, so I’m reading those regions with line numbers and the plan text around Steps 6b-8 before judging interactions.
+[2026-05-18T22:47:54.576Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1,190p'"
+[2026-05-18T22:47:54.576Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1,190p'" (exit 0)
+[2026-05-18T22:47:54.579Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '190,360p'"
+[2026-05-18T22:47:54.579Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '190,360p'" (exit 0)
+[2026-05-18T22:47:54.594Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/tts_server.py | sed -n '1,130p'"
+[2026-05-18T22:47:54.594Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '1,90p'"
+[2026-05-18T22:47:54.594Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/tts_server.py | sed -n '1,130p'" (exit 0)
+[2026-05-18T22:47:54.594Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '1,90p'" (exit 0)
+[2026-05-18T22:47:54.596Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '360,490p'"
+[2026-05-18T22:47:54.596Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '360,490p'" (exit 0)
+[2026-05-18T22:48:01.235Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '360,470p'"
+[2026-05-18T22:48:01.235Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '470,710p'"
+[2026-05-18T22:48:01.235Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '360,470p'" (exit 0)
+[2026-05-18T22:48:01.235Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '470,710p'" (exit 0)
+[2026-05-18T22:48:01.239Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '710,850p'"
+[2026-05-18T22:48:01.239Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '710,850p'" (exit 0)
+[2026-05-18T22:48:01.243Z] Running command: /bin/bash -lc 'git diff --unified=80 -- src/nemotron_speech/server.py src/nemotron_speech/tts...
+[2026-05-18T22:48:01.243Z] Command completed: /bin/bash -lc 'git diff --unified=80 -- src/nemotron_speech/server.py src/nemotron_speech/tts... (exit 0)
+[2026-05-18T22:48:29.133Z] Assistant message captured: One concrete issue already shows up: the new ASR `device` field is not propagated to the infe...
+
+[2026-05-18T22:48:29.133Z] Assistant message
+One concrete issue already shows up: the new ASR `device` field is not propagated to the inference tensors, which still use hard-coded CUDA allocation. I’m checking NeMo decoding config references now so the beam verdict is based on the expected schema, not guesswork.
+[2026-05-18T22:48:29.175Z] Running command: /bin/bash -lc 'rg -n "maes_num_steps|search_type.*maes|return_best_hypothesis|class.*RNNTDeco...
+[2026-05-18T22:48:29.175Z] Command failed: /bin/bash -lc 'rg -n "maes_num_steps|search_type.*maes|return_best_hypothesis|class.*RNNTDeco... (exit 2)
+[2026-05-18T22:48:29.181Z] Running command: /bin/bash -lc 'rg -n "change_decoding_strategy|NEMOTRON_DECODING|NEMOTRON_ONSET_WARMUP_MS|NEM...
+[2026-05-18T22:48:29.181Z] Command completed: /bin/bash -lc 'rg -n "change_decoding_strategy|NEMOTRON_DECODING|NEMOTRON_ONSET_WARMUP_MS|NEM... (exit 0)
+[2026-05-18T22:48:38.250Z] Running command: /bin/bash -lc "nl -ba docs/semantic-wer-finalization-finding.md | sed -n '100,125p'"
+[2026-05-18T22:48:38.250Z] Command completed: /bin/bash -lc "nl -ba docs/semantic-wer-finalization-finding.md | sed -n '100,125p'" (exit 0)
+[2026-05-18T22:48:38.256Z] Running command: /bin/bash -lc "nl -ba docs/semantic-wer-finalization-finding.md | sed -n '300,320p'"
+[2026-05-18T22:48:38.256Z] Command completed: /bin/bash -lc "nl -ba docs/semantic-wer-finalization-finding.md | sed -n '300,320p'" (exit 0)
+[2026-05-18T22:48:38.259Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/probe_alias.py | sed -n '600,640p'"
+[2026-05-18T22:48:38.259Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/probe_alias.py | sed -n '600,640p'" (exit 0)
+[2026-05-18T22:48:38.260Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/modal/asr_server_modal.py | sed -n '140,180p'"
+[2026-05-18T22:48:38.260Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/modal/asr_server_modal.py | sed -n '140,180p'" (exit 0)
+[2026-05-18T22:48:38.264Z] Running command: /bin/bash -lc "nl -ba tests/test_streaming_blackwell.py | sed -n '55,75p'"
+[2026-05-18T22:48:38.274Z] Command completed: /bin/bash -lc "nl -ba tests/test_streaming_blackwell.py | sed -n '55,75p'" (exit 0)
+[2026-05-18T22:48:46.234Z] Running command: /bin/bash -lc "nl -ba tests/test_full_audio.py | sed -n '1,35p'"
+[2026-05-18T22:48:46.234Z] Running command: /bin/bash -lc "nl -ba tests/benchmark_inference.py | sed -n '1,45p'"
+[2026-05-18T22:48:46.234Z] Command completed: /bin/bash -lc "nl -ba tests/test_full_audio.py | sed -n '1,35p'" (exit 0)
+[2026-05-18T22:48:46.234Z] Command completed: /bin/bash -lc "nl -ba tests/benchmark_inference.py | sed -n '1,45p'" (exit 0)
+[2026-05-18T22:48:46.236Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/scripts/measure.py | sed -n '450,480p'"
+[2026-05-18T22:48:46.246Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/scripts/measure.py | sed -n '450,480p'" (exit 0)
+[2026-05-18T22:48:51.109Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/scripts/measure.py | sed -n '880,950p'"
+[2026-05-18T22:48:51.109Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/scripts/measure.py | sed -n '880,950p'" (exit 0)
+[2026-05-18T22:48:51.110Z] Running command: /bin/bash -lc 'rg -n "NEMOTRON_RIGHT_CONTEXT|right-context|server.py|nemotron_speech.server|N...
+[2026-05-18T22:48:51.110Z] Command completed: /bin/bash -lc 'rg -n "NEMOTRON_RIGHT_CONTEXT|right-context|server.py|nemotron_speech.server|N... (exit 0)
+[2026-05-18T22:48:56.151Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '1,80p'"
+[2026-05-18T22:48:56.151Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '1,80p'" (exit 0)
+[2026-05-18T22:48:56.153Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '230,330p'"
+[2026-05-18T22:48:56.153Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '230,330p'" (exit 0)
+[2026-05-18T22:49:31.657Z] Running command: /bin/bash -lc 'rg -n "overlap_buffer|last_emitted_text|emitted_frames" src/nemotron_speech/se...
+[2026-05-18T22:49:31.657Z] Command completed: /bin/bash -lc 'rg -n "overlap_buffer|last_emitted_text|emitted_frames" src/nemotron_speech/se... (exit 0)
+[2026-05-18T22:50:25.935Z] Assistant message captured: Read-only review only. **PART A** | Change | Quality / bugs / risks | Verdict | |---|---|---|...
+
+[2026-05-18T22:50:25.935Z] Assistant message
+Read-only review only.
+
+**PART A**
+| Change | Quality / bugs / risks | Verdict |
+|---|---|---|
+| ASR `device` param + `NEMOTRON_SPEECH_DEVICE` + CPU fallback at [server.py:82](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:82), [server.py:90](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:90), [server.py:134](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:134) | Incomplete and risky. The model moves to `self.device`, but inference tensors still use hard-coded `.cuda()` / `device='cuda'` in warmup and chunk paths: [server.py:234](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:234), [server.py:404](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:404), [server.py:616](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:616). `cpu` or `cuda:1` can produce device mismatch or startup failure. For this benchmark, CUDA should hard-fail, not silently fall back. | **Fix or revert before commit.** Prefer hard CUDA requirement for benchmark runs, or make every tensor allocation use `self.device` and still reject CPU for benchmark mode. |
+| `NEMOTRON_DECODING=beam` branch at [server.py:141](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:141) | Default unset path remains greedy and preserves the Blackwell-safe config: `strategy='greedy'`, `loop_labels=False`, `use_cuda_graph_decoder=False` at [server.py:156](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:156). Beam is inert unless explicitly enabled. No obvious schema bug in the MAES config, but it is out of scope and documented as Blackwell-non-viable. Invalid env values silently become greedy. | **Keep only as quarantined experimental code.** Not a Step 6b-8 blocker if env is unset; do not use for canonical numbers. |
+| `NEMOTRON_ONSET_WARMUP_MS` buffer-prepend at [server.py:286](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:286) | Yes, this is exactly the broken buffer-prepend described in PLAN Step 8: zeros are inserted into `accumulated_audio`, but cache/hyp state is still fresh and `emitted_frames` is reset to `0` at [server.py:298](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:298). PLAN says to replace this with a real `conformer_stream_step` warm-up at [PLAN.md:460](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:460). It is inert when env is unset/default `0`. When enabled, it can add artificial silence to transcript/finalization state, does not warm the encoder cache, has unguarded `int()` env parsing, and the overlap check is logically wrong because `overlap_buffer` is cleared before the condition. | **Revert or quarantine until Step 8 replaces it.** Safe only with env unset. |
+| `tts_server.py` `map_location=cpu` before `.cuda()` at [tts_server.py:84](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/tts_server.py:84) | Loads Magpie TTS checkpoint on CPU then moves model to CUDA. Reasonable memory-spike mitigation if NeMo accepts the arg. No ASR behavior impact. | **Keep.** Irrelevant to ASR benchmarking except possible shared GPU memory pressure during mixed ASR/TTS startup. |
+| Internal consistency: greedy / right context | The greedy strategy is part of this diff only as a refactor around an env gate; the underlying greedy config remains sound. `RIGHT_CONTEXT_OPTIONS` and `--right-context` are not added by this diff. `--right-context 0` remains exposed at [server.py:731](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:731), but PLAN already records rc0 unsupported. | **Sound for rc1/default.** rc0 is a known non-diff hazard, not caused here. |
+
+**PART B**
+The default measured baseline is only sound under strict conditions: CUDA available, `NEMOTRON_SPEECH_DEVICE` unset/default CUDA, `NEMOTRON_DECODING` unset/default greedy, and `NEMOTRON_ONSET_WARMUP_MS=0`. Under those conditions, Gp/Ga/Step 4 were measuring the intended greedy rc1-ish server path.
+
+The CPU fallback does threaten future benchmark integrity as a policy, but this exact code likely would not silently benchmark on CPU: hard-coded `.cuda()` calls should fail once warmup or inference starts. The danger is that the warning+fallback normalizes CPU as acceptable, and a later “complete device support” patch could make bad CPU benchmark numbers look valid unless CUDA is required.
+
+Keeping the broken onset prepend does not matter for Steps 6b/7 if it remains unset. It does matter as soon as someone enables it, and Step 6b’s ring-buffer rewrite will make this path even more stale because Step 8 expects no `accumulated_audio` bookkeeping after ring-buffer work. Step 8 must replace it, not layer on top of it.
+
+For Step 7, the current warm-up path is tied to `_init_session`; Step 7b deliberately stops calling `_init_session` on within-utterance pauses, and Step 7c forks parent state. The buffer-prepend path is therefore not useful for the continuous-context/fork design and can interfere with the exact session/ring cursor initialization Step 8 needs.
+
+**One-line verdict:** not a sound baseline to commit-and-build-on as-is; fix/quarantine the ASR device fallback and remove or explicitly disable the broken onset buffer-prepend before Step 6b, while leaving beam only as an unset experimental knob.
+[2026-05-18T22:50:25.955Z] Turn completed.
+
+[2026-05-18T22:50:25.980Z] Final output
+Read-only review only.
+
+**PART A**
+| Change | Quality / bugs / risks | Verdict |
+|---|---|---|
+| ASR `device` param + `NEMOTRON_SPEECH_DEVICE` + CPU fallback at [server.py:82](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:82), [server.py:90](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:90), [server.py:134](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:134) | Incomplete and risky. The model moves to `self.device`, but inference tensors still use hard-coded `.cuda()` / `device='cuda'` in warmup and chunk paths: [server.py:234](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:234), [server.py:404](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:404), [server.py:616](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:616). `cpu` or `cuda:1` can produce device mismatch or startup failure. For this benchmark, CUDA should hard-fail, not silently fall back. | **Fix or revert before commit.** Prefer hard CUDA requirement for benchmark runs, or make every tensor allocation use `self.device` and still reject CPU for benchmark mode. |
+| `NEMOTRON_DECODING=beam` branch at [server.py:141](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:141) | Default unset path remains greedy and preserves the Blackwell-safe config: `strategy='greedy'`, `loop_labels=False`, `use_cuda_graph_decoder=False` at [server.py:156](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:156). Beam is inert unless explicitly enabled. No obvious schema bug in the MAES config, but it is out of scope and documented as Blackwell-non-viable. Invalid env values silently become greedy. | **Keep only as quarantined experimental code.** Not a Step 6b-8 blocker if env is unset; do not use for canonical numbers. |
+| `NEMOTRON_ONSET_WARMUP_MS` buffer-prepend at [server.py:286](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:286) | Yes, this is exactly the broken buffer-prepend described in PLAN Step 8: zeros are inserted into `accumulated_audio`, but cache/hyp state is still fresh and `emitted_frames` is reset to `0` at [server.py:298](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:298). PLAN says to replace this with a real `conformer_stream_step` warm-up at [PLAN.md:460](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:460). It is inert when env is unset/default `0`. When enabled, it can add artificial silence to transcript/finalization state, does not warm the encoder cache, has unguarded `int()` env parsing, and the overlap check is logically wrong because `overlap_buffer` is cleared before the condition. | **Revert or quarantine until Step 8 replaces it.** Safe only with env unset. |
+| `tts_server.py` `map_location=cpu` before `.cuda()` at [tts_server.py:84](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/tts_server.py:84) | Loads Magpie TTS checkpoint on CPU then moves model to CUDA. Reasonable memory-spike mitigation if NeMo accepts the arg. No ASR behavior impact. | **Keep.** Irrelevant to ASR benchmarking except possible shared GPU memory pressure during mixed ASR/TTS startup. |
+| Internal consistency: greedy / right context | The greedy strategy is part of this diff only as a refactor around an env gate; the underlying greedy config remains sound. `RIGHT_CONTEXT_OPTIONS` and `--right-context` are not added by this diff. `--right-context 0` remains exposed at [server.py:731](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:731), but PLAN already records rc0 unsupported. | **Sound for rc1/default.** rc0 is a known non-diff hazard, not caused here. |
+
+**PART B**
+The default measured baseline is only sound under strict conditions: CUDA available, `NEMOTRON_SPEECH_DEVICE` unset/default CUDA, `NEMOTRON_DECODING` unset/default greedy, and `NEMOTRON_ONSET_WARMUP_MS=0`. Under those conditions, Gp/Ga/Step 4 were measuring the intended greedy rc1-ish server path.
+
+The CPU fallback does threaten future benchmark integrity as a policy, but this exact code likely would not silently benchmark on CPU: hard-coded `.cuda()` calls should fail once warmup or inference starts. The danger is that the warning+fallback normalizes CPU as acceptable, and a later “complete device support” patch could make bad CPU benchmark numbers look valid unless CUDA is required.
+
+Keeping the broken onset prepend does not matter for Steps 6b/7 if it remains unset. It does matter as soon as someone enables it, and Step 6b’s ring-buffer rewrite will make this path even more stale because Step 8 expects no `accumulated_audio` bookkeeping after ring-buffer work. Step 8 must replace it, not layer on top of it.
+
+For Step 7, the current warm-up path is tied to `_init_session`; Step 7b deliberately stops calling `_init_session` on within-utterance pauses, and Step 7c forks parent state. The buffer-prepend path is therefore not useful for the continuous-context/fork design and can interfere with the exact session/ring cursor initialization Step 8 needs.
+
+**One-line verdict:** not a sound baseline to commit-and-build-on as-is; fix/quarantine the ASR device fallback and remove or explicitly disable the broken onset buffer-prepend before Step 6b, while leaving beam only as an unset experimental knob.

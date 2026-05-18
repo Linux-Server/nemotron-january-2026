@@ -189,6 +189,17 @@ nemotron_local --model <tag>`.
 - Fork flush must hold `inference_lock` (no concurrent parent-stream + fork on
   the same model object); count that latency honestly.
 - Each step is independently committable and leaves the benchmark runnable.
+- **Baseline hardening (2026-05-18, dual-reviewed, pre-Step-6b):** the
+  pre-existing uncommitted `server.py` changes were reviewed (me + Codex).
+  Folded: device CUDA->CPU silent fallback **removed** -> hard `raise` if
+  CUDA unavailable (no silent-CPU benchmark hazard); the ineffective+buggy
+  `NEMOTRON_ONSET_WARMUP_MS` buffer-prepend **removed** (Step 8 implements
+  the correct warm-up from scratch); the env-gated `NEMOTRON_DECODING=beam`
+  branch **kept inert** (default greedy byte-identical to prior). Verified
+  behavior-preserving for the default/validated config (model-load line
+  unchanged; smoke: server loads on CUDA, healthy) -> **Gp/Ga/Step4/6a
+  results remain valid**. `tts_server.py` committed separately (unrelated
+  TTS, not ASR).
 
 ### Resource constraints
 - Shared GPU: another project's vLLM holds ~26 GB; ~5 GB headroom. Run the
@@ -458,7 +469,7 @@ nemotron_local --model <tag>`.
   `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
 
 - [ ] **8. Phase 3 — correct per-session warm-up (residual onset, UX polish)**
-  In `server.py._init_session`, replace the broken buffer-prepend: after
+  In `server.py._init_session`, implement the correct warm-up (the broken `NEMOTRON_ONSET_WARMUP_MS` buffer-prepend was already removed in the 2026-05-18 baseline hardening — `_init_session` is now clean): after
   `get_initial_cache_state()`, synthesize ~`warmup_ms` silence →
   `model.preprocessor` → `conformer_stream_step(..., keep_all_outputs=False,
   drop_extra_pre_encoded=0)`. **Do not pass `return_transcription=False`** —
@@ -519,7 +530,7 @@ nemotron_local --model <tag>`.
 | 3 | Aliasing probe (NeMo fork safety, serialized) | done | `eab05dd` | **Gate Ga PASS** (probe + independent re-run, exit 0): detector-selftest PASS (injected cache + `root.y_sequence` corruption caught); server-path `GreedyRNNTInfer`/loop_labels=False shallow+deep all clean; batched `GreedyBatchedRNNTInfer` shallow corrupts (hyps+continuation) / deep clean → deep-clone recipe robust even on the hazard path. Serialized-only: fork flush holds `inference_lock`, no concurrent parent step. 7c/7d proceed w/ deep-clone recipe. DOC-CORRECTION (B-Ga) queued → Step 9 |
 | 4 | Phase 0 rc0-vs-rc1 + vad-stop-secs control | done | `d23b067` | **rc0 UNSUPPORTED**: `att_context=[70,0]` deterministically crashes upstream NeMo `multi_head_attention.py:267 rel_shift` (0-element reshape; 7.5h burned, 35M crashes, 0 transcriptions, 1st crash 2s into sample 1). Per user decision: rc0 dropped + recorded unsupported. Scope → `rc1_base` + `vad020/040/060/100` (5 cfg, all rc1). Sweep relaunched (5cfg). **Revised 2026-05-18 (user): run incrementally — rc1_base→vad020→vad100; defer vad040/vad060, evaluate vad100 then decide whether to backfill full frontier.** rc1_base done=3.18% (≈ '' 3.08%, reproducible). rc0 row → Step 9 table/doc. **CONCLUDED 2026-05-18:** in-budget points ≈ baseline (rc1_base sliceA 2.84%/sliceB 3.16%, Δ +0.10/+0.16pp CIs incl 0; vad020 2.89%/3.33% ≈ base); real-observer TTFS median ~212ms (**IN <400ms budget**) but accuracy-damaged (2.45 hard-resets/sample, 654/1000 early-final). vad-stop>0.2s + vad100 NOT run (exceed <400ms, no insight beyond Gp); rc0 unsupported. Conclusion: VAD tuning ≠ WER lever — Steps 6–7 must deliver Phase-G accuracy at ~212ms-class latency |
 | 5 | Phase 1 client plumbing fix (sweep CUT) | done | `382c0cf` (stt-bench) | **GUTTED 2026-05-18 (user):** debounce-hold sweep out of <400ms budget + redundant w/ Gate Gp. Only the `_handle_transcript` finalize/interim plumbing fix Step 7a reuses; **no `dbnc*` runs**, implement + code-verify only. ✓ DONE: finalize/interim split + empty/dup/unarmed suppression + confirm_finalize + post-final stop() skip + `_send_finalize_reset` (reuses `_audio_send_lock`, no 2nd lock); default `''`/phaseG_single preserved; py_compile+import OK; no measurement (7a exercises it) |
-| 6a | Equivalence harness + fixture characterization | done | `<parent>` | golden oracle: `equiv_harness.py` + `equiv_golden/` (3 sha256-pinned fixtures: 6/68/99 chunks). Independent `assert` re-run byte-identical PASS exit 0 (deterministic). Production untouched. **6b must add a ring-buffer mode to the harness that reproduces this golden via the new server path** |
+| 6a | Equivalence harness + fixture characterization | done | `c48f1c9` | golden oracle: `equiv_harness.py` + `equiv_golden/` (3 sha256-pinned fixtures: 6/68/99 chunks). Independent `assert` re-run byte-identical PASS exit 0 (deterministic). Production untouched. **6b must add a ring-buffer mode to the harness that reproduces this golden via the new server path** |
 | 6b | Incremental ring-buffer preprocessor impl | pending | — | gated Gp; needs 6a (byte-equal) |
 | 6c | Perf + WER-parity validation (`ringbuf`) | pending | — | gated Gp; needs 6b |
 | 7a | WS protocol + thin-client translator | pending | — | gated Gp; needs 6c |

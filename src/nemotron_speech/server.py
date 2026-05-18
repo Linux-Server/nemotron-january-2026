@@ -86,6 +86,14 @@ class ASRServer:
         self.right_context = right_context
         self.model = None
         self.sample_rate = 16000
+        # ASR benchmark server REQUIRES CUDA — fail fast, never silently fall
+        # back to CPU (a CPU/wrong-device run yields invalid benchmark numbers
+        # while looking 'fine'). Baseline hardening 2026-05-18 (dual review).
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is required for the Nemotron ASR benchmark server "
+                "(torch.cuda.is_available() is False); refusing to run on CPU."
+            )
 
         # Inference lock
         self.inference_lock = asyncio.Lock()
@@ -126,15 +134,30 @@ class ASRServer:
                 self.model_name_or_path, map_location='cpu'
             )
         self.model = self.model.cuda()
+        logger.info("ASR model loaded on CUDA")
 
         # Configure attention context for streaming
         logger.info(f"Setting att_context_size=[70, {self.right_context}] ({RIGHT_CONTEXT_OPTIONS.get(self.right_context, 'custom')})")
         self.model.encoder.set_default_att_context_size([70, self.right_context])
 
-        # Configure greedy decoding (required for Blackwell GPU)
-        logger.info("Configuring greedy decoding for Blackwell compatibility...")
-        self.model.change_decoding_strategy(
-            decoding_cfg=OmegaConf.create({
+        # Decoding strategy: greedy (default, Blackwell-safe) or beam via
+        # NEMOTRON_DECODING=beam (experimental; may be slower / unsupported on
+        # some GPUs).
+        _decoding = os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower()
+        if _decoding == "beam":
+            logger.info("Configuring BEAM (maes) decoding...")
+            _decoding_cfg = OmegaConf.create({
+                'strategy': 'beam',
+                'beam': {
+                    'beam_size': 4,
+                    'search_type': 'maes',
+                    'maes_num_steps': 2,
+                    'return_best_hypothesis': True,
+                }
+            })
+        else:
+            logger.info("Configuring greedy decoding for Blackwell compatibility...")
+            _decoding_cfg = OmegaConf.create({
                 'strategy': 'greedy',
                 'greedy': {
                     'max_symbols': 10,
@@ -142,7 +165,7 @@ class ASRServer:
                     'use_cuda_graph_decoder': False,
                 }
             })
-        )
+        self.model.change_decoding_strategy(decoding_cfg=_decoding_cfg)
         self.model.eval()
 
         # Disable dither for deterministic preprocessing
@@ -262,6 +285,9 @@ class ASRServer:
         else:
             session.accumulated_audio = np.array([], dtype=np.float32)
 
+        # (Removed 2026-05-18 baseline hardening: the NEMOTRON_ONSET_WARMUP_MS
+        # buffer-prepend was an ineffective + buggy onset warm-up. PLAN Step 8
+        # implements the correct conformer_stream_step warm-up from scratch.)
         session.emitted_frames = 0
 
         # Reset decoder state
