@@ -81,7 +81,12 @@ async def load_model(model_id: str = "nvidia/magpie_tts_multilingual_357m"):
             if hf_token:
                 os.environ["HF_TOKEN"] = hf_token
 
-            model = MagpieTTSModel.from_pretrained(model_id)
+            # Restore on CPU first to avoid a GPU-memory spike while NeMo loads
+            # checkpoint tensors, then move the instantiated model to CUDA.
+            model = MagpieTTSModel.from_pretrained(
+                model_id,
+                map_location=torch.device("cpu"),
+            )
             model = model.cuda()
             model.eval()
             return model
