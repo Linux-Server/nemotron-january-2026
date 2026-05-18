@@ -1,0 +1,194 @@
+[2026-05-18T21:34:54.245Z] Starting Codex Task.
+[2026-05-18T21:34:56.517Z] Starting Codex task thread.
+[2026-05-18T21:34:56.931Z] Thread ready (019e3d03-7383-7a91-a329-31bc8272db14).
+[2026-05-18T21:34:56.943Z] Turn started (019e3d03-73ae-7060-a4b4-7f7211f16fac).
+[2026-05-18T21:35:04.951Z] Assistant message captured: I’ll read the plan and the current client implementation first, then make a narrow edit only ...
+
+[2026-05-18T21:35:04.951Z] Assistant message
+I’ll read the plan and the current client implementation first, then make a narrow edit only in `nemotron_local_stt.py` and verify it with `py_compile`.
+[2026-05-18T21:35:04.988Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-18T21:35:04.997Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-18T21:35:04.997Z] Running command: /bin/bash -lc "sed -n '1,320p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T21:35:04.997Z] Command completed: /bin/bash -lc "sed -n '1,320p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T21:35:09.963Z] Running command: /bin/bash -lc "sed -n '320,760p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T21:35:09.963Z] Running command: /bin/bash -lc "sed -n '260,620p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-18T21:35:09.963Z] Command completed: /bin/bash -lc "sed -n '320,760p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T21:35:09.963Z] Command completed: /bin/bash -lc "sed -n '260,620p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-18T21:35:20.234Z] Assistant message captured: The plan confirms Step 5 is just the gutted plumbing fix. I’m now checking the current handsh...
+
+[2026-05-18T21:35:20.234Z] Assistant message
+The plan confirms Step 5 is just the gutted plumbing fix. I’m now checking the current handshake details in the local client and pipecat base class so the change uses the existing `request_finalize()`/`confirm_finalize()` contract instead of inventing a parallel state.
+[2026-05-18T21:35:20.273Z] Running command: /bin/bash -lc 'git status --short -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py pr...
+[2026-05-18T21:35:20.273Z] Command completed: /bin/bash -lc 'git status --short -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py pr... (exit 0)
+[2026-05-18T21:35:20.275Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '1,520p'"
+[2026-05-18T21:35:20.275Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '1,520p'" (exit 0)
+[2026-05-18T21:35:20.298Z] Running command: /bin/bash -lc 'rg -n "def request_finalize|def confirm_finalize|_finalize_requested|_finalize...
+[2026-05-18T21:35:20.298Z] Command failed: /bin/bash -lc 'rg -n "def request_finalize|def confirm_finalize|_finalize_requested|_finalize... (exit 2)
+[2026-05-18T21:35:27.528Z] Running command: /bin/bash -lc "sed -n '180,225p' pipecat-core-code/src/pipecat/services/stt_service.py"
+[2026-05-18T21:35:27.528Z] Command completed: /bin/bash -lc "sed -n '180,225p' pipecat-core-code/src/pipecat/services/stt_service.py" (exit 0)
+[2026-05-18T21:35:27.530Z] Running command: /bin/bash -lc "sed -n '440,520p' pipecat-core-code/src/pipecat/services/stt_service.py"
+[2026-05-18T21:35:27.530Z] Command completed: /bin/bash -lc "sed -n '440,520p' pipecat-core-code/src/pipecat/services/stt_service.py" (exit 0)
+[2026-05-18T21:35:27.532Z] Running command: /bin/bash -lc 'rg -n "def _send_reset|finalize|last_emitted_text|is_final" src/nemotron_speec...
+[2026-05-18T21:35:27.532Z] Command completed: /bin/bash -lc 'rg -n "def _send_reset|finalize|last_emitted_text|is_final" src/nemotron_speec... (exit 0)
+[2026-05-18T21:36:30.582Z] Running command: /bin/bash -lc "sed -n '520,610p' pipecat-core-code/src/pipecat/services/stt_service.py"
+[2026-05-18T21:36:30.582Z] Running command: /bin/bash -lc "sed -n '480,620p' src/nemotron_speech/server.py"
+[2026-05-18T21:36:30.582Z] Command completed: /bin/bash -lc "sed -n '520,610p' pipecat-core-code/src/pipecat/services/stt_service.py" (exit 0)
+[2026-05-18T21:36:30.582Z] Command completed: /bin/bash -lc "sed -n '480,620p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-18T21:36:30.584Z] Running command: /bin/bash -lc "rg -n \"_final_transcription|last.*final|duplicate|TranscriptionFrame\\(\" stt...
+[2026-05-18T21:36:30.584Z] Command completed: /bin/bash -lc "rg -n \"_final_transcription|last.*final|duplicate|TranscriptionFrame\\(\" stt... (exit 0)
+[2026-05-18T21:36:33.035Z] Running command: /bin/bash -lc "sed -n '400,455p' pipecat-core-code/src/pipecat/services/stt_service.py"
+[2026-05-18T21:36:33.035Z] Command completed: /bin/bash -lc "sed -n '400,455p' pipecat-core-code/src/pipecat/services/stt_service.py" (exit 0)
+[2026-05-18T21:37:15.983Z] Running command: /bin/bash -lc 'rg -n "class TranscriptionFrame|finalized" pipecat-core-code/src/pipecat/frame...
+[2026-05-18T21:37:15.984Z] Command failed: /bin/bash -lc 'rg -n "class TranscriptionFrame|finalized" pipecat-core-code/src/pipecat/frame... (exit 2)
+[2026-05-18T21:37:18.166Z] Running command: /bin/bash -lc "sed -n '405,438p' pipecat-core-code/src/pipecat/frames/frames.py"
+[2026-05-18T21:37:18.166Z] Command completed: /bin/bash -lc "sed -n '405,438p' pipecat-core-code/src/pipecat/frames/frames.py" (exit 0)
+[2026-05-18T21:37:38.555Z] Assistant message captured: I have enough context. The edit will keep the existing reset/send structure and `_audio_send_...
+
+[2026-05-18T21:37:38.555Z] Assistant message
+I have enough context. The edit will keep the existing reset/send structure and `_audio_send_lock`; the narrow changes are: bind `request_finalize()` to the actual reset send, only commit `is_final && finalize` responses with a live request, suppress final duplicates/empties, and skip the shutdown reset once a final has already been committed.
+[2026-05-18T21:37:57.907Z] Applying 1 file change(s).
+[2026-05-18T21:37:57.916Z] File changes completed.
+[2026-05-18T21:38:22.123Z] Applying 1 file change(s).
+[2026-05-18T21:38:22.123Z] File changes completed.
+[2026-05-18T21:38:26.062Z] Running command: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:38:26.075Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '118,450p'"
+[2026-05-18T21:38:26.075Z] Command completed: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:38:26.075Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '118,450p'" (exit 0)
+[2026-05-18T21:38:33.841Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T21:38:33.841Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T21:38:33.845Z] Running command: /bin/bash -lc 'git ls-files -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py && git d...
+[2026-05-18T21:38:33.845Z] Command completed: /bin/bash -lc 'git ls-files -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py && git d... (exit 0)
+[2026-05-18T21:38:33.860Z] Running command: /bin/bash -lc 'git rev-parse --show-toplevel && git -C stt-benchmark status --short -- src/st...
+[2026-05-18T21:38:33.860Z] Command completed: /bin/bash -lc 'git rev-parse --show-toplevel && git -C stt-benchmark status --short -- src/st... (exit 0)
+[2026-05-18T21:38:42.641Z] Assistant message captured: The file lives in the `stt-benchmark` nested repo, so the top-level repo reports that whole d...
+
+[2026-05-18T21:38:42.641Z] Assistant message
+The file lives in the `stt-benchmark` nested repo, so the top-level repo reports that whole directory as untracked; the nested repo diff shows the intended single-file change. I’m running only static verification now.
+[2026-05-18T21:38:42.693Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile stt-b...
+[2026-05-18T21:38:42.693Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile stt-b... (exit 0)
+[2026-05-18T21:38:42.713Z] Running command: /bin/bash -lc "PYTHONPATH=stt-benchmark/src /home/khkramer/src/nemotron-nano-omni/.venv-asr/b...
+[2026-05-18T21:38:42.713Z] Command failed: /bin/bash -lc "PYTHONPATH=stt-benchmark/src /home/khkramer/src/nemotron-nano-omni/.venv-asr/b... (exit 1)
+[2026-05-18T21:38:51.636Z] Assistant message captured: `py_compile` passed with the requested ASR venv. A direct import with that same venv fails be...
+
+[2026-05-18T21:38:51.637Z] Assistant message
+`py_compile` passed with the requested ASR venv. A direct import with that same venv fails before reaching our code because `pipecat` is not installed there, so I’m checking whether the benchmark’s own environment is present for a meaningful import-only check.
+[2026-05-18T21:38:51.670Z] Running command: /bin/bash -lc "ls -la stt-benchmark | sed -n '1,120p'"
+[2026-05-18T21:38:51.670Z] Command completed: /bin/bash -lc "ls -la stt-benchmark | sed -n '1,120p'" (exit 0)
+[2026-05-18T21:38:51.676Z] Running command: /bin/bash -lc "find stt-benchmark -maxdepth 2 -type f \\( -name 'pyproject.toml' -o -name 'uv...
+[2026-05-18T21:38:51.676Z] Command completed: /bin/bash -lc "find stt-benchmark -maxdepth 2 -type f \\( -name 'pyproject.toml' -o -name 'uv... (exit 0)
+[2026-05-18T21:38:51.678Z] Running command: /bin/bash -lc "find stt-benchmark -maxdepth 2 -type d -name '.venv' -print"
+[2026-05-18T21:38:51.678Z] Command completed: /bin/bash -lc "find stt-benchmark -maxdepth 2 -type d -name '.venv' -print" (exit 0)
+[2026-05-18T21:38:56.367Z] Running command: /bin/bash -lc 'stt-benchmark/.venv/bin/python -m py_compile stt-benchmark/src/stt_benchmark/n...
+[2026-05-18T21:38:56.367Z] Command completed: /bin/bash -lc 'stt-benchmark/.venv/bin/python -m py_compile stt-benchmark/src/stt_benchmark/n... (exit 0)
+[2026-05-18T21:38:56.479Z] Running command: /bin/bash -lc "PYTHONPATH=stt-benchmark/src stt-benchmark/.venv/bin/python -c \"import stt_be...
+[2026-05-18T21:38:56.905Z] Command completed: /bin/bash -lc "PYTHONPATH=stt-benchmark/src stt-benchmark/.venv/bin/python -c \"import stt_be... (exit 0)
+[2026-05-18T21:39:03.872Z] Running command: /bin/bash -lc "find stt-benchmark/src/stt_benchmark -maxdepth 2 -type f -path '*/__pycache__/...
+[2026-05-18T21:39:03.872Z] Command completed: /bin/bash -lc "find stt-benchmark/src/stt_benchmark -maxdepth 2 -type f -path '*/__pycache__/... (exit 0)
+[2026-05-18T21:39:03.875Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short'
+[2026-05-18T21:39:03.875Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short' (exit 0)
+[2026-05-18T21:39:08.678Z] Assistant message captured: The benchmark venv import check is clean. `py_compile` left ignored bytecode for this module,...
+
+[2026-05-18T21:39:08.678Z] Assistant message
+The benchmark venv import check is clean. `py_compile` left ignored bytecode for this module, so I’m cleaning up that generated cache to keep the worktree limited to the requested source file.
+[2026-05-18T21:39:10.393Z] Running command: /bin/bash -lc 'rm -f stt-benchmark/src/stt_benchmark/__pycache__/nemotron_local_stt.cpython-3...
+[2026-05-18T21:39:10.393Z] Command completed: /bin/bash -lc 'rm -f stt-benchmark/src/stt_benchmark/__pycache__/nemotron_local_stt.cpython-3... (exit 0)
+[2026-05-18T21:39:18.924Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short'
+[2026-05-18T21:39:18.924Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:39:18.924Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short' (exit 0)
+[2026-05-18T21:39:18.924Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:39:18.934Z] Running command: /bin/bash -lc "find stt-benchmark/src/stt_benchmark -maxdepth 2 -type f -path '*/__pycache__/...
+[2026-05-18T21:39:18.934Z] Command completed: /bin/bash -lc "find stt-benchmark/src/stt_benchmark -maxdepth 2 -type f -path '*/__pycache__/... (exit 0)
+[2026-05-18T21:39:47.278Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:39:47.288Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:39:47.298Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:39:47.309Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:40:03.911Z] Running command: /bin/bash -lc "rg -n \"NemotronLocalSTTService|stt_service|Pipeline\\(|StartFrame|EndFrame\" ...
+[2026-05-18T21:40:03.911Z] Running command: /bin/bash -lc "sed -n '130,230p' stt-benchmark/src/stt_benchmark/pipeline/benchmark_runner.py"
+[2026-05-18T21:40:03.911Z] Command completed: /bin/bash -lc "sed -n '130,230p' stt-benchmark/src/stt_benchmark/pipeline/benchmark_runner.py" (exit 0)
+[2026-05-18T21:40:03.911Z] Command completed: /bin/bash -lc "rg -n \"NemotronLocalSTTService|stt_service|Pipeline\\(|StartFrame|EndFrame\" ... (exit 0)
+[2026-05-18T21:40:12.718Z] Applying 1 file change(s).
+[2026-05-18T21:40:12.728Z] File changes completed.
+[2026-05-18T21:40:18.898Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:40:18.909Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:40:18.911Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile stt-b...
+[2026-05-18T21:40:18.920Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile stt-b... (exit 0)
+[2026-05-18T21:40:19.029Z] Running command: /bin/bash -lc "PYTHONPATH=stt-benchmark/src stt-benchmark/.venv/bin/python -c \"import stt_be...
+[2026-05-18T21:40:19.462Z] Command completed: /bin/bash -lc "PYTHONPATH=stt-benchmark/src stt-benchmark/.venv/bin/python -c \"import stt_be... (exit 0)
+[2026-05-18T21:40:22.066Z] Running command: /bin/bash -lc 'rm -f stt-benchmark/src/stt_benchmark/__pycache__/nemotron_local_stt.cpython-3...
+[2026-05-18T21:40:22.066Z] Command completed: /bin/bash -lc 'rm -f stt-benchmark/src/stt_benchmark/__pycache__/nemotron_local_stt.cpython-3... (exit 0)
+[2026-05-18T21:40:27.518Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:40:27.518Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:40:27.518Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T21:40:27.518Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T21:40:27.531Z] Running command: /bin/bash -lc "find stt-benchmark/src/stt_benchmark -maxdepth 2 -type f -path '*/__pycache__/...
+[2026-05-18T21:40:27.531Z] Command completed: /bin/bash -lc "find stt-benchmark/src/stt_benchmark -maxdepth 2 -type f -path '*/__pycache__/... (exit 0)
+[2026-05-18T21:40:31.194Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '136,444p'"
+[2026-05-18T21:40:31.194Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '136,444p'" (exit 0)
+[2026-05-18T21:40:55.461Z] Assistant message captured: Implemented Step 5 gutted scope in [nemotron_local_stt.py](/home/khkramer/src/nemotron-januar...
+
+[2026-05-18T21:40:55.461Z] Assistant message
+Implemented Step 5 gutted scope in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:410) only.
+
+**Changes**
+- `_handle_transcript` now emits `TranscriptionFrame` only for `is_final && finalize is True`.
+- Soft finals, interims, and non-final text now go to `InterimTranscriptionFrame`.
+- Empty finalize responses are ignored and clear the pending finalize request.
+- Duplicate final text is ignored and clears the pending finalize request.
+- `confirm_finalize()` is called immediately before the single committed `TranscriptionFrame`.
+- Unarmed `finalize=true` transcripts are ignored, so a later VAD start that clears the request prevents stale finals from becoming committed frames.
+- `stop()` now skips the redundant hard reset after a committed final.
+- Added `_send_finalize_reset()` so `request_finalize()` is bound to the actual locked reset send.
+- Reused the existing `_audio_send_lock` through `_send_reset()`; no second lock was added.
+
+**Preservation**
+- Default `NEMOTRON_FINALIZE_MODE=''` still immediately sends a hard reset on each `VADUserStoppedSpeakingFrame`; no timers or buffering were added.
+- `phaseG_single` keeps the existing Step 2 debounce, pending-stop seq, `_single_finalize_reset_sent`, and cancellation behavior. The only change is that its final response must pass the same `finalize=true`, live-request, non-empty, non-duplicate checks.
+
+**Verification**
+- Passed: `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
+- Passed: benchmark venv import check with `PYTHONPATH=stt-benchmark/src stt-benchmark/.venv/bin/python -c "import stt_benchmark.nemotron_local_stt"`
+- Passed: `git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py`
+- No server started, no benchmark run.
+
+**Frame Contract**
+Only a live armed `finalize=true` response can become a `TranscriptionFrame`; all other text is interim or withheld. Empty finals return early, duplicate final text returns early, and post-final `stop()` no longer sends another reset. This keeps committed final emission to one per armed completion path and prevents dup/empty final frames.
+
+**Blockers**
+None.
+
+**Suggested Next Step**
+Proceed to Step 6a equivalence harness; Step 7a can reuse this client-side finalize/interim plumbing after the Step 6 prerequisite lands.
+[2026-05-18T21:40:55.483Z] Turn completed.
+
+[2026-05-18T21:40:55.522Z] Final output
+Implemented Step 5 gutted scope in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:410) only.
+
+**Changes**
+- `_handle_transcript` now emits `TranscriptionFrame` only for `is_final && finalize is True`.
+- Soft finals, interims, and non-final text now go to `InterimTranscriptionFrame`.
+- Empty finalize responses are ignored and clear the pending finalize request.
+- Duplicate final text is ignored and clears the pending finalize request.
+- `confirm_finalize()` is called immediately before the single committed `TranscriptionFrame`.
+- Unarmed `finalize=true` transcripts are ignored, so a later VAD start that clears the request prevents stale finals from becoming committed frames.
+- `stop()` now skips the redundant hard reset after a committed final.
+- Added `_send_finalize_reset()` so `request_finalize()` is bound to the actual locked reset send.
+- Reused the existing `_audio_send_lock` through `_send_reset()`; no second lock was added.
+
+**Preservation**
+- Default `NEMOTRON_FINALIZE_MODE=''` still immediately sends a hard reset on each `VADUserStoppedSpeakingFrame`; no timers or buffering were added.
+- `phaseG_single` keeps the existing Step 2 debounce, pending-stop seq, `_single_finalize_reset_sent`, and cancellation behavior. The only change is that its final response must pass the same `finalize=true`, live-request, non-empty, non-duplicate checks.
+
+**Verification**
+- Passed: `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
+- Passed: benchmark venv import check with `PYTHONPATH=stt-benchmark/src stt-benchmark/.venv/bin/python -c "import stt_benchmark.nemotron_local_stt"`
+- Passed: `git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py`
+- No server started, no benchmark run.
+
+**Frame Contract**
+Only a live armed `finalize=true` response can become a `TranscriptionFrame`; all other text is interim or withheld. Empty finals return early, duplicate final text returns early, and post-final `stop()` no longer sends another reset. This keeps committed final emission to one per armed completion path and prevents dup/empty final frames.
+
+**Blockers**
+None.
+
+**Suggested Next Step**
+Proceed to Step 6a equivalence harness; Step 7a can reuse this client-side finalize/interim plumbing after the Step 6 prerequisite lands.
