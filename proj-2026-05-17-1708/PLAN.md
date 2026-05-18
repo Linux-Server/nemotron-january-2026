@@ -97,6 +97,53 @@ nemotron_local --model <tag>`.
   a `TranscriptionFrame`; soft/speculative → `InterimTranscriptionFrame` or
   withheld.
 
+### Production latency budget (locked — added 2026-05-18, user)
+- **Hard target: end-to-end added latency < 400 ms in production.** Any config
+  whose added wall-clock latency exceeds this is **analytical only**, never
+  shippable. Report real-observer **TTFS and finalize latency** against this
+  bar for every candidate.
+- Latency taxonomy — what counts against the 400 ms budget:
+  - **Endpoint/decision wait** (Silero `vad-stop-secs`; any client/server
+    debounce hold) = real wall-clock, **in budget**; the scarce resource —
+    keep ~200 ms or less.
+  - **Encoder right-context** (rc1 ~160 ms; rc6/rc13 ~560/1120 ms) = real
+    wall-clock, **in budget**. **rc1 is the only viable production context**
+    (rc0 crashes — see Step 4; rc6/rc13 exceed budget).
+  - **Finalize silence padding** ((R+1)*shift ~320 ms @ rc1) = **synthetic,
+    faster-than-wallclock, NOT in budget** — zeros appended + one
+    `conformer_stream_step`, ~tens of ms GPU compute, no sleep. Steps 7/8
+    **must instrument and prove** finalize is compute-bound (measure; never
+    assume). Precisely: the synthetic silence **duration** is excluded from
+    budget, but the **measured finalize-flush wall-clock** (fork-clone +
+    `inference_lock` wait + conformer compute + JSON send + client receipt)
+    **IS budgeted** — "not in budget" refers only to the appended audio's
+    notional duration, never to real flush time.
+- **Budget formula (evaluate at p95, not median):**
+  `endpoint_wait + encoder_right_context(rc1≈160ms) +
+  measured_finalize_flush_wallclock + transport/client_overhead < 400 ms`.
+  Observer TTFS already includes encoder_right_context; per candidate state
+  which terms are measured vs modeled. Endpoint allowance is realistically
+  ≲ ~150 ms (not 200), since rc1 alone consumes ~160 ms of the 400.
+- **Required finalize instrumentation (Nemotron-owned; prerequisite for
+  Steps 7c/7d, not an assumption):** extend the Step-1 client/server JSONL
+  (keyed by run tag + `benchmark_batch()` order) with timestamps for
+  `vad_stop`, debounce-expiry, fork-flush-start, fork-flush-done,
+  final-sent, final-received, plus `inference_lock` wait; report median/p95.
+  Without this, 7c/7d's <400 ms / faster-than-wallclock claims are
+  unverifiable.
+- Every measured candidate records median/p95 observer latency + measured
+  finalize wall-clock. **Intermediate / analytical configs** (6c `ringbuf`,
+  7a, 7b long-debounce, Phase G) are explicitly labelled
+  *analytical — not shippable*; only **7d/8 shippable candidates must pass
+  the < 400 ms p95 bar**.
+- Consequence: VAD-stop > 0.2 s and any client debounce hold of ~250 ms or
+  more are out-of-budget by construction → measured for analysis, not
+  deployed. The only design that reaches oracle accuracy < 400 ms is the
+  **server-side continuous context + speculative disposable fork** (Steps
+  6-7): commit the finalize optimistically (faster-than-wallclock padding),
+  discard the fork if speech resumes — accuracy decoupled from the decision
+  wait.
+
 ### Measurement validity (fold or the numbers mislead)
 - **Baseline vs oracle (do not conflate):** the *live baseline* is
   `model_name=''` (3.08% on 1000 / 2.74% on slice-A). `rc1ref` and `warmup`
@@ -130,7 +177,7 @@ nemotron_local --model <tag>`.
   `model_name=''`**, absolute level near the `rc1ref`/`warmup` oracle tags,
   non-overlapping CIs on both slices, **and zero early finals** — STOP: the
   continuous/fork redesign is solving the wrong problem. **Gp gates Steps 6
-  AND 7.** If Gp fails, Steps 4–5 still proceed (independent improvements);
+  AND 7.** If Gp fails, Steps 4–5 still proceed (Step 4 only; Step 5 is plumbing-only — no standalone accuracy/latency claim);
   Steps 6–7 do not.
 - **Gate Ga (probe):** **Step 7 (fork) only**. The ring buffer (Step 6) is a
   prerequisite for *any* continuous-context design (including a fork
@@ -262,7 +309,7 @@ nemotron_local --model <tag>`.
   building.
   Key files: `proj-2026-05-17-1708/probe_alias.py` (new, scratch)
 
-- [ ] **4. Phase 0 — rc0-vs-rc1 + vad-stop-secs control (independent of Gp)**
+- [x] **4. Phase 0 — rc0-vs-rc1 + vad-stop-secs control (independent of Gp)**
   Telemetry already ships in Step 1 (client JSONL + offline Silero gaps); this
   step only runs configs and reports. Run baseline finalization at **both**
   `--right-context 0` (~80 ms; finalize silence `(0+1)×16`=160 ms) and
@@ -271,13 +318,43 @@ nemotron_local --model <tag>`.
   {0.2,0.4,0.6,1.0} (tags `vad020…vad100`) — labelled a **control only**
   (changes segmentation + endpoint delay together; does not isolate reset
   damage). This step does **not** depend on Gp/Ga.
-  Success: paired WER parity rc0 vs rc1 on both slices (expected within CI —
+  Success (SUPERSEDED — see the CONCLUDED note below; actual concluded scope: `rc1_base`+`vad020` measured, `rc0` unsupported, `vad040/060/100`+`vad100` NOT run as out-of-budget): originally "paired WER parity rc0 vs rc1 on both slices (expected within CI —
   confirms rc0 halves mandatory finalize padding at ~no accuracy cost);
   vad-sweep WER/latency frontier recorded with CIs.
+  **rc0 UNSUPPORTED (decided 2026-05-18):** `att_context_size=[70,0]`
+  deterministically crashes upstream NeMo `multi_head_attention.py:267
+  rel_shift` ("reshape tensor of 0 elements into [1,8,-1,0]") — 0
+  transcriptions; NeMo is not changeable. Per user decision rc0 is dropped
+  and recorded **unsupported**; revised Step 4 scope = `rc1_base` +
+  `vad020` ONLY were measured (concluded 2026-05-18); `vad040`/`vad060`/`vad100` were NOT run — out-of-budget, no insight beyond Gate Gp; `rc0` unsupported. The rc0 canonical-table row
+  becomes "unsupported — NeMo rel_shift [70,0]" (carried to Step 9).
+  **Revised 2026-05-18 (user):** the vad-stop-secs frontier is run
+  incrementally — `rc1_base` → `vad020` → `vad100` first (orchestrator
+  `/tmp/step4_vad100.sh`); `vad040`/`vad060` are deferred and run only if
+  `vad100` results warrant the full {0.2,0.4,0.6,1.0} frontier. Partial
+  scoring over `'' rc1_base vad020 vad100`.
   Key files: `src/nemotron_speech/server.py` (rc via existing
   `--right-context`), measurement via Step 1
 
-- [ ] **5. Phase 1 — client debounce (works against today's server)**
+- [ ] **5. Phase 1 — client debounce (works against today's server)** — [GUTTED 2026-05-18]
+  **SCOPE CUT (user, 2026-05-18):** the {250,500,1000,1500} ms debounce-hold
+  sweep is **out of the <400 ms production budget by construction** (smallest
+  hold + ~200 ms VAD ≈ 450 ms) and analytically redundant with Gate Gp. **NO
+  `dbnc*` full-1000 runs.** Step 5 is reduced to ONLY the client
+  correctness/plumbing fix that Step 7a reuses — *implement + code-verify, do
+  not measure*: the `_handle_transcript` finalize/interim split (only
+  `finalize=true`→`TranscriptionFrame`; soft/interim→`InterimTranscriptionFrame`),
+  suppress the extra post-final `stop()` hard reset, ignore empty/duplicate
+  finals, apply the Step-2 armed-stop `request_finalize` discipline, reuse the
+  Step-2 `_audio_send_lock` (no client timers/buffering — Step 7 moves all
+  hold/finalization logic server-side). Success: frame contract correct (≤1
+  `TranscriptionFrame`/utterance, interims interim, no dup/empty) by code
+  review; full exercise deferred to Step 7a (no standalone benchmark — CLI
+  can't subset and the sweep is cut). **DEAD TEXT: everything from "Independent of Gp/Ga" through the closing
+  "Key files:" line below is pre-2026-05-18 design — DO NOT execute, DO NOT
+  run any `dbnc*` sweep or any Phase-1 full-1000 run. Step 5's ONLY
+  deliverable is the plumbing fix described above. Step 5 Key files:
+  `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`.**
   Independent of Gp/Ga. Using Step 1's offline gap distribution, collapse VAD
   stops into a single finalize, sweeping the hold over {250,500,1000,1500} ms
   (note Silero adds ~200 ms start + ~200 ms stop, so a 250 ms hold ≈ commits
@@ -340,7 +417,7 @@ nemotron_local --model <tag>`.
   Step-2 `_audio_send_lock`. Server side: just accept/parse the new messages
   (no behavior change yet — still does today's hard reset on `vad_stop`).
   Success: protocol round-trips; client is purely declarative; a paired run
-  reproduces the **Phase 1 best** numbers (no regression — pure plumbing).
+  reproduces the **live baseline `''`** hard-reset numbers within CI (post-6c also matches `ringbuf`) — Step 5 produces no measured "Phase 1 best" — (no regression — pure plumbing).
   Key files: `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`,
   `src/nemotron_speech/server.py`
 
@@ -374,7 +451,7 @@ nemotron_local --model <tag>`.
   delta once + reset for next utterance. Hold derived from Step 1's gap
   distribution (same constraint as Phase G). Run full 1000, tag `fork`.
   Success: paired-Δ vs `''` on both slices reaches the Phase G/oracle region
-  **at low real-observer latency** (short debounce + ~1.3%-region WER — the
+  **at < 400 ms real-observer latency (TTFS + finalize, measured against the locked Production-latency-budget rule; finalize proven faster-than-wallclock by the Required-finalize-instrumentation JSONL defined in the Production-latency-budget Rule, NOT assumed)** (short debounce + ~1.3%-region WER — the
   trade-off broken); emit-once verified (one `TranscriptionFrame`/utterance,
   early-final count = 0, no dup/empty); CIs non-overlapping vs baseline.
   Key files: `src/nemotron_speech/server.py`,
@@ -400,17 +477,20 @@ nemotron_local --model <tag>`.
   config; tags `warm100…warm250`.
   Success: onset-fixable set ≫ 8/26 (≈ client-preroll 17/26) and a small
   positive paired-Δ on both slices with CIs; **no regression vs the current
-  best finalization config — Step 7d (`fork`) if built, else the Phase 1 / Phase
-  G best** (Step 7 may be invalidated by Gp/Ga).
+  best finalization config — Step 7d (`fork`) if built, else the best in-budget finalization config (`fork` if built & < 400 ms p95, else hard-reset `ringbuf`/`vad020`); Phase G is an analytical oracle reference only** (Step 7 may be invalidated by Gp/Ga).
   Key files: `src/nemotron_speech/server.py`
 
 - [ ] **9. Consolidate: canonical WER↔latency table + doc update**
   Run every canonical tag over the **full 1000**; report **full corpus,
   slice-A, and slice-B** with paired Δ vs `''` + bootstrap CIs +
   real-observer latency. Produce the canonical table — rows: baseline `''` /
-  oracle `rc1ref` / Phase G / Phase 1 best / rc0_base / *Phase 2b (`fork`) if
-  built* / *+Phase 3 if built* — and the recommendation. Update
-  `docs/semantic-wer-finalization-finding.md` with measured results (replace
+  oracle `rc1ref` / Phase G (analytical) / `rc1_base` & `vad020` (in-budget ~212 ms,
+  ≈baseline) / `ringbuf` / *Phase 2b (`fork`) if built — must pass < 400 ms
+  p95* / *+Phase 3 if built* / a non-metric note row "rc0 unsupported — NeMo
+  rel_shift [70,0]" (no `Phase 1 best`/`dbnc*`/`vad040-100` rows — never run);
+  **each row tagged in-budget (< 400 ms p95) vs analytical-only, with
+  real-observer TTFS + finalize latency** — and the recommendation. Update
+  `docs/semantic-wer-finalization-finding.md` with measured results — also documenting the rc0-unsupported finding, the < 400 ms production budget + latency taxonomy, and the Step 4/5 scope reductions — (replace
   "unproven until Phase G" with the outcome) and **also correct the four
   doc-level factual errors surfaced in review**: (B1) `_init_session` clears
   `current_text` but `last_emitted_text` is cleared by the hard reset at
@@ -436,9 +516,9 @@ nemotron_local --model <tag>`.
 |---|------|--------|--------|-------|
 | 1 | Measurement scaffolding + VAD gap preflight + telemetry | done | `67b01ae` | slice-A 2.7364% reproduced; VAD gap max 1.7s/p99 1.22s (authoritative; Step 2 hold ≈2.5s); sidecars regenerable |
 | 2 | Phase G large-debounce (empirical hold, early-final guard) | done | `0076206` | **Gate Gp PASS** — sliceA 1.43%/sliceB 1.85% vs base 2.74/3.01; Δ −1.31/−1.16pp CIs<0; full 2.04% vs 3.08%; hard_resets 1.0; early_final 1/1000; TTFS 2.7s. Steps 6–7 proceed |
-| 3 | Aliasing probe (NeMo fork safety, serialized) | done | — | **Gate Ga PASS** (probe + independent re-run, exit 0): detector-selftest PASS (injected cache + `root.y_sequence` corruption caught); server-path `GreedyRNNTInfer`/loop_labels=False shallow+deep all clean; batched `GreedyBatchedRNNTInfer` shallow corrupts (hyps+continuation) / deep clean → deep-clone recipe robust even on the hazard path. Serialized-only: fork flush holds `inference_lock`, no concurrent parent step. 7c/7d proceed w/ deep-clone recipe. DOC-CORRECTION (B-Ga) queued → Step 9 |
-| 4 | Phase 0 rc0-vs-rc1 + vad-stop-secs control | pending | — | independent of Gp/Ga; rc0 = free latency win? |
-| 5 | Phase 1 client debounce sweep | pending | — | independent; vs today's server |
+| 3 | Aliasing probe (NeMo fork safety, serialized) | done | `eab05dd` | **Gate Ga PASS** (probe + independent re-run, exit 0): detector-selftest PASS (injected cache + `root.y_sequence` corruption caught); server-path `GreedyRNNTInfer`/loop_labels=False shallow+deep all clean; batched `GreedyBatchedRNNTInfer` shallow corrupts (hyps+continuation) / deep clean → deep-clone recipe robust even on the hazard path. Serialized-only: fork flush holds `inference_lock`, no concurrent parent step. 7c/7d proceed w/ deep-clone recipe. DOC-CORRECTION (B-Ga) queued → Step 9 |
+| 4 | Phase 0 rc0-vs-rc1 + vad-stop-secs control | done | — | **rc0 UNSUPPORTED**: `att_context=[70,0]` deterministically crashes upstream NeMo `multi_head_attention.py:267 rel_shift` (0-element reshape; 7.5h burned, 35M crashes, 0 transcriptions, 1st crash 2s into sample 1). Per user decision: rc0 dropped + recorded unsupported. Scope → `rc1_base` + `vad020/040/060/100` (5 cfg, all rc1). Sweep relaunched (5cfg). **Revised 2026-05-18 (user): run incrementally — rc1_base→vad020→vad100; defer vad040/vad060, evaluate vad100 then decide whether to backfill full frontier.** rc1_base done=3.18% (≈ '' 3.08%, reproducible). rc0 row → Step 9 table/doc. **CONCLUDED 2026-05-18:** in-budget points ≈ baseline (rc1_base sliceA 2.84%/sliceB 3.16%, Δ +0.10/+0.16pp CIs incl 0; vad020 2.89%/3.33% ≈ base); real-observer TTFS median ~212ms (**IN <400ms budget**) but accuracy-damaged (2.45 hard-resets/sample, 654/1000 early-final). vad-stop>0.2s + vad100 NOT run (exceed <400ms, no insight beyond Gp); rc0 unsupported. Conclusion: VAD tuning ≠ WER lever — Steps 6–7 must deliver Phase-G accuracy at ~212ms-class latency |
+| 5 | Phase 1 client plumbing fix (sweep CUT) | pending | — | **GUTTED 2026-05-18 (user):** debounce-hold sweep out of <400ms budget + redundant w/ Gate Gp. Only the `_handle_transcript` finalize/interim plumbing fix Step 7a reuses; **no `dbnc*` runs**, implement + code-verify only |
 | 6a | Equivalence harness + fixture characterization | pending | — | gated Gp; no behavior change |
 | 6b | Incremental ring-buffer preprocessor impl | pending | — | gated Gp; needs 6a (byte-equal) |
 | 6c | Perf + WER-parity validation (`ringbuf`) | pending | — | gated Gp; needs 6b |

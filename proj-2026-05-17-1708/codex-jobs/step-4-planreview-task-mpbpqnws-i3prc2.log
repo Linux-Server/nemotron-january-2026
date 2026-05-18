@@ -1,0 +1,136 @@
+[2026-05-18T21:25:30.895Z] Starting Codex Task.
+[2026-05-18T21:25:33.333Z] Starting Codex task thread.
+[2026-05-18T21:25:34.148Z] Thread ready (019e3cfa-dd22-7390-bcad-813c3d0225ba).
+[2026-05-18T21:25:34.159Z] Turn started (019e3cfa-dd4e-7951-aa02-d983c11828c6).
+[2026-05-18T21:25:50.899Z] Assistant message captured: I’ll treat `PLAN.md` as the only review target and keep this read-only. I’m going to pull lin...
+
+[2026-05-18T21:25:50.899Z] Assistant message
+I’ll treat `PLAN.md` as the only review target and keep this read-only. I’m going to pull line-numbered excerpts around the revised rules and each later step, then cross-check dependencies and success criteria.
+[2026-05-18T21:25:50.937Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '1,220p'"
+[2026-05-18T21:25:50.948Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '1,220p'" (exit 0)
+[2026-05-18T21:25:50.948Z] Running command: /bin/bash -lc 'rg -n "2026-05-18|Phase 1 best|rc0_base|dbnc|vad0(20|40|60|100)|vad100|400|Ste...
+[2026-05-18T21:25:50.948Z] Command completed: /bin/bash -lc 'rg -n "2026-05-18|Phase 1 best|rc0_base|dbnc|vad0(20|40|60|100)|vad100|400|Ste... (exit 0)
+[2026-05-18T21:25:50.948Z] Running command: /bin/bash -lc 'wc -l proj-2026-05-17-1708/PLAN.md'
+[2026-05-18T21:25:50.948Z] Command completed: /bin/bash -lc 'wc -l proj-2026-05-17-1708/PLAN.md' (exit 0)
+[2026-05-18T21:26:00.280Z] Assistant message captured: The first pass confirms the revised budget section and the step table carry several names tha...
+
+[2026-05-18T21:26:00.280Z] Assistant message
+The first pass confirms the revised budget section and the step table carry several names that may now be stale. I’m reading the rest of the plan with line numbers before ranking defects so the references are exact.
+[2026-05-18T21:26:00.313Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '220,380p'"
+[2026-05-18T21:26:00.313Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '220,380p'" (exit 0)
+[2026-05-18T21:26:00.315Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '380,520p'"
+[2026-05-18T21:26:00.315Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '380,520p'" (exit 0)
+[2026-05-18T21:26:00.325Z] Running command: /bin/bash -lc "rg -n \"Phase 1|dbnc|rc0|vad040|vad060|vad100|< 400|400 ms|finalize latency|TT...
+[2026-05-18T21:26:00.325Z] Command completed: /bin/bash -lc "rg -n \"Phase 1|dbnc|rc0|vad040|vad060|vad100|< 400|400 ms|finalize latency|TT... (exit 0)
+[2026-05-18T21:28:21.596Z] Assistant message captured: **Prioritized Defects** 1. **Blocker** — [PLAN.md:112](/home/khkramer/src/nemotron-january-20...
+
+[2026-05-18T21:28:21.596Z] Assistant message
+**Prioritized Defects**
+1. **Blocker** — [PLAN.md:112](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:112), lines 103-104, 167-168, 415-417, 429  
+   The latency taxonomy conflates synthetic audio duration with real finalize wall-clock. It is defensible to exclude the *320 ms of appended silence audio* from budget only if no sleep occurs, but the fork flush compute, lock wait, cache/encoder work, serialization delay, JSON send, and client receipt are real wall-clock and must be in budget. As written, “finalize silence padding ... NOT in budget” conflicts with “Report ... finalize latency against this bar” and “account that latency.”  
+   **Fix:** rewrite the rule to say: “Synthetic silence duration is not budgeted; measured finalize flush wall-clock is budgeted.” Define required metrics: `vad_stop_received → fork_flush_start`, lock wait, `fork_flush_start → fork_flush_done`, `fork_flush_done → final_sent`, client final receipt, median/p95.
+
+2. **Blocker** — [PLAN.md:429](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:429), lines 137-140, 203, 423-431  
+   Step 7d’s “finalize proven faster-than-wallclock by instrumentation” is unverifiable as written. The locked observer path only has real observer TTFS plus counters in the plan; no existing measurement path records finalize start/end or proves appended padding was processed faster than wall-clock.  
+   **Fix:** add a Nemotron-owned instrumentation requirement before 7d success: server/client JSONL keyed by batch order/tag with timestamps for `vad_stop`, debounce expiry, fork flush start/end, final send, final receive, plus lock wait. Then Step 7d can assert total observer latency `<400 ms` and finalize compute `< synthetic padding duration`.
+
+3. **Blocker** — [PLAN.md:395](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:395), lines 317-331  
+   Step 7a still requires reproducing “Phase 1 best” numbers, but Step 5 now explicitly has no sweep, no benchmark, and no `dbnc*` results. That artifact no longer exists.  
+   **Fix:** change 7a success to reproduce the matched hard-reset baseline after Step 6c, e.g. `ringbuf` / current `rc1` + `vad020` behavior within CI, with frame-contract validation and latency reporting.
+
+4. **Major** — [PLAN.md:462](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:462), lines 459-464  
+   Step 9’s canonical table still names `Phase 1 best` and `rc0_base`. `Phase 1 best` does not exist; `rc0_base` is unsupported, not a full-1000 measured tag. The row list also fails to reflect the actual Step 4 conclusion: `rc1_base` and `vad020` only, with `vad040/060/100` not run.  
+   **Fix:** make the table rows actual artifacts only: baseline `''`, oracle `rc1ref`/`warmup`, analytical Phase G, `rc1_base`, `vad020`, `ringbuf`, 7a/7b/7c if separately tagged, `fork` if built, Phase 3 if built, plus a non-metric note row “rc0 unsupported — NeMo rel_shift [70,0].” Exclude `Phase 1 best`, `dbnc*`, and unrun VAD rows.
+
+5. **Major** — [PLAN.md:290](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:290), lines 292-313, 492  
+   Step 4 is marked done, but its body still says to run rc0/rc1 and the full VAD frontier, then partially revises that, while the progress row says `vad100` was not run and vad-stop >0.2s is out of budget. This leaves Step 9 structurally depending on a frontier Step 4 did not produce.  
+   **Fix:** rewrite Step 4 as concluded scope only: `rc1_base` + `vad020` measured; `rc0_base` unsupported; `vad040/060/100` intentionally not run because out-of-budget and no added insight. Replace the old success criterion with “in-budget controls measured and unsupported/out-of-budget exclusions documented.”
+
+6. **Major** — [PLAN.md:317](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:317), lines 333-346  
+   Step 5 says the original sweep is superseded, but the obsolete executable instructions remain: debounce sweep, `dbnc250…dbnc1500`, paired-Δ success, hold-latency knee. This is a dangling artifact list and can mislead execution.  
+   **Fix:** delete lines 333-346 or replace them with a short historical note: “No Phase 1 benchmark tags are produced; Step 5 only lands client transcript plumbing used by Step 7a.”
+
+7. **Major** — [PLAN.md:101](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:101), lines 106-110, 319-320, 429  
+   Budget arithmetic is under-specified. If rc1 right-context is in budget at ~160 ms and VAD endpoint is ~200 ms, only ~40 ms remains for finalize compute, lock wait, transport, and scheduling. But Step 5’s “250 ms hold + ~200 ms VAD ≈ 450 ms” ignores rc1, and Step 7d’s `<400 ms TTFS + finalize` does not explicitly include rc1 right-context.  
+   **Fix:** define the exact budget formula, e.g. `endpoint_wait + encoder_right_context + measured_finalize_flush + transport/client_overhead < 400 ms`, and update all arithmetic examples. If observer TTFS already includes some terms, state which terms are measured versus modeled.
+
+8. **Major** — [PLAN.md:375](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:375), lines 394-420, 453-456  
+   Several Step 6-9 success criteria do not carry the new “every candidate reports TTFS/finalize latency against <400 ms” rule. Missing or incomplete: 6c `ringbuf`, 7a, 7b, 7c, and Step 8 warmup configs. 7d has the bar, but lacks the measurement mechanism.  
+   **Fix:** add latency reporting/classification to each measured candidate. For intentionally analytical configs such as long-debounce 7b, say “out-of-budget analytical; not shippable.” For `ringbuf`, 7a, 7c, and warmup tags, require median/p95 observer latency plus measured finalize wall-clock and `<400 ms` if considered shippable.
+
+9. **Minor** — [PLAN.md:158](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:158), line 260  
+   Gate Gp text still says “Steps 4-5 still proceed (independent improvements).” Step 5 is no longer an independent measured improvement; it is plumbing reused by 7a.  
+   **Fix:** change to “Step 4 proceeds independently; Step 5 may proceed only as client frame-contract cleanup, with no standalone accuracy/latency claim.”
+
+10. **Minor** — [PLAN.md:455](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:455)  
+   Step 8 fallback says “else the Phase 1 / Phase G best.” Phase 1 best no longer exists, and Phase G is analytical/out-of-budget under the new rule.  
+   **Fix:** use “current best in-budget finalization config: `fork` if built and passing <400 ms; otherwise `ringbuf`/hard-reset `vad020`; Phase G remains an analytical oracle reference.”
+
+**Dangling Cross-References**
+`Phase 1 best`: lines 395, 455, 463.  
+`dbnc*` / debounce sweep: lines 333-346, especially 343.  
+`rc0_base` as measured canonical row: lines 294, 299-300, 307-308, 463.  
+Unrun VAD frontier / `vad040`, `vad060`, `vad100`: lines 296, 307, 310-313, 492.  
+“Steps 4-5 independent improvements”: lines 158, 260.
+
+**Faster-Than-Wallclock Measurability**
+Unverifiable as written. The plan asserts the proof but only defines observer TTFS/counters, not finalize-phase instrumentation. The locked observer can support end-to-end receipt timing, but not the required split proving synthetic padding is faster than wall-clock.
+
+**Verdict**
+No — the post-surgery plan is not internally consistent or executable as-is; fold the latency-instrumentation fix, the budget formula, and the stale Phase 1/Step 4/Step 9 references first.
+[2026-05-18T21:28:21.611Z] Turn completed.
+
+[2026-05-18T21:28:21.637Z] Final output
+**Prioritized Defects**
+1. **Blocker** — [PLAN.md:112](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:112), lines 103-104, 167-168, 415-417, 429  
+   The latency taxonomy conflates synthetic audio duration with real finalize wall-clock. It is defensible to exclude the *320 ms of appended silence audio* from budget only if no sleep occurs, but the fork flush compute, lock wait, cache/encoder work, serialization delay, JSON send, and client receipt are real wall-clock and must be in budget. As written, “finalize silence padding ... NOT in budget” conflicts with “Report ... finalize latency against this bar” and “account that latency.”  
+   **Fix:** rewrite the rule to say: “Synthetic silence duration is not budgeted; measured finalize flush wall-clock is budgeted.” Define required metrics: `vad_stop_received → fork_flush_start`, lock wait, `fork_flush_start → fork_flush_done`, `fork_flush_done → final_sent`, client final receipt, median/p95.
+
+2. **Blocker** — [PLAN.md:429](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:429), lines 137-140, 203, 423-431  
+   Step 7d’s “finalize proven faster-than-wallclock by instrumentation” is unverifiable as written. The locked observer path only has real observer TTFS plus counters in the plan; no existing measurement path records finalize start/end or proves appended padding was processed faster than wall-clock.  
+   **Fix:** add a Nemotron-owned instrumentation requirement before 7d success: server/client JSONL keyed by batch order/tag with timestamps for `vad_stop`, debounce expiry, fork flush start/end, final send, final receive, plus lock wait. Then Step 7d can assert total observer latency `<400 ms` and finalize compute `< synthetic padding duration`.
+
+3. **Blocker** — [PLAN.md:395](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:395), lines 317-331  
+   Step 7a still requires reproducing “Phase 1 best” numbers, but Step 5 now explicitly has no sweep, no benchmark, and no `dbnc*` results. That artifact no longer exists.  
+   **Fix:** change 7a success to reproduce the matched hard-reset baseline after Step 6c, e.g. `ringbuf` / current `rc1` + `vad020` behavior within CI, with frame-contract validation and latency reporting.
+
+4. **Major** — [PLAN.md:462](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:462), lines 459-464  
+   Step 9’s canonical table still names `Phase 1 best` and `rc0_base`. `Phase 1 best` does not exist; `rc0_base` is unsupported, not a full-1000 measured tag. The row list also fails to reflect the actual Step 4 conclusion: `rc1_base` and `vad020` only, with `vad040/060/100` not run.  
+   **Fix:** make the table rows actual artifacts only: baseline `''`, oracle `rc1ref`/`warmup`, analytical Phase G, `rc1_base`, `vad020`, `ringbuf`, 7a/7b/7c if separately tagged, `fork` if built, Phase 3 if built, plus a non-metric note row “rc0 unsupported — NeMo rel_shift [70,0].” Exclude `Phase 1 best`, `dbnc*`, and unrun VAD rows.
+
+5. **Major** — [PLAN.md:290](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:290), lines 292-313, 492  
+   Step 4 is marked done, but its body still says to run rc0/rc1 and the full VAD frontier, then partially revises that, while the progress row says `vad100` was not run and vad-stop >0.2s is out of budget. This leaves Step 9 structurally depending on a frontier Step 4 did not produce.  
+   **Fix:** rewrite Step 4 as concluded scope only: `rc1_base` + `vad020` measured; `rc0_base` unsupported; `vad040/060/100` intentionally not run because out-of-budget and no added insight. Replace the old success criterion with “in-budget controls measured and unsupported/out-of-budget exclusions documented.”
+
+6. **Major** — [PLAN.md:317](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:317), lines 333-346  
+   Step 5 says the original sweep is superseded, but the obsolete executable instructions remain: debounce sweep, `dbnc250…dbnc1500`, paired-Δ success, hold-latency knee. This is a dangling artifact list and can mislead execution.  
+   **Fix:** delete lines 333-346 or replace them with a short historical note: “No Phase 1 benchmark tags are produced; Step 5 only lands client transcript plumbing used by Step 7a.”
+
+7. **Major** — [PLAN.md:101](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:101), lines 106-110, 319-320, 429  
+   Budget arithmetic is under-specified. If rc1 right-context is in budget at ~160 ms and VAD endpoint is ~200 ms, only ~40 ms remains for finalize compute, lock wait, transport, and scheduling. But Step 5’s “250 ms hold + ~200 ms VAD ≈ 450 ms” ignores rc1, and Step 7d’s `<400 ms TTFS + finalize` does not explicitly include rc1 right-context.  
+   **Fix:** define the exact budget formula, e.g. `endpoint_wait + encoder_right_context + measured_finalize_flush + transport/client_overhead < 400 ms`, and update all arithmetic examples. If observer TTFS already includes some terms, state which terms are measured versus modeled.
+
+8. **Major** — [PLAN.md:375](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:375), lines 394-420, 453-456  
+   Several Step 6-9 success criteria do not carry the new “every candidate reports TTFS/finalize latency against <400 ms” rule. Missing or incomplete: 6c `ringbuf`, 7a, 7b, 7c, and Step 8 warmup configs. 7d has the bar, but lacks the measurement mechanism.  
+   **Fix:** add latency reporting/classification to each measured candidate. For intentionally analytical configs such as long-debounce 7b, say “out-of-budget analytical; not shippable.” For `ringbuf`, 7a, 7c, and warmup tags, require median/p95 observer latency plus measured finalize wall-clock and `<400 ms` if considered shippable.
+
+9. **Minor** — [PLAN.md:158](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:158), line 260  
+   Gate Gp text still says “Steps 4-5 still proceed (independent improvements).” Step 5 is no longer an independent measured improvement; it is plumbing reused by 7a.  
+   **Fix:** change to “Step 4 proceeds independently; Step 5 may proceed only as client frame-contract cleanup, with no standalone accuracy/latency claim.”
+
+10. **Minor** — [PLAN.md:455](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/PLAN.md:455)  
+   Step 8 fallback says “else the Phase 1 / Phase G best.” Phase 1 best no longer exists, and Phase G is analytical/out-of-budget under the new rule.  
+   **Fix:** use “current best in-budget finalization config: `fork` if built and passing <400 ms; otherwise `ringbuf`/hard-reset `vad020`; Phase G remains an analytical oracle reference.”
+
+**Dangling Cross-References**
+`Phase 1 best`: lines 395, 455, 463.  
+`dbnc*` / debounce sweep: lines 333-346, especially 343.  
+`rc0_base` as measured canonical row: lines 294, 299-300, 307-308, 463.  
+Unrun VAD frontier / `vad040`, `vad060`, `vad100`: lines 296, 307, 310-313, 492.  
+“Steps 4-5 independent improvements”: lines 158, 260.
+
+**Faster-Than-Wallclock Measurability**
+Unverifiable as written. The plan asserts the proof but only defines observer TTFS/counters, not finalize-phase instrumentation. The locked observer can support end-to-end receipt timing, but not the required split proving synthetic padding is faster than wall-clock.
+
+**Verdict**
+No — the post-surgery plan is not internally consistent or executable as-is; fold the latency-instrumentation fix, the budget formula, and the stale Phase 1/Step 4/Step 9 references first.
