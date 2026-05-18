@@ -1,0 +1,3989 @@
+{
+  "artifacts": [
+    {
+      "artifact": "equiv_golden/smallest_c84503ca-110a-51d6-0b24-f17deb7a2882.pt",
+      "chunk_boundaries": [
+        {
+          "audio_samples_at_process": 2880,
+          "chunk_end": 16,
+          "chunk_index": 0,
+          "chunk_start": 0,
+          "drop_extra_pre_encoded": 0,
+          "emitted_frames_after": 16,
+          "emitted_frames_before": 0,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            16
+          ]
+        },
+        {
+          "audio_samples_at_process": 5440,
+          "chunk_end": 32,
+          "chunk_index": 1,
+          "chunk_start": 7,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 32,
+          "emitted_frames_before": 16,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 8000,
+          "chunk_end": 48,
+          "chunk_index": 2,
+          "chunk_start": 23,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 48,
+          "emitted_frames_before": 32,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 10560,
+          "chunk_end": 64,
+          "chunk_index": 3,
+          "chunk_start": 39,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 64,
+          "emitted_frames_before": 48,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 13120,
+          "chunk_end": 80,
+          "chunk_index": 4,
+          "chunk_start": 55,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 80,
+          "emitted_frames_before": 64,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 15680,
+          "chunk_end": 96,
+          "chunk_index": 5,
+          "chunk_start": 71,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 96,
+          "emitted_frames_before": 80,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        }
+      ],
+      "chunk_count": 6,
+      "final_boundary": {
+        "audio_samples_after_padding": 21120,
+        "audio_samples_before_padding": 16000,
+        "chunk_end": 133,
+        "chunk_start": 87,
+        "drop_extra_pre_encoded": 2,
+        "emitted_frames_before": 96,
+        "keep_all_outputs": true,
+        "mel_dtype": "torch.float32",
+        "mel_shape": [
+          1,
+          128,
+          46
+        ],
+        "padding_samples": 5120,
+        "remaining_frames": 37,
+        "total_mel_frames": 133
+      },
+      "final_delta_text": "hmm.",
+      "final_text": "Mmhmm.",
+      "fixture": {
+        "duration_seconds": 1.0,
+        "filename": "c84503ca-110a-51d6-0b24-f17deb7a2882.pcm",
+        "path": "/home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data/audio/c84503ca-110a-51d6-0b24-f17deb7a2882.pcm",
+        "role": "smallest",
+        "samples": 16000,
+        "sha256": "c081233a2e316d851631937ebc88c5b2926e92c8da09a2240769713ac58748a0",
+        "size_bytes": 32000
+      },
+      "texts": [
+        {
+          "chunk_index": 0,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 1,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 2,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 3,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 4,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 5,
+          "current_text_after": "Mm",
+          "emitted_text": "Mm",
+          "returned_text": "Mm"
+        }
+      ]
+    },
+    {
+      "artifact": "equiv_golden/mid_b134b8e1-b79b-0b14-e56c-95592bdb0361.pt",
+      "chunk_boundaries": [
+        {
+          "audio_samples_at_process": 2880,
+          "chunk_end": 16,
+          "chunk_index": 0,
+          "chunk_start": 0,
+          "drop_extra_pre_encoded": 0,
+          "emitted_frames_after": 16,
+          "emitted_frames_before": 0,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            16
+          ]
+        },
+        {
+          "audio_samples_at_process": 5440,
+          "chunk_end": 32,
+          "chunk_index": 1,
+          "chunk_start": 7,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 32,
+          "emitted_frames_before": 16,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 8000,
+          "chunk_end": 48,
+          "chunk_index": 2,
+          "chunk_start": 23,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 48,
+          "emitted_frames_before": 32,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 10560,
+          "chunk_end": 64,
+          "chunk_index": 3,
+          "chunk_start": 39,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 64,
+          "emitted_frames_before": 48,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 13120,
+          "chunk_end": 80,
+          "chunk_index": 4,
+          "chunk_start": 55,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 80,
+          "emitted_frames_before": 64,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 15680,
+          "chunk_end": 96,
+          "chunk_index": 5,
+          "chunk_start": 71,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 96,
+          "emitted_frames_before": 80,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 18240,
+          "chunk_end": 112,
+          "chunk_index": 6,
+          "chunk_start": 87,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 112,
+          "emitted_frames_before": 96,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 20800,
+          "chunk_end": 128,
+          "chunk_index": 7,
+          "chunk_start": 103,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 128,
+          "emitted_frames_before": 112,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 23360,
+          "chunk_end": 144,
+          "chunk_index": 8,
+          "chunk_start": 119,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 144,
+          "emitted_frames_before": 128,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 25920,
+          "chunk_end": 160,
+          "chunk_index": 9,
+          "chunk_start": 135,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 160,
+          "emitted_frames_before": 144,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 28480,
+          "chunk_end": 176,
+          "chunk_index": 10,
+          "chunk_start": 151,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 176,
+          "emitted_frames_before": 160,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 31040,
+          "chunk_end": 192,
+          "chunk_index": 11,
+          "chunk_start": 167,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 192,
+          "emitted_frames_before": 176,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 33600,
+          "chunk_end": 208,
+          "chunk_index": 12,
+          "chunk_start": 183,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 208,
+          "emitted_frames_before": 192,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 36160,
+          "chunk_end": 224,
+          "chunk_index": 13,
+          "chunk_start": 199,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 224,
+          "emitted_frames_before": 208,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 38720,
+          "chunk_end": 240,
+          "chunk_index": 14,
+          "chunk_start": 215,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 240,
+          "emitted_frames_before": 224,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 41280,
+          "chunk_end": 256,
+          "chunk_index": 15,
+          "chunk_start": 231,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 256,
+          "emitted_frames_before": 240,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 43840,
+          "chunk_end": 272,
+          "chunk_index": 16,
+          "chunk_start": 247,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 272,
+          "emitted_frames_before": 256,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 46400,
+          "chunk_end": 288,
+          "chunk_index": 17,
+          "chunk_start": 263,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 288,
+          "emitted_frames_before": 272,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 48960,
+          "chunk_end": 304,
+          "chunk_index": 18,
+          "chunk_start": 279,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 304,
+          "emitted_frames_before": 288,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 51520,
+          "chunk_end": 320,
+          "chunk_index": 19,
+          "chunk_start": 295,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 320,
+          "emitted_frames_before": 304,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 54080,
+          "chunk_end": 336,
+          "chunk_index": 20,
+          "chunk_start": 311,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 336,
+          "emitted_frames_before": 320,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 56640,
+          "chunk_end": 352,
+          "chunk_index": 21,
+          "chunk_start": 327,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 352,
+          "emitted_frames_before": 336,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 59200,
+          "chunk_end": 368,
+          "chunk_index": 22,
+          "chunk_start": 343,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 368,
+          "emitted_frames_before": 352,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 61760,
+          "chunk_end": 384,
+          "chunk_index": 23,
+          "chunk_start": 359,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 384,
+          "emitted_frames_before": 368,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 64320,
+          "chunk_end": 400,
+          "chunk_index": 24,
+          "chunk_start": 375,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 400,
+          "emitted_frames_before": 384,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 66880,
+          "chunk_end": 416,
+          "chunk_index": 25,
+          "chunk_start": 391,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 416,
+          "emitted_frames_before": 400,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 69440,
+          "chunk_end": 432,
+          "chunk_index": 26,
+          "chunk_start": 407,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 432,
+          "emitted_frames_before": 416,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 72000,
+          "chunk_end": 448,
+          "chunk_index": 27,
+          "chunk_start": 423,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 448,
+          "emitted_frames_before": 432,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 74560,
+          "chunk_end": 464,
+          "chunk_index": 28,
+          "chunk_start": 439,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 464,
+          "emitted_frames_before": 448,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 77120,
+          "chunk_end": 480,
+          "chunk_index": 29,
+          "chunk_start": 455,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 480,
+          "emitted_frames_before": 464,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 79680,
+          "chunk_end": 496,
+          "chunk_index": 30,
+          "chunk_start": 471,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 496,
+          "emitted_frames_before": 480,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 82240,
+          "chunk_end": 512,
+          "chunk_index": 31,
+          "chunk_start": 487,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 512,
+          "emitted_frames_before": 496,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 84800,
+          "chunk_end": 528,
+          "chunk_index": 32,
+          "chunk_start": 503,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 528,
+          "emitted_frames_before": 512,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 87360,
+          "chunk_end": 544,
+          "chunk_index": 33,
+          "chunk_start": 519,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 544,
+          "emitted_frames_before": 528,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 89920,
+          "chunk_end": 560,
+          "chunk_index": 34,
+          "chunk_start": 535,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 560,
+          "emitted_frames_before": 544,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 92480,
+          "chunk_end": 576,
+          "chunk_index": 35,
+          "chunk_start": 551,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 576,
+          "emitted_frames_before": 560,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 95040,
+          "chunk_end": 592,
+          "chunk_index": 36,
+          "chunk_start": 567,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 592,
+          "emitted_frames_before": 576,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 97600,
+          "chunk_end": 608,
+          "chunk_index": 37,
+          "chunk_start": 583,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 608,
+          "emitted_frames_before": 592,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 100160,
+          "chunk_end": 624,
+          "chunk_index": 38,
+          "chunk_start": 599,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 624,
+          "emitted_frames_before": 608,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 102720,
+          "chunk_end": 640,
+          "chunk_index": 39,
+          "chunk_start": 615,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 640,
+          "emitted_frames_before": 624,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 105280,
+          "chunk_end": 656,
+          "chunk_index": 40,
+          "chunk_start": 631,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 656,
+          "emitted_frames_before": 640,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 107840,
+          "chunk_end": 672,
+          "chunk_index": 41,
+          "chunk_start": 647,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 672,
+          "emitted_frames_before": 656,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 110400,
+          "chunk_end": 688,
+          "chunk_index": 42,
+          "chunk_start": 663,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 688,
+          "emitted_frames_before": 672,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 112960,
+          "chunk_end": 704,
+          "chunk_index": 43,
+          "chunk_start": 679,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 704,
+          "emitted_frames_before": 688,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 115520,
+          "chunk_end": 720,
+          "chunk_index": 44,
+          "chunk_start": 695,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 720,
+          "emitted_frames_before": 704,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 118080,
+          "chunk_end": 736,
+          "chunk_index": 45,
+          "chunk_start": 711,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 736,
+          "emitted_frames_before": 720,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 120640,
+          "chunk_end": 752,
+          "chunk_index": 46,
+          "chunk_start": 727,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 752,
+          "emitted_frames_before": 736,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 123200,
+          "chunk_end": 768,
+          "chunk_index": 47,
+          "chunk_start": 743,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 768,
+          "emitted_frames_before": 752,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 125760,
+          "chunk_end": 784,
+          "chunk_index": 48,
+          "chunk_start": 759,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 784,
+          "emitted_frames_before": 768,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 128320,
+          "chunk_end": 800,
+          "chunk_index": 49,
+          "chunk_start": 775,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 800,
+          "emitted_frames_before": 784,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 130880,
+          "chunk_end": 816,
+          "chunk_index": 50,
+          "chunk_start": 791,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 816,
+          "emitted_frames_before": 800,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 133440,
+          "chunk_end": 832,
+          "chunk_index": 51,
+          "chunk_start": 807,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 832,
+          "emitted_frames_before": 816,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 136000,
+          "chunk_end": 848,
+          "chunk_index": 52,
+          "chunk_start": 823,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 848,
+          "emitted_frames_before": 832,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 138560,
+          "chunk_end": 864,
+          "chunk_index": 53,
+          "chunk_start": 839,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 864,
+          "emitted_frames_before": 848,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 141120,
+          "chunk_end": 880,
+          "chunk_index": 54,
+          "chunk_start": 855,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 880,
+          "emitted_frames_before": 864,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 143680,
+          "chunk_end": 896,
+          "chunk_index": 55,
+          "chunk_start": 871,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 896,
+          "emitted_frames_before": 880,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 146240,
+          "chunk_end": 912,
+          "chunk_index": 56,
+          "chunk_start": 887,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 912,
+          "emitted_frames_before": 896,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 148800,
+          "chunk_end": 928,
+          "chunk_index": 57,
+          "chunk_start": 903,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 928,
+          "emitted_frames_before": 912,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 151360,
+          "chunk_end": 944,
+          "chunk_index": 58,
+          "chunk_start": 919,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 944,
+          "emitted_frames_before": 928,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 153920,
+          "chunk_end": 960,
+          "chunk_index": 59,
+          "chunk_start": 935,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 960,
+          "emitted_frames_before": 944,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 156480,
+          "chunk_end": 976,
+          "chunk_index": 60,
+          "chunk_start": 951,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 976,
+          "emitted_frames_before": 960,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 159040,
+          "chunk_end": 992,
+          "chunk_index": 61,
+          "chunk_start": 967,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 992,
+          "emitted_frames_before": 976,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 161600,
+          "chunk_end": 1008,
+          "chunk_index": 62,
+          "chunk_start": 983,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1008,
+          "emitted_frames_before": 992,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 164160,
+          "chunk_end": 1024,
+          "chunk_index": 63,
+          "chunk_start": 999,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1024,
+          "emitted_frames_before": 1008,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 166720,
+          "chunk_end": 1040,
+          "chunk_index": 64,
+          "chunk_start": 1015,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1040,
+          "emitted_frames_before": 1024,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 169280,
+          "chunk_end": 1056,
+          "chunk_index": 65,
+          "chunk_start": 1031,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1056,
+          "emitted_frames_before": 1040,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 171840,
+          "chunk_end": 1072,
+          "chunk_index": 66,
+          "chunk_start": 1047,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1072,
+          "emitted_frames_before": 1056,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 174269,
+          "chunk_end": 1088,
+          "chunk_index": 67,
+          "chunk_start": 1063,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1088,
+          "emitted_frames_before": 1072,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        }
+      ],
+      "chunk_count": 68,
+      "final_boundary": {
+        "audio_samples_after_padding": 179389,
+        "audio_samples_before_padding": 174269,
+        "chunk_end": 1122,
+        "chunk_start": 1079,
+        "drop_extra_pre_encoded": 2,
+        "emitted_frames_before": 1088,
+        "keep_all_outputs": true,
+        "mel_dtype": "torch.float32",
+        "mel_shape": [
+          1,
+          128,
+          43
+        ],
+        "padding_samples": 5120,
+        "remaining_frames": 34,
+        "total_mel_frames": 1122
+      },
+      "final_delta_text": "?",
+      "final_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough?",
+      "fixture": {
+        "duration_seconds": 10.8918125,
+        "filename": "b134b8e1-b79b-0b14-e56c-95592bdb0361.pcm",
+        "path": "/home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data/audio/b134b8e1-b79b-0b14-e56c-95592bdb0361.pcm",
+        "role": "mid",
+        "samples": 174269,
+        "sha256": "5eea4194748688c662b1c1aa03e3a858ee9439039ed442d3ec2523da1b6f6288",
+        "size_bytes": 348538
+      },
+      "texts": [
+        {
+          "chunk_index": 0,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 1,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 2,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 3,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 4,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 5,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 6,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 7,
+          "current_text_after": "Can",
+          "emitted_text": "Can",
+          "returned_text": "Can"
+        },
+        {
+          "chunk_index": 8,
+          "current_text_after": "Can you",
+          "emitted_text": "Can you",
+          "returned_text": "Can you"
+        },
+        {
+          "chunk_index": 9,
+          "current_text_after": "Can you give",
+          "emitted_text": "Can you give",
+          "returned_text": "Can you give"
+        },
+        {
+          "chunk_index": 10,
+          "current_text_after": "Can you give me",
+          "emitted_text": "Can you give me",
+          "returned_text": "Can you give me"
+        },
+        {
+          "chunk_index": 11,
+          "current_text_after": "Can you give me a",
+          "emitted_text": "Can you give me a",
+          "returned_text": "Can you give me a"
+        },
+        {
+          "chunk_index": 12,
+          "current_text_after": "Can you give me a simple",
+          "emitted_text": "Can you give me a simple",
+          "returned_text": "Can you give me a simple"
+        },
+        {
+          "chunk_index": 13,
+          "current_text_after": "Can you give me a simple",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple"
+        },
+        {
+          "chunk_index": 14,
+          "current_text_after": "Can you give me a simple, eas",
+          "emitted_text": "Can you give me a simple, eas",
+          "returned_text": "Can you give me a simple, eas"
+        },
+        {
+          "chunk_index": 15,
+          "current_text_after": "Can you give me a simple, easy to",
+          "emitted_text": "Can you give me a simple, easy to",
+          "returned_text": "Can you give me a simple, easy to"
+        },
+        {
+          "chunk_index": 16,
+          "current_text_after": "Can you give me a simple, easy to",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to"
+        },
+        {
+          "chunk_index": 17,
+          "current_text_after": "Can you give me a simple, easy to file",
+          "emitted_text": "Can you give me a simple, easy to file",
+          "returned_text": "Can you give me a simple, easy to file"
+        },
+        {
+          "chunk_index": 18,
+          "current_text_after": "Can you give me a simple, easy to file a reci",
+          "emitted_text": "Can you give me a simple, easy to file a reci",
+          "returned_text": "Can you give me a simple, easy to file a reci"
+        },
+        {
+          "chunk_index": 19,
+          "current_text_after": "Can you give me a simple, easy to file a recipe",
+          "emitted_text": "Can you give me a simple, easy to file a recipe",
+          "returned_text": "Can you give me a simple, easy to file a recipe"
+        },
+        {
+          "chunk_index": 20,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for",
+          "returned_text": "Can you give me a simple, easy to file a recipe for"
+        },
+        {
+          "chunk_index": 21,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making"
+        },
+        {
+          "chunk_index": 22,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making"
+        },
+        {
+          "chunk_index": 23,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making"
+        },
+        {
+          "chunk_index": 24,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making home",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making home",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making home"
+        },
+        {
+          "chunk_index": 25,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade"
+        },
+        {
+          "chunk_index": 26,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade"
+        },
+        {
+          "chunk_index": 27,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sour",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sour",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sour"
+        },
+        {
+          "chunk_index": 28,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough"
+        },
+        {
+          "chunk_index": 29,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread"
+        },
+        {
+          "chunk_index": 30,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread"
+        },
+        {
+          "chunk_index": 31,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch"
+        },
+        {
+          "chunk_index": 32,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch"
+        },
+        {
+          "chunk_index": 33,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch"
+        },
+        {
+          "chunk_index": 34,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch"
+        },
+        {
+          "chunk_index": 35,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch"
+        },
+        {
+          "chunk_index": 36,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including"
+        },
+        {
+          "chunk_index": 37,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including"
+        },
+        {
+          "chunk_index": 38,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including"
+        },
+        {
+          "chunk_index": 39,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including"
+        },
+        {
+          "chunk_index": 40,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instruct",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instruct",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instruct"
+        },
+        {
+          "chunk_index": 41,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions"
+        },
+        {
+          "chunk_index": 42,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how"
+        },
+        {
+          "chunk_index": 43,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how"
+        },
+        {
+          "chunk_index": 44,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create"
+        },
+        {
+          "chunk_index": 45,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create"
+        },
+        {
+          "chunk_index": 46,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create"
+        },
+        {
+          "chunk_index": 47,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and"
+        },
+        {
+          "chunk_index": 48,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain"
+        },
+        {
+          "chunk_index": 49,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain"
+        },
+        {
+          "chunk_index": 50,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain"
+        },
+        {
+          "chunk_index": 51,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the"
+        },
+        {
+          "chunk_index": 52,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necess",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necess",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necess"
+        },
+        {
+          "chunk_index": 53,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary"
+        },
+        {
+          "chunk_index": 54,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary"
+        },
+        {
+          "chunk_index": 55,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary star",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary star",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary star"
+        },
+        {
+          "chunk_index": 56,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter"
+        },
+        {
+          "chunk_index": 57,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter cult",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter cult",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter cult"
+        },
+        {
+          "chunk_index": 58,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter cult",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter cult"
+        },
+        {
+          "chunk_index": 59,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture"
+        },
+        {
+          "chunk_index": 60,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the"
+        },
+        {
+          "chunk_index": 61,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        },
+        {
+          "chunk_index": 62,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        },
+        {
+          "chunk_index": 63,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        },
+        {
+          "chunk_index": 64,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        },
+        {
+          "chunk_index": 65,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        },
+        {
+          "chunk_index": 66,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        },
+        {
+          "chunk_index": 67,
+          "current_text_after": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough",
+          "emitted_text": null,
+          "returned_text": "Can you give me a simple, easy to file a recipe for making homemade sourdough bread from scratch, including instructions on how to create and maintain the necessary starter culture for the dough"
+        }
+      ]
+    },
+    {
+      "artifact": "equiv_golden/largest_ff846df9-66ad-cb21-43f7-7df5205b948a.pt",
+      "chunk_boundaries": [
+        {
+          "audio_samples_at_process": 2880,
+          "chunk_end": 16,
+          "chunk_index": 0,
+          "chunk_start": 0,
+          "drop_extra_pre_encoded": 0,
+          "emitted_frames_after": 16,
+          "emitted_frames_before": 0,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            16
+          ]
+        },
+        {
+          "audio_samples_at_process": 5440,
+          "chunk_end": 32,
+          "chunk_index": 1,
+          "chunk_start": 7,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 32,
+          "emitted_frames_before": 16,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 8000,
+          "chunk_end": 48,
+          "chunk_index": 2,
+          "chunk_start": 23,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 48,
+          "emitted_frames_before": 32,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 10560,
+          "chunk_end": 64,
+          "chunk_index": 3,
+          "chunk_start": 39,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 64,
+          "emitted_frames_before": 48,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 13120,
+          "chunk_end": 80,
+          "chunk_index": 4,
+          "chunk_start": 55,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 80,
+          "emitted_frames_before": 64,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 15680,
+          "chunk_end": 96,
+          "chunk_index": 5,
+          "chunk_start": 71,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 96,
+          "emitted_frames_before": 80,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 18240,
+          "chunk_end": 112,
+          "chunk_index": 6,
+          "chunk_start": 87,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 112,
+          "emitted_frames_before": 96,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 20800,
+          "chunk_end": 128,
+          "chunk_index": 7,
+          "chunk_start": 103,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 128,
+          "emitted_frames_before": 112,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 23360,
+          "chunk_end": 144,
+          "chunk_index": 8,
+          "chunk_start": 119,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 144,
+          "emitted_frames_before": 128,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 25920,
+          "chunk_end": 160,
+          "chunk_index": 9,
+          "chunk_start": 135,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 160,
+          "emitted_frames_before": 144,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 28480,
+          "chunk_end": 176,
+          "chunk_index": 10,
+          "chunk_start": 151,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 176,
+          "emitted_frames_before": 160,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 31040,
+          "chunk_end": 192,
+          "chunk_index": 11,
+          "chunk_start": 167,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 192,
+          "emitted_frames_before": 176,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 33600,
+          "chunk_end": 208,
+          "chunk_index": 12,
+          "chunk_start": 183,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 208,
+          "emitted_frames_before": 192,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 36160,
+          "chunk_end": 224,
+          "chunk_index": 13,
+          "chunk_start": 199,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 224,
+          "emitted_frames_before": 208,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 38720,
+          "chunk_end": 240,
+          "chunk_index": 14,
+          "chunk_start": 215,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 240,
+          "emitted_frames_before": 224,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 41280,
+          "chunk_end": 256,
+          "chunk_index": 15,
+          "chunk_start": 231,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 256,
+          "emitted_frames_before": 240,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 43840,
+          "chunk_end": 272,
+          "chunk_index": 16,
+          "chunk_start": 247,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 272,
+          "emitted_frames_before": 256,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 46400,
+          "chunk_end": 288,
+          "chunk_index": 17,
+          "chunk_start": 263,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 288,
+          "emitted_frames_before": 272,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 48960,
+          "chunk_end": 304,
+          "chunk_index": 18,
+          "chunk_start": 279,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 304,
+          "emitted_frames_before": 288,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 51520,
+          "chunk_end": 320,
+          "chunk_index": 19,
+          "chunk_start": 295,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 320,
+          "emitted_frames_before": 304,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 54080,
+          "chunk_end": 336,
+          "chunk_index": 20,
+          "chunk_start": 311,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 336,
+          "emitted_frames_before": 320,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 56640,
+          "chunk_end": 352,
+          "chunk_index": 21,
+          "chunk_start": 327,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 352,
+          "emitted_frames_before": 336,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 59200,
+          "chunk_end": 368,
+          "chunk_index": 22,
+          "chunk_start": 343,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 368,
+          "emitted_frames_before": 352,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 61760,
+          "chunk_end": 384,
+          "chunk_index": 23,
+          "chunk_start": 359,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 384,
+          "emitted_frames_before": 368,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 64320,
+          "chunk_end": 400,
+          "chunk_index": 24,
+          "chunk_start": 375,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 400,
+          "emitted_frames_before": 384,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 66880,
+          "chunk_end": 416,
+          "chunk_index": 25,
+          "chunk_start": 391,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 416,
+          "emitted_frames_before": 400,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 69440,
+          "chunk_end": 432,
+          "chunk_index": 26,
+          "chunk_start": 407,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 432,
+          "emitted_frames_before": 416,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 72000,
+          "chunk_end": 448,
+          "chunk_index": 27,
+          "chunk_start": 423,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 448,
+          "emitted_frames_before": 432,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 74560,
+          "chunk_end": 464,
+          "chunk_index": 28,
+          "chunk_start": 439,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 464,
+          "emitted_frames_before": 448,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 77120,
+          "chunk_end": 480,
+          "chunk_index": 29,
+          "chunk_start": 455,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 480,
+          "emitted_frames_before": 464,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 79680,
+          "chunk_end": 496,
+          "chunk_index": 30,
+          "chunk_start": 471,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 496,
+          "emitted_frames_before": 480,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 82240,
+          "chunk_end": 512,
+          "chunk_index": 31,
+          "chunk_start": 487,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 512,
+          "emitted_frames_before": 496,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 84800,
+          "chunk_end": 528,
+          "chunk_index": 32,
+          "chunk_start": 503,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 528,
+          "emitted_frames_before": 512,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 87360,
+          "chunk_end": 544,
+          "chunk_index": 33,
+          "chunk_start": 519,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 544,
+          "emitted_frames_before": 528,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 89920,
+          "chunk_end": 560,
+          "chunk_index": 34,
+          "chunk_start": 535,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 560,
+          "emitted_frames_before": 544,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 92480,
+          "chunk_end": 576,
+          "chunk_index": 35,
+          "chunk_start": 551,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 576,
+          "emitted_frames_before": 560,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 95040,
+          "chunk_end": 592,
+          "chunk_index": 36,
+          "chunk_start": 567,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 592,
+          "emitted_frames_before": 576,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 97600,
+          "chunk_end": 608,
+          "chunk_index": 37,
+          "chunk_start": 583,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 608,
+          "emitted_frames_before": 592,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 100160,
+          "chunk_end": 624,
+          "chunk_index": 38,
+          "chunk_start": 599,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 624,
+          "emitted_frames_before": 608,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 102720,
+          "chunk_end": 640,
+          "chunk_index": 39,
+          "chunk_start": 615,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 640,
+          "emitted_frames_before": 624,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 105280,
+          "chunk_end": 656,
+          "chunk_index": 40,
+          "chunk_start": 631,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 656,
+          "emitted_frames_before": 640,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 107840,
+          "chunk_end": 672,
+          "chunk_index": 41,
+          "chunk_start": 647,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 672,
+          "emitted_frames_before": 656,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 110400,
+          "chunk_end": 688,
+          "chunk_index": 42,
+          "chunk_start": 663,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 688,
+          "emitted_frames_before": 672,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 112960,
+          "chunk_end": 704,
+          "chunk_index": 43,
+          "chunk_start": 679,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 704,
+          "emitted_frames_before": 688,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 115520,
+          "chunk_end": 720,
+          "chunk_index": 44,
+          "chunk_start": 695,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 720,
+          "emitted_frames_before": 704,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 118080,
+          "chunk_end": 736,
+          "chunk_index": 45,
+          "chunk_start": 711,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 736,
+          "emitted_frames_before": 720,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 120640,
+          "chunk_end": 752,
+          "chunk_index": 46,
+          "chunk_start": 727,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 752,
+          "emitted_frames_before": 736,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 123200,
+          "chunk_end": 768,
+          "chunk_index": 47,
+          "chunk_start": 743,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 768,
+          "emitted_frames_before": 752,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 125760,
+          "chunk_end": 784,
+          "chunk_index": 48,
+          "chunk_start": 759,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 784,
+          "emitted_frames_before": 768,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 128320,
+          "chunk_end": 800,
+          "chunk_index": 49,
+          "chunk_start": 775,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 800,
+          "emitted_frames_before": 784,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 130880,
+          "chunk_end": 816,
+          "chunk_index": 50,
+          "chunk_start": 791,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 816,
+          "emitted_frames_before": 800,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 133440,
+          "chunk_end": 832,
+          "chunk_index": 51,
+          "chunk_start": 807,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 832,
+          "emitted_frames_before": 816,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 136000,
+          "chunk_end": 848,
+          "chunk_index": 52,
+          "chunk_start": 823,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 848,
+          "emitted_frames_before": 832,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 138560,
+          "chunk_end": 864,
+          "chunk_index": 53,
+          "chunk_start": 839,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 864,
+          "emitted_frames_before": 848,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 141120,
+          "chunk_end": 880,
+          "chunk_index": 54,
+          "chunk_start": 855,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 880,
+          "emitted_frames_before": 864,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 143680,
+          "chunk_end": 896,
+          "chunk_index": 55,
+          "chunk_start": 871,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 896,
+          "emitted_frames_before": 880,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 146240,
+          "chunk_end": 912,
+          "chunk_index": 56,
+          "chunk_start": 887,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 912,
+          "emitted_frames_before": 896,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 148800,
+          "chunk_end": 928,
+          "chunk_index": 57,
+          "chunk_start": 903,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 928,
+          "emitted_frames_before": 912,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 151360,
+          "chunk_end": 944,
+          "chunk_index": 58,
+          "chunk_start": 919,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 944,
+          "emitted_frames_before": 928,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 153920,
+          "chunk_end": 960,
+          "chunk_index": 59,
+          "chunk_start": 935,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 960,
+          "emitted_frames_before": 944,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 156480,
+          "chunk_end": 976,
+          "chunk_index": 60,
+          "chunk_start": 951,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 976,
+          "emitted_frames_before": 960,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 159040,
+          "chunk_end": 992,
+          "chunk_index": 61,
+          "chunk_start": 967,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 992,
+          "emitted_frames_before": 976,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 161600,
+          "chunk_end": 1008,
+          "chunk_index": 62,
+          "chunk_start": 983,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1008,
+          "emitted_frames_before": 992,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 164160,
+          "chunk_end": 1024,
+          "chunk_index": 63,
+          "chunk_start": 999,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1024,
+          "emitted_frames_before": 1008,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 166720,
+          "chunk_end": 1040,
+          "chunk_index": 64,
+          "chunk_start": 1015,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1040,
+          "emitted_frames_before": 1024,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 169280,
+          "chunk_end": 1056,
+          "chunk_index": 65,
+          "chunk_start": 1031,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1056,
+          "emitted_frames_before": 1040,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 171840,
+          "chunk_end": 1072,
+          "chunk_index": 66,
+          "chunk_start": 1047,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1072,
+          "emitted_frames_before": 1056,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 174400,
+          "chunk_end": 1088,
+          "chunk_index": 67,
+          "chunk_start": 1063,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1088,
+          "emitted_frames_before": 1072,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 176960,
+          "chunk_end": 1104,
+          "chunk_index": 68,
+          "chunk_start": 1079,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1104,
+          "emitted_frames_before": 1088,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 179520,
+          "chunk_end": 1120,
+          "chunk_index": 69,
+          "chunk_start": 1095,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1120,
+          "emitted_frames_before": 1104,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 182080,
+          "chunk_end": 1136,
+          "chunk_index": 70,
+          "chunk_start": 1111,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1136,
+          "emitted_frames_before": 1120,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 184640,
+          "chunk_end": 1152,
+          "chunk_index": 71,
+          "chunk_start": 1127,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1152,
+          "emitted_frames_before": 1136,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 187200,
+          "chunk_end": 1168,
+          "chunk_index": 72,
+          "chunk_start": 1143,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1168,
+          "emitted_frames_before": 1152,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 189760,
+          "chunk_end": 1184,
+          "chunk_index": 73,
+          "chunk_start": 1159,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1184,
+          "emitted_frames_before": 1168,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 192320,
+          "chunk_end": 1200,
+          "chunk_index": 74,
+          "chunk_start": 1175,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1200,
+          "emitted_frames_before": 1184,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 194880,
+          "chunk_end": 1216,
+          "chunk_index": 75,
+          "chunk_start": 1191,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1216,
+          "emitted_frames_before": 1200,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 197440,
+          "chunk_end": 1232,
+          "chunk_index": 76,
+          "chunk_start": 1207,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1232,
+          "emitted_frames_before": 1216,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 200000,
+          "chunk_end": 1248,
+          "chunk_index": 77,
+          "chunk_start": 1223,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1248,
+          "emitted_frames_before": 1232,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 202560,
+          "chunk_end": 1264,
+          "chunk_index": 78,
+          "chunk_start": 1239,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1264,
+          "emitted_frames_before": 1248,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 205120,
+          "chunk_end": 1280,
+          "chunk_index": 79,
+          "chunk_start": 1255,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1280,
+          "emitted_frames_before": 1264,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 207680,
+          "chunk_end": 1296,
+          "chunk_index": 80,
+          "chunk_start": 1271,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1296,
+          "emitted_frames_before": 1280,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 210240,
+          "chunk_end": 1312,
+          "chunk_index": 81,
+          "chunk_start": 1287,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1312,
+          "emitted_frames_before": 1296,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 212800,
+          "chunk_end": 1328,
+          "chunk_index": 82,
+          "chunk_start": 1303,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1328,
+          "emitted_frames_before": 1312,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 215360,
+          "chunk_end": 1344,
+          "chunk_index": 83,
+          "chunk_start": 1319,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1344,
+          "emitted_frames_before": 1328,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 217920,
+          "chunk_end": 1360,
+          "chunk_index": 84,
+          "chunk_start": 1335,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1360,
+          "emitted_frames_before": 1344,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 220480,
+          "chunk_end": 1376,
+          "chunk_index": 85,
+          "chunk_start": 1351,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1376,
+          "emitted_frames_before": 1360,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 223040,
+          "chunk_end": 1392,
+          "chunk_index": 86,
+          "chunk_start": 1367,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1392,
+          "emitted_frames_before": 1376,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 225600,
+          "chunk_end": 1408,
+          "chunk_index": 87,
+          "chunk_start": 1383,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1408,
+          "emitted_frames_before": 1392,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 228160,
+          "chunk_end": 1424,
+          "chunk_index": 88,
+          "chunk_start": 1399,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1424,
+          "emitted_frames_before": 1408,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 230720,
+          "chunk_end": 1440,
+          "chunk_index": 89,
+          "chunk_start": 1415,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1440,
+          "emitted_frames_before": 1424,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 233280,
+          "chunk_end": 1456,
+          "chunk_index": 90,
+          "chunk_start": 1431,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1456,
+          "emitted_frames_before": 1440,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 235840,
+          "chunk_end": 1472,
+          "chunk_index": 91,
+          "chunk_start": 1447,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1472,
+          "emitted_frames_before": 1456,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 238400,
+          "chunk_end": 1488,
+          "chunk_index": 92,
+          "chunk_start": 1463,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1488,
+          "emitted_frames_before": 1472,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 240960,
+          "chunk_end": 1504,
+          "chunk_index": 93,
+          "chunk_start": 1479,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1504,
+          "emitted_frames_before": 1488,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 243520,
+          "chunk_end": 1520,
+          "chunk_index": 94,
+          "chunk_start": 1495,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1520,
+          "emitted_frames_before": 1504,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 246080,
+          "chunk_end": 1536,
+          "chunk_index": 95,
+          "chunk_start": 1511,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1536,
+          "emitted_frames_before": 1520,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 248640,
+          "chunk_end": 1552,
+          "chunk_index": 96,
+          "chunk_start": 1527,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1552,
+          "emitted_frames_before": 1536,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 251200,
+          "chunk_end": 1568,
+          "chunk_index": 97,
+          "chunk_start": 1543,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1568,
+          "emitted_frames_before": 1552,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        },
+        {
+          "audio_samples_at_process": 253760,
+          "chunk_end": 1584,
+          "chunk_index": 98,
+          "chunk_start": 1559,
+          "drop_extra_pre_encoded": 2,
+          "emitted_frames_after": 1584,
+          "emitted_frames_before": 1568,
+          "keep_all_outputs": false,
+          "mel_dtype": "torch.float32",
+          "mel_shape": [
+            1,
+            128,
+            25
+          ]
+        }
+      ],
+      "chunk_count": 99,
+      "final_boundary": {
+        "audio_samples_after_padding": 261120,
+        "audio_samples_before_padding": 256000,
+        "chunk_end": 1633,
+        "chunk_start": 1575,
+        "drop_extra_pre_encoded": 2,
+        "emitted_frames_before": 1584,
+        "keep_all_outputs": true,
+        "mel_dtype": "torch.float32",
+        "mel_shape": [
+          1,
+          128,
+          58
+        ],
+        "padding_samples": 5120,
+        "remaining_frames": 49,
+        "total_mel_frames": 1633
+      },
+      "final_delta_text": "?",
+      "final_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations?",
+      "fixture": {
+        "duration_seconds": 16.0,
+        "filename": "ff846df9-66ad-cb21-43f7-7df5205b948a.pcm",
+        "path": "/home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data/audio/ff846df9-66ad-cb21-43f7-7df5205b948a.pcm",
+        "role": "largest",
+        "samples": 256000,
+        "sha256": "ed298801914719fcbd9d583e5d88196c854418a80d14a3b81c7f91a8f3eb68ca",
+        "size_bytes": 512000
+      },
+      "texts": [
+        {
+          "chunk_index": 0,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 1,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 2,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 3,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 4,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 5,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 6,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 7,
+          "current_text_after": "",
+          "emitted_text": null,
+          "returned_text": ""
+        },
+        {
+          "chunk_index": 8,
+          "current_text_after": "Can you",
+          "emitted_text": "Can you",
+          "returned_text": "Can you"
+        },
+        {
+          "chunk_index": 9,
+          "current_text_after": "Can you explain",
+          "emitted_text": "Can you explain",
+          "returned_text": "Can you explain"
+        },
+        {
+          "chunk_index": 10,
+          "current_text_after": "Can you explain",
+          "emitted_text": null,
+          "returned_text": "Can you explain"
+        },
+        {
+          "chunk_index": 11,
+          "current_text_after": "Can you explain",
+          "emitted_text": null,
+          "returned_text": "Can you explain"
+        },
+        {
+          "chunk_index": 12,
+          "current_text_after": "Can you explain",
+          "emitted_text": null,
+          "returned_text": "Can you explain"
+        },
+        {
+          "chunk_index": 13,
+          "current_text_after": "Can you explain",
+          "emitted_text": null,
+          "returned_text": "Can you explain"
+        },
+        {
+          "chunk_index": 14,
+          "current_text_after": "Can you explain the primary",
+          "emitted_text": "Can you explain the primary",
+          "returned_text": "Can you explain the primary"
+        },
+        {
+          "chunk_index": 15,
+          "current_text_after": "Can you explain the primary",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary"
+        },
+        {
+          "chunk_index": 16,
+          "current_text_after": "Can you explain the primary",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary"
+        },
+        {
+          "chunk_index": 17,
+          "current_text_after": "Can you explain the primary",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary"
+        },
+        {
+          "chunk_index": 18,
+          "current_text_after": "Can you explain the primary",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary"
+        },
+        {
+          "chunk_index": 19,
+          "current_text_after": "Can you explain the primary differe",
+          "emitted_text": "Can you explain the primary differe",
+          "returned_text": "Can you explain the primary differe"
+        },
+        {
+          "chunk_index": 20,
+          "current_text_after": "Can you explain the primary differences",
+          "emitted_text": "Can you explain the primary differences",
+          "returned_text": "Can you explain the primary differences"
+        },
+        {
+          "chunk_index": 21,
+          "current_text_after": "Can you explain the primary differences",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences"
+        },
+        {
+          "chunk_index": 22,
+          "current_text_after": "Can you explain the primary differences",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences"
+        },
+        {
+          "chunk_index": 23,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": "Can you explain the primary differences between",
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 24,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 25,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 26,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 27,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 28,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 29,
+          "current_text_after": "Can you explain the primary differences between",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between"
+        },
+        {
+          "chunk_index": 30,
+          "current_text_after": "Can you explain the primary differences between as",
+          "emitted_text": "Can you explain the primary differences between as",
+          "returned_text": "Can you explain the primary differences between as"
+        },
+        {
+          "chunk_index": 31,
+          "current_text_after": "Can you explain the primary differences between asyn",
+          "emitted_text": "Can you explain the primary differences between asyn",
+          "returned_text": "Can you explain the primary differences between asyn"
+        },
+        {
+          "chunk_index": 32,
+          "current_text_after": "Can you explain the primary differences between asynchron",
+          "emitted_text": "Can you explain the primary differences between asynchron",
+          "returned_text": "Can you explain the primary differences between asynchron"
+        },
+        {
+          "chunk_index": 33,
+          "current_text_after": "Can you explain the primary differences between asynchron",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchron"
+        },
+        {
+          "chunk_index": 34,
+          "current_text_after": "Can you explain the primary differences between asynchronous",
+          "emitted_text": "Can you explain the primary differences between asynchronous",
+          "returned_text": "Can you explain the primary differences between asynchronous"
+        },
+        {
+          "chunk_index": 35,
+          "current_text_after": "Can you explain the primary differences between asynchronous",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous"
+        },
+        {
+          "chunk_index": 36,
+          "current_text_after": "Can you explain the primary differences between asynchronous and",
+          "emitted_text": "Can you explain the primary differences between asynchronous and",
+          "returned_text": "Can you explain the primary differences between asynchronous and"
+        },
+        {
+          "chunk_index": 37,
+          "current_text_after": "Can you explain the primary differences between asynchronous and",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and"
+        },
+        {
+          "chunk_index": 38,
+          "current_text_after": "Can you explain the primary differences between asynchronous and",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and"
+        },
+        {
+          "chunk_index": 39,
+          "current_text_after": "Can you explain the primary differences between asynchronous and",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and"
+        },
+        {
+          "chunk_index": 40,
+          "current_text_after": "Can you explain the primary differences between asynchronous and",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and"
+        },
+        {
+          "chunk_index": 41,
+          "current_text_after": "Can you explain the primary differences between asynchronous and",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and"
+        },
+        {
+          "chunk_index": 42,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine"
+        },
+        {
+          "chunk_index": 43,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chron",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chron",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chron"
+        },
+        {
+          "chunk_index": 44,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chron",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chron"
+        },
+        {
+          "chunk_index": 45,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos"
+        },
+        {
+          "chunk_index": 46,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos"
+        },
+        {
+          "chunk_index": 47,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos Java",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos Java",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos Java"
+        },
+        {
+          "chunk_index": 48,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript"
+        },
+        {
+          "chunk_index": 49,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript"
+        },
+        {
+          "chunk_index": 50,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript"
+        },
+        {
+          "chunk_index": 51,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript"
+        },
+        {
+          "chunk_index": 52,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript"
+        },
+        {
+          "chunk_index": 53,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript"
+        },
+        {
+          "chunk_index": 54,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, includ",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, includ",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, includ"
+        },
+        {
+          "chunk_index": 55,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including"
+        },
+        {
+          "chunk_index": 56,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a"
+        },
+        {
+          "chunk_index": 57,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple"
+        },
+        {
+          "chunk_index": 58,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple"
+        },
+        {
+          "chunk_index": 59,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple"
+        },
+        {
+          "chunk_index": 60,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code"
+        },
+        {
+          "chunk_index": 61,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code"
+        },
+        {
+          "chunk_index": 62,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example"
+        },
+        {
+          "chunk_index": 63,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example"
+        },
+        {
+          "chunk_index": 64,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example"
+        },
+        {
+          "chunk_index": 65,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that"
+        },
+        {
+          "chunk_index": 66,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that"
+        },
+        {
+          "chunk_index": 67,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly"
+        },
+        {
+          "chunk_index": 68,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly"
+        },
+        {
+          "chunk_index": 69,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly"
+        },
+        {
+          "chunk_index": 70,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust"
+        },
+        {
+          "chunk_index": 71,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust"
+        },
+        {
+          "chunk_index": 72,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust"
+        },
+        {
+          "chunk_index": 73,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illust"
+        },
+        {
+          "chunk_index": 74,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates"
+        },
+        {
+          "chunk_index": 75,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates"
+        },
+        {
+          "chunk_index": 76,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how"
+        },
+        {
+          "chunk_index": 77,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how"
+        },
+        {
+          "chunk_index": 78,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how"
+        },
+        {
+          "chunk_index": 79,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how"
+        },
+        {
+          "chunk_index": 80,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how prom",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how prom",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how prom"
+        },
+        {
+          "chunk_index": 81,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how prom",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how prom"
+        },
+        {
+          "chunk_index": 82,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises"
+        },
+        {
+          "chunk_index": 83,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work"
+        },
+        {
+          "chunk_index": 84,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work"
+        },
+        {
+          "chunk_index": 85,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work"
+        },
+        {
+          "chunk_index": 86,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work"
+        },
+        {
+          "chunk_index": 87,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to"
+        },
+        {
+          "chunk_index": 88,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle"
+        },
+        {
+          "chunk_index": 89,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle"
+        },
+        {
+          "chunk_index": 90,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle"
+        },
+        {
+          "chunk_index": 91,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle"
+        },
+        {
+          "chunk_index": 92,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the"
+        },
+        {
+          "chunk_index": 93,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the leg",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the leg",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the leg"
+        },
+        {
+          "chunk_index": 94,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion"
+        },
+        {
+          "chunk_index": 95,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations",
+          "emitted_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations",
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations"
+        },
+        {
+          "chunk_index": 96,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations"
+        },
+        {
+          "chunk_index": 97,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations"
+        },
+        {
+          "chunk_index": 98,
+          "current_text_after": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations",
+          "emitted_text": null,
+          "returned_text": "Can you explain the primary differences between asynchronous and sine chronos JavaScript, including a simple code example that clearly illustrates how promises work to handle the legion operations"
+        }
+      ]
+    }
+  ],
+  "created_by": "proj-2026-05-17-1708/equiv_harness.py",
+  "determinism": {
+    "cudnn_benchmark": false,
+    "dither": 0.0,
+    "numpy_seed": 0,
+    "torch_inference_mode": true,
+    "torch_manual_seed": 0
+  },
+  "fixture_selection": {
+    "audio_dir": "/home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data/audio",
+    "method": "sort *.pcm by (size_bytes, filename); pick first, middle index (n-1)//2, last",
+    "roles": [
+      "smallest",
+      "mid",
+      "largest"
+    ]
+  },
+  "params": {
+    "att_context_size": [
+      70,
+      1
+    ],
+    "benchmark_audio_chunk_ms": 20,
+    "benchmark_audio_chunk_samples": 320,
+    "decoder_class": "GreedyRNNTInfer",
+    "decoding": {
+      "loop_labels": false,
+      "max_symbols": 10,
+      "strategy": "greedy",
+      "use_cuda_graph_decoder": false
+    },
+    "dither": 0.0,
+    "drop_extra_pre_encoded": 2,
+    "final_padding_formula": "(right_context + 1) * shift_frames",
+    "final_padding_frames": 32,
+    "final_padding_samples": 5120,
+    "hop_samples": 160,
+    "model_name": "nvidia/nemotron-speech-streaming-en-0.6b",
+    "overlap_ms": 90.0,
+    "overlap_samples": 1440,
+    "pre_encode_cache_size": 9,
+    "right_context": 1,
+    "sample_rate": 16000,
+    "server_chunk_sites": {
+      "final": "src/nemotron_speech/server.py:625-668",
+      "streaming": "src/nemotron_speech/server.py:421-462"
+    },
+    "server_repreprocess_sites": {
+      "final": "src/nemotron_speech/server.py:615-623",
+      "streaming": "src/nemotron_speech/server.py:403-415"
+    },
+    "shift_frames": 16,
+    "shift_ms": 160.0,
+    "shift_samples": 2560,
+    "window_size": 0.025,
+    "window_size_samples": 400,
+    "window_stride": 0.01
+  },
+  "purpose": "Step 6a golden oracle for current server.py full-re-mel streaming path",
+  "schema_version": 1,
+  "server_chunk_sites": {
+    "final": "src/nemotron_speech/server.py:625-668",
+    "streaming": "src/nemotron_speech/server.py:421-462"
+  },
+  "server_repreprocess_sites": {
+    "final": "src/nemotron_speech/server.py:615-623",
+    "streaming": "src/nemotron_speech/server.py:403-415"
+  }
+}
