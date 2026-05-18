@@ -1,0 +1,200 @@
+[2026-05-18T05:35:27.055Z] Starting Codex Task.
+[2026-05-18T05:35:29.327Z] Starting Codex task thread.
+[2026-05-18T05:35:30.343Z] Thread ready (019e3995-0e07-7e52-bb6e-7e67009eb6a0).
+[2026-05-18T05:35:30.355Z] Turn started (019e3995-0e32-7211-9c48-377bd16c7a84).
+[2026-05-18T05:35:41.621Z] Assistant message captured: I’ll update only `probe_alias.py`, first reading the plan and the existing probe shape so the...
+
+[2026-05-18T05:35:41.621Z] Assistant message
+I’ll update only `probe_alias.py`, first reading the plan and the existing probe shape so the additions fit the current Step 3 machinery instead of replacing it. Then I’ll run the probe with the requested ASR venv and fix any issues inside that file only.
+[2026-05-18T05:35:41.656Z] Running command: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/...
+[2026-05-18T05:35:41.665Z] Command completed: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/... (exit 0)
+[2026-05-18T05:35:41.668Z] Running command: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/...
+[2026-05-18T05:35:41.668Z] Command completed: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/... (exit 0)
+[2026-05-18T05:35:41.671Z] Running command: /bin/bash -lc "sed -n '760,1040p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-17...
+[2026-05-18T05:35:41.671Z] Command completed: /bin/bash -lc "sed -n '760,1040p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-17... (exit 0)
+[2026-05-18T05:35:41.673Z] Running command: /bin/bash -lc "sed -n '260,760p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T05:35:41.674Z] Command completed: /bin/bash -lc "sed -n '260,760p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T05:35:52.863Z] Assistant message captured: I’ve got the existing probe structure. The current verdict gates only on the deep recipe, so ...
+
+[2026-05-18T05:35:52.863Z] Assistant message
+I’ve got the existing probe structure. The current verdict gates only on the deep recipe, so I’m adding the detector positive control and a second decoder-mode pass around the existing `run_recipe()` calls while preserving the server-path flow.
+[2026-05-18T05:36:46.104Z] Assistant message captured: The self-test needs a small recursive tensor finder because NeMo hypothesis internals can put...
+
+[2026-05-18T05:36:46.104Z] Assistant message
+The self-test needs a small recursive tensor finder because NeMo hypothesis internals can put tensors under fields like `dec_state`, tuples, or dataclasses. I’m adding that in the probe so the positive control mutates the same kind of snapshot surface the recipe checks.
+[2026-05-18T05:36:49.537Z] Applying 1 file change(s).
+[2026-05-18T05:36:49.549Z] File changes completed.
+[2026-05-18T05:37:12.167Z] Applying 1 file change(s).
+[2026-05-18T05:37:12.167Z] File changes completed.
+[2026-05-18T05:37:23.545Z] Applying 1 file change(s).
+[2026-05-18T05:37:23.545Z] File changes completed.
+[2026-05-18T05:37:27.550Z] Applying 1 file change(s).
+[2026-05-18T05:37:27.550Z] File changes completed.
+[2026-05-18T05:37:31.190Z] Running command: /bin/bash -lc "sed -n '540,780p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T05:37:31.201Z] Command completed: /bin/bash -lc "sed -n '540,780p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T05:37:33.919Z] Running command: /bin/bash -lc "sed -n '780,980p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T05:37:33.919Z] Command completed: /bin/bash -lc "sed -n '780,980p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T05:38:15.625Z] Applying 1 file change(s).
+[2026-05-18T05:38:15.634Z] File changes completed.
+[2026-05-18T05:38:23.070Z] Assistant message captured: The probe now has the new control flow: self-test first, server decoder table, batched decode...
+
+[2026-05-18T05:38:23.071Z] Assistant message
+The probe now has the new control flow: self-test first, server decoder table, batched decoder table, restore server decoder, then the tightened gate. I’m running a syntax check before the expensive GPU run so any simple mistakes are caught quickly.
+[2026-05-18T05:38:23.116Z] Running command: /bin/bash -lc 'git diff -- /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/prob...
+[2026-05-18T05:38:23.126Z] Command completed: /bin/bash -lc 'git diff -- /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/prob... (exit 0)
+[2026-05-18T05:38:23.126Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile /home...
+[2026-05-18T05:38:23.126Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile /home... (exit 0)
+[2026-05-18T05:38:30.099Z] Running command: /bin/bash -lc 'git status --short -- /home/khkramer/src/nemotron-january-2026/proj-2026-05-17...
+[2026-05-18T05:38:30.099Z] Command completed: /bin/bash -lc 'git status --short -- /home/khkramer/src/nemotron-january-2026/proj-2026-05-17... (exit 0)
+[2026-05-18T05:38:30.101Z] Running command: /bin/bash -lc "sed -n '80,220p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708...
+[2026-05-18T05:38:30.101Z] Running command: /bin/bash -lc "sed -n '840,980p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T05:38:30.102Z] Command completed: /bin/bash -lc "sed -n '840,980p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T05:38:30.102Z] Command completed: /bin/bash -lc "sed -n '80,220p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708... (exit 0)
+[2026-05-18T05:38:39.398Z] Assistant message captured: The syntax check passed. I’m starting the full probe with the ASR venv now; this will load th...
+
+[2026-05-18T05:38:39.398Z] Assistant message
+The syntax check passed. I’m starting the full probe with the ASR venv now; this will load the cached Nemotron model, run both decoder paths, and may take a few minutes on GPU.
+[2026-05-18T05:38:41.347Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/...
+[2026-05-18T05:38:51.594Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/... (exit 0)
+[2026-05-18T05:39:02.832Z] Assistant message captured: The full run completed with exit 0, but one important detail needs tightening before I call i...
+
+[2026-05-18T05:39:02.832Z] Assistant message
+The full run completed with exit 0, but one important detail needs tightening before I call it done: NeMo reports `loop_labels: true` while the runtime class name still prints `GreedyRNNTInfer`. I’m checking the installed NeMo selection code so the probe’s batched-path label accurately reflects the actual path it exercised.
+[2026-05-18T05:39:02.864Z] Running command: /bin/bash -lc "rg -n \"loop_labels|GreedyBatchedRNNTInfer|GreedyRNNTInfer\" /home/khkramer/sr...
+[2026-05-18T05:39:02.864Z] Command failed: /bin/bash -lc "rg -n \"loop_labels|GreedyBatchedRNNTInfer|GreedyRNNTInfer\" /home/khkramer/sr... (exit 2)
+[2026-05-18T05:39:02.880Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:39:02.881Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:39:02.881Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:39:02.881Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:39:06.922Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ins...
+[2026-05-18T05:39:11.106Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ins... (exit 0)
+[2026-05-18T05:39:18.473Z] Running command: /bin/bash -lc "sed -n '780,850p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/...
+[2026-05-18T05:39:18.473Z] Command completed: /bin/bash -lc "sed -n '780,850p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/... (exit 0)
+[2026-05-18T05:39:18.476Z] Running command: /bin/bash -lc "rg -n \"loop_labels|GreedyBatchedRNNTInfer|class GreedyRNNTInfer|class GreedyB...
+[2026-05-18T05:39:18.476Z] Command completed: /bin/bash -lc "rg -n \"loop_labels|GreedyBatchedRNNTInfer|class GreedyRNNTInfer|class GreedyB... (exit 0)
+[2026-05-18T05:39:18.490Z] Running command: /bin/bash -lc "sed -n '720,790p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/...
+[2026-05-18T05:39:18.490Z] Command completed: /bin/bash -lc "sed -n '720,790p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/... (exit 0)
+[2026-05-18T05:39:26.457Z] Running command: /bin/bash -lc "sed -n '410,465p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/...
+[2026-05-18T05:39:26.457Z] Command completed: /bin/bash -lc "sed -n '410,465p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/... (exit 0)
+[2026-05-18T05:39:33.953Z] Running command: /bin/bash -lc "sed -n '140,175p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech...
+[2026-05-18T05:39:33.953Z] Command completed: /bin/bash -lc "sed -n '140,175p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech... (exit 0)
+[2026-05-18T05:39:45.535Z] Assistant message captured: The installed NeMo source selects `GreedyBatchedRNNTInfer` under `strategy: greedy_batch`, wi...
+
+[2026-05-18T05:39:45.535Z] Assistant message
+The installed NeMo source selects `GreedyBatchedRNNTInfer` under `strategy: greedy_batch`, with `loop_labels=True` choosing the label-looping method that contains `hyp.merge_`. I’m adjusting only the probe so the hazard control actually exercises that class, while keeping the server path exactly `strategy: greedy`, `loop_labels=False`.
+[2026-05-18T05:39:48.572Z] Applying 1 file change(s).
+[2026-05-18T05:39:48.585Z] File changes completed.
+[2026-05-18T05:39:53.784Z] Applying 1 file change(s).
+[2026-05-18T05:39:53.785Z] File changes completed.
+[2026-05-18T05:40:00.376Z] Running command: /bin/bash -lc "sed -n '620,710p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T05:40:00.386Z] Command completed: /bin/bash -lc "sed -n '620,710p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T05:40:00.392Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile /home...
+[2026-05-18T05:40:00.392Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile /home... (exit 0)
+[2026-05-18T05:40:02.963Z] Assistant message captured: The syntax check still passes. I’m rerunning the full probe now with the corrected batched de...
+
+[2026-05-18T05:40:02.963Z] Assistant message
+The syntax check still passes. I’m rerunning the full probe now with the corrected batched decoder selection so the second table is based on `GreedyBatchedRNNTInfer`.
+[2026-05-18T05:40:04.936Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/...
+[2026-05-18T05:40:15.212Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/... (exit 0)
+[2026-05-18T05:40:27.773Z] Running command: /bin/bash -lc 'find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2...
+[2026-05-18T05:40:27.773Z] Command completed: /bin/bash -lc 'find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2... (exit 0)
+[2026-05-18T05:40:27.775Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T05:40:27.775Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T05:40:27.788Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:40:27.788Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:40:27.791Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:40:27.792Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:40:30.606Z] Assistant message captured: The only generated artifact from validation is a Python `__pycache__` directory under the pro...
+
+[2026-05-18T05:40:30.606Z] Assistant message
+The only generated artifact from validation is a Python `__pycache__` directory under the probe folder. I’m removing that so the requested file remains the only touched task artifact.
+[2026-05-18T05:40:31.988Z] Running command: /bin/bash -lc 'rm -rf /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/__pycache__'
+[2026-05-18T05:40:31.988Z] Command completed: /bin/bash -lc 'rm -rf /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/__pycache__' (exit 0)
+[2026-05-18T05:40:41.466Z] Running command: /bin/bash -lc 'find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2...
+[2026-05-18T05:40:41.466Z] Command completed: /bin/bash -lc 'find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2... (exit 0)
+[2026-05-18T05:40:41.471Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:40:41.471Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:40:41.479Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:40:41.479Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:40:41.483Z] Running command: /bin/bash -lc 'git status --short -- /home/khkramer/src/nemotron-january-2026/proj-2026-05-17...
+[2026-05-18T05:40:41.483Z] Command completed: /bin/bash -lc 'git status --short -- /home/khkramer/src/nemotron-january-2026/proj-2026-05-17... (exit 0)
+[2026-05-18T05:41:05.047Z] Assistant message captured: Implemented only [probe_alias.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-17...
+
+[2026-05-18T05:41:05.047Z] Assistant message
+Implemented only [probe_alias.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:99).
+
+Added:
+- Detector positive control: recursive tensor leaf finder plus in-place cache and hypothesis mutation self-test at [probe_alias.py:359](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:359).
+- Decoder switch helper and batched-path control. To actually hit installed NeMo’s `GreedyBatchedRNNTInfer`, the probe uses `strategy=greedy_batch`, `loop_labels=True`; server path remains `strategy=greedy`, `loop_labels=False` at [probe_alias.py:607](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:607) and [probe_alias.py:839](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:839).
+- Tightened verdict and exit-code logic at [probe_alias.py:818](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:818).
+
+Verification command:
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py`
+
+Result: exit code `0`.
+
+DETECTOR-SELFTEST: `PASS`, mutation detected at `root.y_sequence`.
+
+Server path table, `loop_labels=False (server config)`:
+
+| recipe | cache | hyps | continuation |
+|---|---:|---:|---:|
+| shallow | PASS | PASS | PASS |
+| deep | PASS | PASS | PASS |
+
+Batched control table, `loop_labels=True (batched, NOT server config)`:
+
+| recipe | cache | hyps | continuation |
+|---|---:|---:|---:|
+| shallow | PASS | FAIL | FAIL |
+| deep | PASS | PASS | PASS |
+
+Final verdict: `Gate-Ga PASS`. The gate passed because detector-selftest passed and the server-path deep clone stayed clean. Correctness is serialized-only: fork flush must hold the existing `inference_lock`; no concurrent parent step is allowed because NeMo mutates model-global decoder/joint train/eval state and `encoder.streaming_cfg.drop_extra_pre_encoded`.
+
+```text
+DOC-CORRECTION (queue Step 9): finding doc deep-stack risk #1 cites rnnt_greedy_decoding.py:825-831 hyp.merge_, which is in GreedyBatchedRNNTInfer (loop_labels=True); server.py:158-166 uses loop_labels=False -> GreedyRNNTInfer, so that specific in-place merge does NOT occur on the configured path. The deep-clone recipe is retained as defense-in-depth + the serialization requirement is independent and still mandatory.
+```
+
+Blockers: none.
+
+Suggested next step: queue the Step 9 doc correction, then proceed with Step 7c/7d using the deep-clone recipe under the existing serialized lock requirement.
+[2026-05-18T05:41:05.066Z] Turn completed.
+
+[2026-05-18T05:41:05.091Z] Final output
+Implemented only [probe_alias.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:99).
+
+Added:
+- Detector positive control: recursive tensor leaf finder plus in-place cache and hypothesis mutation self-test at [probe_alias.py:359](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:359).
+- Decoder switch helper and batched-path control. To actually hit installed NeMo’s `GreedyBatchedRNNTInfer`, the probe uses `strategy=greedy_batch`, `loop_labels=True`; server path remains `strategy=greedy`, `loop_labels=False` at [probe_alias.py:607](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:607) and [probe_alias.py:839](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:839).
+- Tightened verdict and exit-code logic at [probe_alias.py:818](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:818).
+
+Verification command:
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py`
+
+Result: exit code `0`.
+
+DETECTOR-SELFTEST: `PASS`, mutation detected at `root.y_sequence`.
+
+Server path table, `loop_labels=False (server config)`:
+
+| recipe | cache | hyps | continuation |
+|---|---:|---:|---:|
+| shallow | PASS | PASS | PASS |
+| deep | PASS | PASS | PASS |
+
+Batched control table, `loop_labels=True (batched, NOT server config)`:
+
+| recipe | cache | hyps | continuation |
+|---|---:|---:|---:|
+| shallow | PASS | FAIL | FAIL |
+| deep | PASS | PASS | PASS |
+
+Final verdict: `Gate-Ga PASS`. The gate passed because detector-selftest passed and the server-path deep clone stayed clean. Correctness is serialized-only: fork flush must hold the existing `inference_lock`; no concurrent parent step is allowed because NeMo mutates model-global decoder/joint train/eval state and `encoder.streaming_cfg.drop_extra_pre_encoded`.
+
+```text
+DOC-CORRECTION (queue Step 9): finding doc deep-stack risk #1 cites rnnt_greedy_decoding.py:825-831 hyp.merge_, which is in GreedyBatchedRNNTInfer (loop_labels=True); server.py:158-166 uses loop_labels=False -> GreedyRNNTInfer, so that specific in-place merge does NOT occur on the configured path. The deep-clone recipe is retained as defense-in-depth + the serialization requirement is independent and still mandatory.
+```
+
+Blockers: none.
+
+Suggested next step: queue the Step 9 doc correction, then proceed with Step 7c/7d using the deep-clone recipe under the existing serialized lock requirement.

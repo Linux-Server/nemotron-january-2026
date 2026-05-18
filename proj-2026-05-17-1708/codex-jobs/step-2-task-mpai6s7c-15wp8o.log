@@ -1,0 +1,260 @@
+[2026-05-18T01:06:19.852Z] Starting Codex Task.
+[2026-05-18T01:06:22.191Z] Starting Codex task thread.
+[2026-05-18T01:06:22.514Z] Thread ready (019e389e-a891-7202-8a25-26a509de8e7c).
+[2026-05-18T01:06:22.527Z] Turn started (019e389e-a8be-70c0-acd1-583f44b169ca).
+[2026-05-18T01:06:34.327Z] Assistant message captured: I’ll read the Phase G plan and the existing STT service first, then keep the edit scoped to `...
+
+[2026-05-18T01:06:34.327Z] Assistant message
+I’ll read the Phase G plan and the existing STT service first, then keep the edit scoped to `nemotron_local_stt.py` and verify with import plus a focused asyncio smoke only.
+[2026-05-18T01:06:34.362Z] Running command: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/...
+[2026-05-18T01:06:34.370Z] Command completed: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/... (exit 0)
+[2026-05-18T01:06:34.370Z] Running command: /bin/bash -lc "sed -n '1,280p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T01:06:34.370Z] Command failed: /bin/bash -lc "sed -n '1,280p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 2)
+[2026-05-18T01:06:34.371Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T01:06:34.372Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T01:06:44.396Z] Assistant message captured: The repository root here is already `stt-benchmark`, so the target file is under `src/stt_ben...
+
+[2026-05-18T01:06:44.396Z] Assistant message
+The repository root here is already `stt-benchmark`, so the target file is under `src/stt_benchmark/...`. I’ve got the Phase G requirements from the plan and am reading the implementation now.
+[2026-05-18T01:06:44.406Z] Running command: /bin/bash -lc "sed -n '261,620p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T01:06:44.406Z] Command completed: /bin/bash -lc "sed -n '261,620p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T01:06:44.429Z] Running command: /bin/bash -lc "sed -n '1,340p' src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T01:06:44.429Z] Command completed: /bin/bash -lc "sed -n '1,340p' src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T01:06:44.442Z] Running command: /bin/bash -lc 'rg -n "Nemotron|finalize|early_final|hard_reset|VADUser|request_finalize|confi...
+[2026-05-18T01:06:44.442Z] Command completed: /bin/bash -lc 'rg -n "Nemotron|finalize|early_final|hard_reset|VADUser|request_finalize|confi... (exit 0)
+[2026-05-18T01:06:54.780Z] Assistant message captured: The current service hard-resets immediately on every `VADUserStoppedSpeakingFrame` and treats...
+
+[2026-05-18T01:06:54.780Z] Assistant message
+The current service hard-resets immediately on every `VADUserStoppedSpeakingFrame` and treats any `is_final` transcript as final. I’m checking the pipecat finalize handshake now so the debounce mode lines up with 1.2.x state handling instead of guessing around private state.
+[2026-05-18T01:06:54.832Z] Running command: /bin/bash -lc 'rg -n "NemotronLocalSTTService|nemotron_local_stt|NEMOTRON_FINALIZE" -S .'
+[2026-05-18T01:06:54.832Z] Command completed: /bin/bash -lc 'rg -n "NemotronLocalSTTService|nemotron_local_stt|NEMOTRON_FINALIZE" -S .' (exit 0)
+[2026-05-18T01:06:54.934Z] Running command: /bin/bash -lc "python - <<'PY' import inspect import pipecat.services.stt_service as s print(...
+[2026-05-18T01:06:54.934Z] Command failed: /bin/bash -lc "python - <<'PY' import inspect import pipecat.services.stt_service as s print(... (exit 127)
+[2026-05-18T01:06:54.945Z] Running command: /bin/bash -lc "python - <<'PY' import inspect import pipecat.services.stt_service as s path=s...
+[2026-05-18T01:06:54.945Z] Command failed: /bin/bash -lc "python - <<'PY' import inspect import pipecat.services.stt_service as s path=s... (exit 127)
+[2026-05-18T01:07:03.283Z] Assistant message captured: This environment doesn’t have a bare `python` shim selected, so I’ll use the project runner f...
+
+[2026-05-18T01:07:03.283Z] Assistant message
+This environment doesn’t have a bare `python` shim selected, so I’ll use the project runner for verification and package introspection.
+[2026-05-18T01:07:03.316Z] Running command: /bin/bash -lc "sed -n '700,780p' scripts/measure.py"
+[2026-05-18T01:07:03.316Z] Command completed: /bin/bash -lc "sed -n '700,780p' scripts/measure.py" (exit 0)
+[2026-05-18T01:07:03.449Z] Running command: /bin/bash -lc "uv run python - <<'PY' import inspect import pipecat.services.stt_service as s...
+[2026-05-18T01:07:03.455Z] Running command: /bin/bash -lc "uv run python - <<'PY' import pipecat.services.stt_service as s path=s.__file_...
+[2026-05-18T01:07:03.984Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import inspect import pipecat.services.stt_service as s... (exit 0)
+[2026-05-18T01:07:04.029Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import pipecat.services.stt_service as s path=s.__file_... (exit 0)
+[2026-05-18T01:07:12.574Z] Running command: /bin/bash -lc 'rg -n "_handle_vad_user|ttfb|process_frame|request_finalize|confirm_finalize|_...
+[2026-05-18T01:07:12.574Z] Command completed: /bin/bash -lc 'rg -n "_handle_vad_user|ttfb|process_frame|request_finalize|confirm_finalize|_... (exit 0)
+[2026-05-18T01:07:12.586Z] Running command: /bin/bash -lc "sed -n '245,285p' src/stt_benchmark/services.py"
+[2026-05-18T01:07:12.587Z] Command completed: /bin/bash -lc "sed -n '245,285p' src/stt_benchmark/services.py" (exit 0)
+[2026-05-18T01:07:12.701Z] Running command: /bin/bash -lc "uv run python - <<'PY' import pipecat.services.stt_service as s path=s.__file_...
+[2026-05-18T01:07:13.211Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import pipecat.services.stt_service as s path=s.__file_... (exit 0)
+[2026-05-18T01:07:44.981Z] Running command: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.processors.frame_processor ...
+[2026-05-18T01:07:44.993Z] Running command: /bin/bash -lc "uv run python - <<'PY' from pipecat.frames.frames import VADUserStoppedSpeakin...
+[2026-05-18T01:07:45.000Z] Running command: /bin/bash -lc "uv run python - <<'PY' from pipecat.frames.frames import TranscriptionFrame, I...
+[2026-05-18T01:07:45.574Z] Command completed: /bin/bash -lc "uv run python - <<'PY' from pipecat.frames.frames import VADUserStoppedSpeakin... (exit 0)
+[2026-05-18T01:07:45.584Z] Command completed: /bin/bash -lc "uv run python - <<'PY' from pipecat.frames.frames import TranscriptionFrame, I... (exit 0)
+[2026-05-18T01:07:45.588Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.processors.frame_processor ... (exit 0)
+[2026-05-18T01:09:50.484Z] Assistant message captured: I have enough context to make the change. The implementation will add a single-mode state mac...
+
+[2026-05-18T01:09:50.484Z] Assistant message
+I have enough context to make the change. The implementation will add a single-mode state machine with a small control lock for the armed VAD stop, a separate send lock around audio/control WebSocket writes, and keep the unset-env path on the immediate reset flow.
+[2026-05-18T01:10:33.463Z] Applying 1 file change(s).
+[2026-05-18T01:10:33.475Z] File changes completed.
+[2026-05-18T01:10:40.435Z] Assistant message captured: The file now has the single-mode timer path and the shared WebSocket send lock. I’m going to ...
+
+[2026-05-18T01:10:40.435Z] Assistant message
+The file now has the single-mode timer path and the shared WebSocket send lock. I’m going to inspect the patched regions, then run import and smoke checks without touching any benchmark runner.
+[2026-05-18T01:10:40.471Z] Running command: /bin/bash -lc "sed -n '1,360p' src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T01:10:40.483Z] Command completed: /bin/bash -lc "sed -n '1,360p' src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T01:10:40.483Z] Running command: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:10:40.483Z] Command completed: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:10:40.611Z] Running command: /bin/bash -lc "uv run python - <<'PY' import stt_benchmark.nemotron_local_stt as m print('imp...
+[2026-05-18T01:10:41.141Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import stt_benchmark.nemotron_local_stt as m print('imp... (exit 0)
+[2026-05-18T01:10:45.327Z] Running command: /bin/bash -lc "sed -n '340,470p' src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T01:10:45.327Z] Command completed: /bin/bash -lc "sed -n '340,470p' src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T01:10:45.427Z] Running command: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:10:45.427Z] Command completed: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:11:06.470Z] Applying 1 file change(s).
+[2026-05-18T01:11:06.481Z] File changes completed.
+[2026-05-18T01:11:09.830Z] Running command: /bin/bash -lc "sed -n '112,140p' src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T01:11:09.839Z] Command completed: /bin/bash -lc "sed -n '112,140p' src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T01:11:13.402Z] Applying 1 file change(s).
+[2026-05-18T01:11:13.412Z] File changes completed.
+[2026-05-18T01:11:16.271Z] Assistant message captured: The import and bytecode compile are clean. Next I’m running a synthetic asyncio smoke with a ...
+
+[2026-05-18T01:11:16.271Z] Assistant message
+The import and bytecode compile are clean. Next I’m running a synthetic asyncio smoke with a fake WebSocket and a counting send lock so it exercises stop-start cancellation, second-stop firing, reset/request ordering, transcript finalize gating, and the default immediate-reset path.
+[2026-05-18T01:11:42.106Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os from pipecat.frame...
+[2026-05-18T01:11:42.621Z] Command failed: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os from pipecat.frame... (exit 1)
+[2026-05-18T01:11:48.201Z] Assistant message captured: The first smoke exposed a test-harness issue rather than service logic: pipecat’s base VAD st...
+
+[2026-05-18T01:11:48.201Z] Assistant message
+The first smoke exposed a test-harness issue rather than service logic: pipecat’s base VAD stop handler wants a TaskManager, which the real pipeline initializes. I’m rerunning with the smoke subclass supplying asyncio-backed task helpers.
+[2026-05-18T01:12:16.330Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ...
+[2026-05-18T01:12:16.946Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ... (exit 0)
+[2026-05-18T01:12:20.042Z] Assistant message captured: Single-mode smoke passed. I’m adding a default-mode smoke now to verify that, with `NEMOTRON_...
+
+[2026-05-18T01:12:20.042Z] Assistant message
+Single-mode smoke passed. I’m adding a default-mode smoke now to verify that, with `NEMOTRON_FINALIZE_MODE` unset, VAD stop still sends the hard reset immediately and the existing transcript classification remains intact.
+[2026-05-18T01:12:35.247Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ...
+[2026-05-18T01:12:35.761Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ... (exit 0)
+[2026-05-18T01:12:52.093Z] Assistant message captured: The default-mode smoke also passed. I’m doing one last static check and a targeted stop-flush...
+
+[2026-05-18T01:12:52.093Z] Assistant message
+The default-mode smoke also passed. I’m doing one last static check and a targeted stop-flush smoke for the pending timer path, then I’ll summarize the exact changes and outputs.
+[2026-05-18T01:12:52.138Z] Running command: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:12:52.148Z] Command completed: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:12:52.213Z] Running command: /bin/bash -lc 'uv run ruff check src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:12:52.213Z] Command failed: /bin/bash -lc 'uv run ruff check src/stt_benchmark/nemotron_local_stt.py' (exit 2)
+[2026-05-18T01:12:52.217Z] Running command: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:12:52.227Z] Command completed: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:13:04.811Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os os.environ[\"NEMOT...
+[2026-05-18T01:13:05.316Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os os.environ[\"NEMOT... (exit 0)
+[2026-05-18T01:13:10.212Z] Running command: /bin/bash -lc 'git diff --stat'
+[2026-05-18T01:13:10.212Z] Command completed: /bin/bash -lc 'git diff --stat' (exit 0)
+[2026-05-18T01:13:10.214Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T01:13:10.215Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T01:13:10.225Z] Running command: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:13:10.226Z] Command completed: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:13:26.108Z] Assistant message captured: One nuance from the strict wording: in single mode, `request_finalize()` should happen after ...
+
+[2026-05-18T01:13:26.108Z] Assistant message
+One nuance from the strict wording: in single mode, `request_finalize()` should happen after the send lock is acquired, immediately before the reset write. I’m tightening that ordering so an in-flight audio send cannot create a gap between the request and the actual hard reset.
+[2026-05-18T01:13:30.283Z] Applying 1 file change(s).
+[2026-05-18T01:13:30.294Z] File changes completed.
+[2026-05-18T01:13:38.193Z] Running command: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:13:38.203Z] Command completed: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:13:38.277Z] Running command: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:13:38.287Z] Command completed: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:13:38.310Z] Running command: /bin/bash -lc "uv run python - <<'PY' import stt_benchmark.nemotron_local_stt as m print('imp...
+[2026-05-18T01:13:38.868Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import stt_benchmark.nemotron_local_stt as m print('imp... (exit 0)
+[2026-05-18T01:14:09.192Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ...
+[2026-05-18T01:14:09.805Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ... (exit 0)
+[2026-05-18T01:14:26.102Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ...
+[2026-05-18T01:14:26.610Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ... (exit 0)
+[2026-05-18T01:14:37.651Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os os.environ[\"NEMOT...
+[2026-05-18T01:14:38.181Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os os.environ[\"NEMOT... (exit 0)
+[2026-05-18T01:14:44.106Z] Running command: /bin/bash -lc "nl -ba src/stt_benchmark/nemotron_local_stt.py | sed -n '110,330p'"
+[2026-05-18T01:14:44.106Z] Running command: /bin/bash -lc "nl -ba src/stt_benchmark/nemotron_local_stt.py | sed -n '330,445p'"
+[2026-05-18T01:14:44.106Z] Command completed: /bin/bash -lc "nl -ba src/stt_benchmark/nemotron_local_stt.py | sed -n '330,445p'" (exit 0)
+[2026-05-18T01:14:44.106Z] Command completed: /bin/bash -lc "nl -ba src/stt_benchmark/nemotron_local_stt.py | sed -n '110,330p'" (exit 0)
+[2026-05-18T01:14:44.116Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T01:14:44.116Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T01:15:01.064Z] Assistant message captured: I’m tightening the VAD-start path too: the timer cancellation now happens before yielding int...
+
+[2026-05-18T01:15:01.064Z] Assistant message
+I’m tightening the VAD-start path too: the timer cancellation now happens before yielding into pipecat’s base `process_frame`, so a pending debounce cannot fire while the start frame is still being processed.
+[2026-05-18T01:15:05.827Z] Applying 1 file change(s).
+[2026-05-18T01:15:05.838Z] File changes completed.
+[2026-05-18T01:15:12.374Z] Running command: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:15:12.383Z] Command completed: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:15:12.471Z] Running command: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:15:12.480Z] Command completed: /bin/bash -lc 'uv run python -m compileall -q src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:15:12.498Z] Running command: /bin/bash -lc "uv run python - <<'PY' import stt_benchmark.nemotron_local_stt as m print('imp...
+[2026-05-18T01:15:13.025Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import stt_benchmark.nemotron_local_stt as m print('imp... (exit 0)
+[2026-05-18T01:15:41.547Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ...
+[2026-05-18T01:15:42.165Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ... (exit 0)
+[2026-05-18T01:16:05.983Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os os.environ[\"NEMOT...
+[2026-05-18T01:16:05.983Z] Running command: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ...
+[2026-05-18T01:16:06.550Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import json import os os.environ[\"NEMOT... (exit 0)
+[2026-05-18T01:16:06.574Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import asyncio import contextlib import json import os ... (exit 0)
+[2026-05-18T01:16:11.971Z] Running command: /bin/bash -lc "awk 'length("'$0)>100 {print FNR ":" length($0) ":" $0}'"' src/stt_benchmark/n...
+[2026-05-18T01:16:11.971Z] Command completed: /bin/bash -lc "awk 'length("'$0)>100 {print FNR ":" length($0) ":" $0}'"' src/stt_benchmark/n... (exit 0)
+[2026-05-18T01:16:11.975Z] Running command: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T01:16:11.985Z] Command completed: /bin/bash -lc 'git diff --check -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-18T01:16:11.985Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T01:16:11.994Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T01:16:29.989Z] Assistant message captured: Implemented Step 2 in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-be...
+
+[2026-05-18T01:16:29.989Z] Assistant message
+Implemented Step 2 in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py).
+
+**Changes**
+- Added `NEMOTRON_FINALIZE_MODE=single`; unset/default keeps immediate per-VAD-stop hard reset behavior.
+- Added `NEMOTRON_FINALIZE_SILENCE_MS`, default `2500`, validated `< 10000` only in single mode.
+- Added debounce timer helpers: `_arm_single_finalize_timer`, `_single_finalize_timer`, `_cancel_single_finalize_timer`, `_send_pending_single_finalize_on_stop`, `_send_armed_single_finalize`.
+- Added `_audio_send_lock`; both `run_stt()` audio sends and reset sends acquire it.
+- In single mode, VAD start cancels the armed timer before base frame processing; VAD stop arms/re-arms it.
+- `request_finalize()` is called under the send lock immediately before the single reset write.
+- `confirm_finalize()` remains immediately before pushing the final `TranscriptionFrame`.
+- In single mode, only `is_final == true` and `finalize == true` becomes `TranscriptionFrame`; soft/interim finals become `InterimTranscriptionFrame`.
+- Stop flushes a pending armed single reset; cancel/disconnect cancel the timer.
+- Telemetry counters preserved/extended, including speaking-state early-final detection.
+
+**Smoke Output**
+```text
+import ok NemotronLocalSTTService
+single_mode_smoke ok
+cancel_on_start reset_count_after_cancel=0
+fire_once hard_resets=1 sends=1
+request_before_reset=True request_under_lock=True
+confirm_before_push=True
+send_lock_entries=2 audio_and_reset_locked=True
+frames=['InterimTranscriptionFrame', 'TranscriptionFrame']
+
+default_mode_smoke ok
+env_unset_immediate_hard_reset=True
+timer_created=False
+legacy_is_final_transcription=True
+
+stop_pending_flush_smoke ok
+pending_timer_cancelled=True sent_single_reset=True duplicate_after_cancel=False
+```
+
+Also ran `compileall` and `git diff --check`. No benchmark was run. `ruff` is not installed in this environment, so I could not run it.
+
+**Default Mode**
+Confirmed env-unset mode still sends the hard reset immediately on `VADUserStoppedSpeakingFrame`, creates no debounce timer, and keeps legacy `is_final` transcript behavior.
+
+**Blockers**
+None for the implementation.
+
+**Suggested Next Step**
+Run the orchestrated full-1000 Gate Gp job separately with `NEMOTRON_FINALIZE_MODE=single` and default `NEMOTRON_FINALIZE_SILENCE_MS=2500`.
+[2026-05-18T01:16:30.008Z] Turn completed.
+
+[2026-05-18T01:16:30.034Z] Final output
+Implemented Step 2 in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py).
+
+**Changes**
+- Added `NEMOTRON_FINALIZE_MODE=single`; unset/default keeps immediate per-VAD-stop hard reset behavior.
+- Added `NEMOTRON_FINALIZE_SILENCE_MS`, default `2500`, validated `< 10000` only in single mode.
+- Added debounce timer helpers: `_arm_single_finalize_timer`, `_single_finalize_timer`, `_cancel_single_finalize_timer`, `_send_pending_single_finalize_on_stop`, `_send_armed_single_finalize`.
+- Added `_audio_send_lock`; both `run_stt()` audio sends and reset sends acquire it.
+- In single mode, VAD start cancels the armed timer before base frame processing; VAD stop arms/re-arms it.
+- `request_finalize()` is called under the send lock immediately before the single reset write.
+- `confirm_finalize()` remains immediately before pushing the final `TranscriptionFrame`.
+- In single mode, only `is_final == true` and `finalize == true` becomes `TranscriptionFrame`; soft/interim finals become `InterimTranscriptionFrame`.
+- Stop flushes a pending armed single reset; cancel/disconnect cancel the timer.
+- Telemetry counters preserved/extended, including speaking-state early-final detection.
+
+**Smoke Output**
+```text
+import ok NemotronLocalSTTService
+single_mode_smoke ok
+cancel_on_start reset_count_after_cancel=0
+fire_once hard_resets=1 sends=1
+request_before_reset=True request_under_lock=True
+confirm_before_push=True
+send_lock_entries=2 audio_and_reset_locked=True
+frames=['InterimTranscriptionFrame', 'TranscriptionFrame']
+
+default_mode_smoke ok
+env_unset_immediate_hard_reset=True
+timer_created=False
+legacy_is_final_transcription=True
+
+stop_pending_flush_smoke ok
+pending_timer_cancelled=True sent_single_reset=True duplicate_after_cancel=False
+```
+
+Also ran `compileall` and `git diff --check`. No benchmark was run. `ruff` is not installed in this environment, so I could not run it.
+
+**Default Mode**
+Confirmed env-unset mode still sends the hard reset immediately on `VADUserStoppedSpeakingFrame`, creates no debounce timer, and keeps legacy `is_final` transcript behavior.
+
+**Blockers**
+None for the implementation.
+
+**Suggested Next Step**
+Run the orchestrated full-1000 Gate Gp job separately with `NEMOTRON_FINALIZE_MODE=single` and default `NEMOTRON_FINALIZE_SILENCE_MS=2500`.

@@ -1,0 +1,218 @@
+[2026-05-18T05:19:58.142Z] Starting Codex Task.
+[2026-05-18T05:20:00.438Z] Starting Codex task thread.
+[2026-05-18T05:20:01.563Z] Thread ready (019e3986-e1f9-7b80-a782-d8ce4d2a7e16).
+[2026-05-18T05:20:01.575Z] Turn started (019e3986-e227-7143-b4e1-fd38f29e0072).
+[2026-05-18T05:20:15.296Z] Assistant message captured: I’ll inspect the plan and server implementation first, then create only the scratch probe and...
+
+[2026-05-18T05:20:15.296Z] Assistant message
+I’ll inspect the plan and server implementation first, then create only the scratch probe and run it with the requested ASR venv. I’ll also verify the cited NeMo mutation sites from the installed package so the probe’s comments and final verdict are grounded in the actual code.
+[2026-05-18T05:20:15.331Z] Running command: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/...
+[2026-05-18T05:20:15.343Z] Command completed: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/... (exit 0)
+[2026-05-18T05:20:15.343Z] Running command: /bin/bash -lc "sed -n '1,760p' /home/khkramer/src/nemotron-january-2026/stt-benchmark/src/nem...
+[2026-05-18T05:20:15.343Z] Command failed: /bin/bash -lc "sed -n '1,760p' /home/khkramer/src/nemotron-january-2026/stt-benchmark/src/nem... (exit 2)
+[2026-05-18T05:20:15.343Z] Running command: /bin/bash -lc 'rg --files /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmar...
+[2026-05-18T05:20:15.343Z] Command completed: /bin/bash -lc 'rg --files /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmar... (exit 0)
+[2026-05-18T05:20:15.474Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import nem...
+[2026-05-18T05:20:19.713Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import nem... (exit 0)
+[2026-05-18T05:20:27.411Z] Assistant message captured: The plan confirms Step 3 is a standalone aliasing gate and should not touch production code. ...
+
+[2026-05-18T05:20:27.411Z] Assistant message
+The plan confirms Step 3 is a standalone aliasing gate and should not touch production code. The server path in the plan is relative to the repo root rather than the current `stt-benchmark/` directory, so I’m locating that exact file and the installed NeMo sources before writing the probe.
+[2026-05-18T05:20:27.442Z] Running command: /bin/bash -lc "sed -n '140,230p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170...
+[2026-05-18T05:20:27.442Z] Command completed: /bin/bash -lc "sed -n '140,230p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-170... (exit 0)
+[2026-05-18T05:20:27.448Z] Running command: /bin/bash -lc "rg --files /home/khkramer/src/nemotron-january-2026 | rg '("'^|/)server'"\\.py...
+[2026-05-18T05:20:27.448Z] Command completed: /bin/bash -lc "rg --files /home/khkramer/src/nemotron-january-2026 | rg '("'^|/)server'"\\.py... (exit 0)
+[2026-05-18T05:20:27.459Z] Running command: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data...
+[2026-05-18T05:20:27.459Z] Command completed: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data... (exit 0)
+[2026-05-18T05:20:38.687Z] Running command: /bin/bash -lc "sed -n '470,720p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech...
+[2026-05-18T05:20:38.687Z] Command completed: /bin/bash -lc "sed -n '470,720p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech... (exit 0)
+[2026-05-18T05:20:38.696Z] Running command: /bin/bash -lc "sed -n '1,230p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech/s...
+[2026-05-18T05:20:38.696Z] Running command: /bin/bash -lc "sed -n '230,470p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech...
+[2026-05-18T05:20:38.696Z] Command completed: /bin/bash -lc "sed -n '1,230p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech/s... (exit 0)
+[2026-05-18T05:20:38.696Z] Command completed: /bin/bash -lc "sed -n '230,470p' /home/khkramer/src/nemotron-january-2026/src/nemotron_speech... (exit 0)
+[2026-05-18T05:20:38.712Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:20:38.712Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:20:38.716Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/u...
+[2026-05-18T05:20:38.716Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/u... (exit 0)
+[2026-05-18T05:20:38.726Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/m...
+[2026-05-18T05:20:38.726Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/m... (exit 0)
+[2026-05-18T05:20:49.879Z] Running command: /bin/bash -lc "rg -n \"class Hypothesis|@dataclass.*Hypothesis|Hypothesis\\(\" /home/khkramer...
+[2026-05-18T05:20:49.879Z] Command completed: /bin/bash -lc "rg -n \"class Hypothesis|@dataclass.*Hypothesis|Hypothesis\\(\" /home/khkramer... (exit 0)
+[2026-05-18T05:20:49.884Z] Running command: /bin/bash -lc "rg -n \"def conformer_stream_step|previous_pred_out|pred_out_stream|drop_extra...
+[2026-05-18T05:20:49.884Z] Command completed: /bin/bash -lc "rg -n \"def conformer_stream_step|previous_pred_out|pred_out_stream|drop_extra... (exit 0)
+[2026-05-18T05:20:49.894Z] Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05...
+[2026-05-18T05:20:49.894Z] Running command: /bin/bash -lc "sed -n '1,150p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/as...
+[2026-05-18T05:20:49.894Z] Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05... (exit 0)
+[2026-05-18T05:20:49.894Z] Command completed: /bin/bash -lc "sed -n '1,150p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/as... (exit 0)
+[2026-05-18T05:21:00.972Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/m...
+[2026-05-18T05:21:00.973Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/m... (exit 0)
+[2026-05-18T05:21:00.975Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/modules...
+[2026-05-18T05:21:00.975Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/modules... (exit 0)
+[2026-05-18T05:21:00.987Z] Running command: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data...
+[2026-05-18T05:21:00.987Z] Command completed: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data... (exit 0)
+[2026-05-18T05:21:01.000Z] Running command: /bin/bash -lc 'du -sh /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-s...
+[2026-05-18T05:21:01.000Z] Command completed: /bin/bash -lc 'du -sh /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-s... (exit 0)
+[2026-05-18T05:22:43.861Z] Assistant message captured: I found the relevant NeMo implementations. The decoder mutates the supplied `partial_hypothes...
+
+[2026-05-18T05:22:43.861Z] Assistant message
+I found the relevant NeMo implementations. The decoder mutates the supplied `partial_hypotheses` list in place, and the encoder/decoder code also changes model-global flags during a stream step, so the probe will intentionally verify the fork only in a serialized sequence: fork flush completes before the parent takes another step.
+[2026-05-18T05:22:43.936Z] Running command: /bin/bash -lc 'rg -n "def rnnt_decoder_predictions_tensor|decode_hypothesis|pack_hypotheses" ...
+[2026-05-18T05:22:43.936Z] Command completed: /bin/bash -lc 'rg -n "def rnnt_decoder_predictions_tensor|decode_hypothesis|pack_hypotheses" ... (exit 0)
+[2026-05-18T05:22:43.943Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:22:43.943Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:22:43.965Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:22:43.965Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:22:43.979Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/u...
+[2026-05-18T05:22:43.979Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/u... (exit 0)
+[2026-05-18T05:22:52.522Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:22:52.522Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:22:52.525Z] Running command: /bin/bash -lc "rg -n \"def decode_hypothesis|decode_hypothesis\\(\" /home/khkramer/src/nemotr...
+[2026-05-18T05:22:52.525Z] Command completed: /bin/bash -lc "rg -n \"def decode_hypothesis|decode_hypothesis\\(\" /home/khkramer/src/nemotr... (exit 0)
+[2026-05-18T05:22:52.535Z] Running command: /bin/bash -lc 'rg -n "return_hypotheses" /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/coll...
+[2026-05-18T05:22:52.536Z] Command completed: /bin/bash -lc 'rg -n "return_hypotheses" /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/coll... (exit 0)
+[2026-05-18T05:23:00.600Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:23:00.600Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:23:00.603Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:23:00.603Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:23:00.603Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:23:00.603Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:23:23.946Z] Assistant message captured: I’m going to add the scratch probe under the project directory only. It will duplicate the se...
+
+[2026-05-18T05:23:23.946Z] Assistant message
+I’m going to add the scratch probe under the project directory only. It will duplicate the server’s streaming state machine closely enough to use the same preprocessor, chunk boundaries, `drop_extra_pre_encoded`, caches, previous hypotheses, and final padding path.
+[2026-05-18T05:25:27.061Z] Applying 1 file change(s).
+[2026-05-18T05:25:27.072Z] File changes completed.
+[2026-05-18T05:25:33.038Z] Assistant message captured: The probe file is in place. I’m running it now with the requested ASR virtualenv; model load ...
+
+[2026-05-18T05:25:33.038Z] Assistant message
+The probe file is in place. I’m running it now with the requested ASR virtualenv; model load plus the short streaming pass may take a bit, but it should stay in the contained single-process probe path.
+[2026-05-18T05:25:35.128Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/...
+[2026-05-18T05:25:44.815Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/... (exit 0)
+[2026-05-18T05:26:03.522Z] Assistant message captured: The first run completed, but shallow did not reproduce corruption because the active greedy d...
+
+[2026-05-18T05:26:03.522Z] Assistant message
+The first run completed, but shallow did not reproduce corruption because the active greedy decoder path for this config is not the exact line-825 loop-labels path the plan calls out. I’m checking which decoder class the loaded greedy config actually uses, then I’ll adjust the shallow hazard case so it demonstrates the real alias risk without changing any production files.
+[2026-05-18T05:26:03.560Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:26:03.561Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:26:03.568Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s...
+[2026-05-18T05:26:03.568Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/s... (exit 0)
+[2026-05-18T05:26:03.576Z] Running command: /bin/bash -lc 'rg -n "class .*Greedy.*RNNT|partial_hypotheses|merge_" /home/khkramer/src/nemo...
+[2026-05-18T05:26:03.576Z] Command completed: /bin/bash -lc 'rg -n "class .*Greedy.*RNNT|partial_hypotheses|merge_" /home/khkramer/src/nemo... (exit 0)
+[2026-05-18T05:26:03.705Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import nem...
+[2026-05-18T05:26:11.747Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import nem... (exit 0)
+[2026-05-18T05:26:51.392Z] Assistant message captured: Under the exact server config, NeMo instantiates `GreedyRNNTInfer` because `loop_labels=False...
+
+[2026-05-18T05:26:51.392Z] Assistant message
+Under the exact server config, NeMo instantiates `GreedyRNNTInfer` because `loop_labels=False`; that path copies partial hypotheses instead of taking the in-place `merge_` path at line 825. I’m updating the probe output to make that active decoder path explicit and to keep the Gate verdict tied to the deep clone result.
+[2026-05-18T05:26:59.048Z] Applying 1 file change(s).
+[2026-05-18T05:26:59.060Z] File changes completed.
+[2026-05-18T05:27:01.804Z] Assistant message captured: I’ve adjusted only the scratch probe’s reporting. Re-running now so the final output reflects...
+
+[2026-05-18T05:27:01.804Z] Assistant message
+I’ve adjusted only the scratch probe’s reporting. Re-running now so the final output reflects the exact decoder path and a Gate-Ga PASS/FAIL verdict rather than an ambiguous warning state.
+[2026-05-18T05:27:03.926Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/...
+[2026-05-18T05:27:13.376Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/... (exit 0)
+[2026-05-18T05:27:21.907Z] Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05...
+[2026-05-18T05:27:21.907Z] Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05... (exit 0)
+[2026-05-18T05:27:21.911Z] Running command: /bin/bash -lc 'wc -l /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alia...
+[2026-05-18T05:27:21.911Z] Command completed: /bin/bash -lc 'wc -l /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alia... (exit 0)
+[2026-05-18T05:27:22.030Z] Running command: /bin/bash -lc 'python -m py_compile /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-...
+[2026-05-18T05:27:22.030Z] Command failed: /bin/bash -lc 'python -m py_compile /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-... (exit 127)
+[2026-05-18T05:27:30.580Z] Assistant message captured: The requested run succeeded with the ASR venv. I’m doing one last lightweight check with that...
+
+[2026-05-18T05:27:30.580Z] Assistant message
+The requested run succeeded with the ASR venv. I’m doing one last lightweight check with that same interpreter and confirming the only file I created is the scratch probe; `server.py` already shows as modified in the worktree, but I did not edit it.
+[2026-05-18T05:27:30.624Z] Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --stat -- proj-2026-05-17...
+[2026-05-18T05:27:30.624Z] Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --stat -- proj-2026-05-17... (exit 0)
+[2026-05-18T05:27:30.627Z] Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- src/nemotron_speech/se...
+[2026-05-18T05:27:30.627Z] Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- src/nemotron_speech/se... (exit 0)
+[2026-05-18T05:27:30.633Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile /home...
+[2026-05-18T05:27:30.634Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m py_compile /home... (exit 0)
+[2026-05-18T05:27:40.582Z] Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05...
+[2026-05-18T05:27:40.582Z] Running command: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2...
+[2026-05-18T05:27:40.582Z] Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05... (exit 0)
+[2026-05-18T05:27:40.582Z] Command completed: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2... (exit 0)
+[2026-05-18T05:27:47.278Z] Running command: /bin/bash -lc 'rm -f /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/__pycache_...
+[2026-05-18T05:27:47.278Z] Command completed: /bin/bash -lc 'rm -f /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/__pycache_... (exit 0)
+[2026-05-18T05:27:54.435Z] Running command: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2...
+[2026-05-18T05:27:54.435Z] Command completed: /bin/bash -lc "find /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708 -maxdepth 2... (exit 0)
+[2026-05-18T05:27:54.436Z] Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05...
+[2026-05-18T05:27:54.437Z] Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05... (exit 0)
+[2026-05-18T05:27:54.446Z] Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali...
+[2026-05-18T05:27:54.447Z] Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_ali... (exit 0)
+[2026-05-18T05:28:17.814Z] Assistant message captured: Implemented [probe_alias.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/pr...
+
+[2026-05-18T05:28:17.814Z] Assistant message
+Implemented [probe_alias.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:1) and ran it with:
+
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py`
+
+**Probe Design**
+The probe loads `nvidia/nemotron-speech-streaming-en-0.6b` with the server’s greedy-only config: `att_context=[70,1]`, `loop_labels=False`, `use_cuda_graph_decoder=False`, dither `0.0`, and `conformer_stream_step`. It streams 4s of real DB PCM audio, then forks state and runs serialized final padding + `keep_all_outputs=True` on the fork.
+
+Deep clone recipe:
+cache tensors use `.detach().clone()`;
+`previous_hypotheses` becomes a new list of tensor-aware deep-copied `Hypothesis` objects;
+every nested tensor field is detached/cloned, including tuple/list `hyp.dec_state`;
+`pred_out_stream` is recursively cloned;
+model/websocket objects are never copied.
+
+Mutation/serialization cites inspected:
+[rnnt_greedy_decoding.py:825](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py:825), [rnnt_utils.py:153](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/utils/rnnt_utils.py:153), [rnnt_greedy_decoding.py:753](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py:753), [streaming.py:53](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/mixins/streaming.py:53).
+
+**Output Table**
+| recipe | parent cache byte-identical | parent Hypothesis fields unchanged | parent continuation bit-identical vs no-fork |
+|---|---:|---:|---:|
+| shallow | PASS | PASS | PASS |
+| deep | PASS | PASS | PASS |
+
+**Gate Ga**
+Gate-Ga PASS: the deep clone recipe leaves the parent provably unchanged under a serialized fork flush.
+
+Important caveat: shallow corruption was not reproduced under the exact server decoder path because the loaded config uses `GreedyRNNTInfer` with `loop_labels=False`, not the batched loop-labels path that performs `hyp.merge_` in place at `rnnt_greedy_decoding.py:825-831`.
+
+Serialization requirement still stands: fork flush must not run concurrently with parent inference on the same model object because NeMo toggles decoder/joint train/eval state and mutates `encoder.streaming_cfg.drop_extra_pre_encoded`.
+
+**Blockers**
+None for Gate Ga. The only caveat is the shallow-copy hazard did not reproduce under the exact current server config.
+
+**Next Step**
+Proceed with Step 7c/7d using the deep clone recipe, but hold the existing inference lock across fork flush.
+[2026-05-18T05:28:17.832Z] Turn completed.
+
+[2026-05-18T05:28:17.859Z] Final output
+Implemented [probe_alias.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py:1) and ran it with:
+
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/probe_alias.py`
+
+**Probe Design**
+The probe loads `nvidia/nemotron-speech-streaming-en-0.6b` with the server’s greedy-only config: `att_context=[70,1]`, `loop_labels=False`, `use_cuda_graph_decoder=False`, dither `0.0`, and `conformer_stream_step`. It streams 4s of real DB PCM audio, then forks state and runs serialized final padding + `keep_all_outputs=True` on the fork.
+
+Deep clone recipe:
+cache tensors use `.detach().clone()`;
+`previous_hypotheses` becomes a new list of tensor-aware deep-copied `Hypothesis` objects;
+every nested tensor field is detached/cloned, including tuple/list `hyp.dec_state`;
+`pred_out_stream` is recursively cloned;
+model/websocket objects are never copied.
+
+Mutation/serialization cites inspected:
+[rnnt_greedy_decoding.py:825](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py:825), [rnnt_utils.py:153](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/utils/rnnt_utils.py:153), [rnnt_greedy_decoding.py:753](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py:753), [streaming.py:53](/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/mixins/streaming.py:53).
+
+**Output Table**
+| recipe | parent cache byte-identical | parent Hypothesis fields unchanged | parent continuation bit-identical vs no-fork |
+|---|---:|---:|---:|
+| shallow | PASS | PASS | PASS |
+| deep | PASS | PASS | PASS |
+
+**Gate Ga**
+Gate-Ga PASS: the deep clone recipe leaves the parent provably unchanged under a serialized fork flush.
+
+Important caveat: shallow corruption was not reproduced under the exact server decoder path because the loaded config uses `GreedyRNNTInfer` with `loop_labels=False`, not the batched loop-labels path that performs `hyp.merge_` in place at `rnnt_greedy_decoding.py:825-831`.
+
+Serialization requirement still stands: fork flush must not run concurrently with parent inference on the same model object because NeMo toggles decoder/joint train/eval state and mutates `encoder.streaming_cfg.drop_extra_pre_encoded`.
+
+**Blockers**
+None for Gate Ga. The only caveat is the shallow-copy hazard did not reproduce under the exact current server config.
+
+**Next Step**
+Proceed with Step 7c/7d using the deep clone recipe, but hold the existing inference lock across fork flush.

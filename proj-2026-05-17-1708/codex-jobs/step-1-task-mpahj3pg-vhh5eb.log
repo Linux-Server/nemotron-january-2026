@@ -1,0 +1,236 @@
+[2026-05-18T00:47:55.016Z] Starting Codex Task.
+[2026-05-18T00:47:57.307Z] Starting Codex task thread.
+[2026-05-18T00:47:57.749Z] Thread ready (019e388d-cd14-7c80-b93b-75e7e4a37688).
+[2026-05-18T00:47:57.762Z] Turn started (019e388d-cd41-7c71-b798-42535be2f61d).
+[2026-05-18T00:48:08.464Z] Assistant message captured: I’ll read the plan and the existing STT adapter first, then wire the measurement script aroun...
+
+[2026-05-18T00:48:08.464Z] Assistant message
+I’ll read the plan and the existing STT adapter first, then wire the measurement script around the current DB shape without touching framework files. After that I’ll run the narrow self-checks and a tiny telemetry smoke only.
+[2026-05-18T00:48:08.502Z] Running command: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/...
+[2026-05-18T00:48:08.512Z] Command completed: /bin/bash -lc "sed -n '1,260p' /home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/... (exit 0)
+[2026-05-18T00:48:08.512Z] Running command: /bin/bash -lc "sed -n '1,260p' docs/semantic-wer-finalization-finding.md"
+[2026-05-18T00:48:08.512Z] Command completed: /bin/bash -lc "sed -n '1,260p' docs/semantic-wer-finalization-finding.md" (exit 0)
+[2026-05-18T00:48:08.512Z] Running command: /bin/bash -lc "sed -n '1,260p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T00:48:08.512Z] Command completed: /bin/bash -lc "sed -n '1,260p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T00:48:17.385Z] Assistant message captured: The plan confirms the locked surface: I’ll keep the changes to `scripts/measure.py` plus tele...
+
+[2026-05-18T00:48:17.385Z] Assistant message
+The plan confirms the locked surface: I’ll keep the changes to `scripts/measure.py` plus telemetry in `nemotron_local_stt.py`. Next I’m checking the DB schema and local package APIs so the scorer and TTFS reader match the data that already exists.
+[2026-05-18T00:48:17.419Z] Running command: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db '.schema'"
+[2026-05-18T00:48:17.420Z] Running command: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db '.tables'"
+[2026-05-18T00:48:17.420Z] Command completed: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db '.tables'" (exit 0)
+[2026-05-18T00:48:17.420Z] Command completed: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db '.schema'" (exit 0)
+[2026-05-18T00:48:17.433Z] Running command: /bin/bash -lc 'rg -n "TTFS|ttfs|Transcription|wer_metrics|ground_truth|benchmark_batch|datase...
+[2026-05-18T00:48:17.434Z] Command completed: /bin/bash -lc 'rg -n "TTFS|ttfs|Transcription|wer_metrics|ground_truth|benchmark_batch|datase... (exit 0)
+[2026-05-18T00:48:24.040Z] Running command: /bin/bash -lc "sed -n '1,340p' stt-benchmark/src/stt_benchmark/pipeline/benchmark_runner.py"
+[2026-05-18T00:48:24.040Z] Command completed: /bin/bash -lc "sed -n '1,340p' stt-benchmark/src/stt_benchmark/pipeline/benchmark_runner.py" (exit 0)
+[2026-05-18T00:48:24.044Z] Running command: /bin/bash -lc "sed -n '1,300p' stt-benchmark/src/stt_benchmark/services.py"
+[2026-05-18T00:48:24.044Z] Command completed: /bin/bash -lc "sed -n '1,300p' stt-benchmark/src/stt_benchmark/services.py" (exit 0)
+[2026-05-18T00:48:24.052Z] Running command: /bin/bash -lc "sed -n '1,260p' stt-benchmark/src/stt_benchmark/observers/metrics_collector.py...
+[2026-05-18T00:48:24.052Z] Command completed: /bin/bash -lc "sed -n '1,260p' stt-benchmark/src/stt_benchmark/observers/metrics_collector.py... (exit 0)
+[2026-05-18T00:48:47.696Z] Running command: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db \"SELECT model_name, COUNT...
+[2026-05-18T00:48:47.696Z] Command completed: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db \"SELECT model_name, COUNT... (exit 0)
+[2026-05-18T00:48:47.713Z] Running command: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db \"SELECT wm.model_name, CO...
+[2026-05-18T00:48:47.713Z] Command completed: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db \"SELECT wm.model_name, CO... (exit 0)
+[2026-05-18T00:48:47.715Z] Running command: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db \"SELECT model_name, COUNT...
+[2026-05-18T00:48:47.715Z] Command completed: /bin/bash -lc "sqlite3 stt-benchmark/stt_benchmark_data/results.db \"SELECT model_name, COUNT... (exit 0)
+[2026-05-18T00:48:59.548Z] Running command: /bin/bash -lc "sed -n '1,240p' src/nemotron_speech/server.py"
+[2026-05-18T00:48:59.548Z] Command completed: /bin/bash -lc "sed -n '1,240p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-18T00:48:59.551Z] Running command: /bin/bash -lc "rg -n \"NEMOTRON|DEFAULT_MODEL|from_pretrained|restore_from|\\.nemo|revision|m...
+[2026-05-18T00:48:59.551Z] Command completed: /bin/bash -lc "rg -n \"NEMOTRON|DEFAULT_MODEL|from_pretrained|restore_from|\\.nemo|revision|m... (exit 0)
+[2026-05-18T00:48:59.561Z] Running command: /bin/bash -lc "find stt-benchmark -maxdepth 3 -type f | sort | sed -n '1,200p'"
+[2026-05-18T00:48:59.561Z] Command completed: /bin/bash -lc "find stt-benchmark -maxdepth 3 -type f | sort | sed -n '1,200p'" (exit 0)
+[2026-05-18T00:49:04.651Z] Running command: /bin/bash -lc "sed -n '700,760p' src/nemotron_speech/server.py"
+[2026-05-18T00:49:04.651Z] Command completed: /bin/bash -lc "sed -n '700,760p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-18T00:49:04.652Z] Running command: /bin/bash -lc "sed -n '1,130p' stt-benchmark/src/stt_benchmark/config.py"
+[2026-05-18T00:49:04.652Z] Command completed: /bin/bash -lc "sed -n '1,130p' stt-benchmark/src/stt_benchmark/config.py" (exit 0)
+[2026-05-18T00:49:04.662Z] Running command: /bin/bash -lc 'cat stt-benchmark/pyproject.toml'
+[2026-05-18T00:49:04.662Z] Command completed: /bin/bash -lc 'cat stt-benchmark/pyproject.toml' (exit 0)
+[2026-05-18T00:49:15.799Z] Assistant message captured: The baseline slice-A average is already present as `2.7364%`, so the scorer can reproduce the...
+
+[2026-05-18T00:49:15.799Z] Assistant message
+The baseline slice-A average is already present as `2.7364%`, so the scorer can reproduce the required number directly from `wer_metrics`. I’m now checking Pipecat’s VAD analyzer API so the offline preflight uses the same analyzer parameters as the live pipeline.
+[2026-05-18T00:49:15.971Z] Running command: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.audio.vad.silero import Sil...
+[2026-05-18T00:49:15.977Z] Running command: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.processors.audio.vad_proces...
+[2026-05-18T00:49:15.978Z] Running command: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.audio.vad import vad_analyz...
+[2026-05-18T00:49:16.612Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.audio.vad.silero import Sil... (exit 0)
+[2026-05-18T00:49:16.722Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.processors.audio.vad_proces... (exit 0)
+[2026-05-18T00:49:16.775Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.audio.vad import vad_analyz... (exit 0)
+[2026-05-18T00:49:19.959Z] Running command: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.audio.vad.vad_controller im...
+[2026-05-18T00:49:20.501Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import inspect from pipecat.audio.vad.vad_controller im... (exit 0)
+[2026-05-18T00:50:40.522Z] Running command: /bin/bash -lc 'sqlite3 stt-benchmark/stt_benchmark_data/results.db "SELECT sample_id, dataset...
+[2026-05-18T00:50:40.522Z] Command completed: /bin/bash -lc 'sqlite3 stt-benchmark/stt_benchmark_data/results.db "SELECT sample_id, dataset... (exit 0)
+[2026-05-18T00:50:40.526Z] Running command: /bin/bash -lc 'sqlite3 stt-benchmark/stt_benchmark_data/results.db "SELECT COUNT(*), MIN(dura...
+[2026-05-18T00:50:40.526Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T00:50:40.526Z] Command completed: /bin/bash -lc 'sqlite3 stt-benchmark/stt_benchmark_data/results.db "SELECT COUNT(*), MIN(dura... (exit 0)
+[2026-05-18T00:50:40.526Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T00:50:44.636Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T00:50:44.636Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T00:51:33.316Z] Assistant message captured: I have the data shape now. I’m going to add a self-contained `measure.py` with subcommands fo...
+
+[2026-05-18T00:51:33.316Z] Assistant message
+I have the data shape now. I’m going to add a self-contained `measure.py` with subcommands for slices, scoring, metadata, TTFS/counters, VAD preflight, and smoke telemetry, then add telemetry counters to the Nemotron local client only.
+[2026-05-18T00:54:15.116Z] Applying 1 file change(s).
+[2026-05-18T00:54:15.125Z] File changes completed.
+[2026-05-18T00:54:18.711Z] Assistant message captured: `measure.py` is in place. I’m adding only passive client telemetry now: counters are incremen...
+
+[2026-05-18T00:54:18.711Z] Assistant message
+`measure.py` is in place. I’m adding only passive client telemetry now: counters are incremented around the existing reset/final-frame behavior, with one JSONL line appended when each connection closes.
+[2026-05-18T00:54:42.926Z] Applying 1 file change(s).
+[2026-05-18T00:54:42.926Z] File changes completed.
+[2026-05-18T00:54:52.421Z] Running command: /bin/bash -lc "sed -n '1,280p' src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T00:54:52.431Z] Running command: /bin/bash -lc "sed -n '1,220p' scripts/measure.py"
+[2026-05-18T00:54:52.435Z] Running command: /bin/bash -lc 'uv run python -m py_compile scripts/measure.py src/stt_benchmark/nemotron_loca...
+[2026-05-18T00:54:52.435Z] Command completed: /bin/bash -lc 'uv run python -m py_compile scripts/measure.py src/stt_benchmark/nemotron_loca... (exit 0)
+[2026-05-18T00:54:52.525Z] Command completed: /bin/bash -lc "sed -n '1,280p' src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T00:54:52.629Z] Command completed: /bin/bash -lc "sed -n '1,220p' scripts/measure.py" (exit 0)
+[2026-05-18T00:54:55.628Z] Running command: /bin/bash -lc "sed -n '280,380p' src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-18T00:54:55.628Z] Command completed: /bin/bash -lc "sed -n '280,380p' src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-18T00:54:58.643Z] Running command: /bin/bash -lc 'uv run ruff check scripts/measure.py src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-18T00:54:58.655Z] Command failed: /bin/bash -lc 'uv run ruff check scripts/measure.py src/stt_benchmark/nemotron_local_stt.py' (exit 2)
+[2026-05-18T00:55:02.309Z] Applying 1 file change(s).
+[2026-05-18T00:55:02.321Z] File changes completed.
+[2026-05-18T00:55:04.778Z] Assistant message captured: Syntax checks passed. `ruff` is not installed in this local venv, so I’m using compile checks...
+
+[2026-05-18T00:55:04.778Z] Assistant message
+Syntax checks passed. `ruff` is not installed in this local venv, so I’m using compile checks plus the actual measure commands for verification. Next I’ll run scoring/slice persistence before the heavier VAD preflight.
+[2026-05-18T00:55:06.180Z] Running command: /bin/bash -lc "uv run python scripts/measure.py score --tags '' rc1ref --bootstrap 1000"
+[2026-05-18T00:55:06.369Z] Command completed: /bin/bash -lc "uv run python scripts/measure.py score --tags '' rc1ref --bootstrap 1000" (exit 0)
+[2026-05-18T00:55:12.266Z] Assistant message captured: The scorer reproduces the required slice-A baseline at `2.7364%`; slice-B baseline is `3.0091...
+
+[2026-05-18T00:55:12.266Z] Assistant message
+The scorer reproduces the required slice-A baseline at `2.7364%`; slice-B baseline is `3.0091%` for the persisted duration-stratified slice. I’m running the offline Silero pass now; this is the one part that processes all 1000 audio files.
+[2026-05-18T00:55:13.550Z] Running command: /bin/bash -lc 'uv run python scripts/measure.py vad-preflight --force'
+[2026-05-18T00:55:26.158Z] Assistant message captured: The VAD pass is running and the ONNX analyzer is producing verbose Pipecat debug logs from it...
+
+[2026-05-18T00:55:26.158Z] Assistant message
+The VAD pass is running and the ONNX analyzer is producing verbose Pipecat debug logs from its default logger. I’ll let this pass finish so we get the sidecar, then I’ll suppress those logs in the script for future runs.
+[2026-05-18T00:56:09.206Z] Command completed: /bin/bash -lc 'uv run python scripts/measure.py vad-preflight --force' (exit 0)
+[2026-05-18T00:56:21.711Z] Running command: /bin/bash -lc "uv run python - <<'PY' import json from pathlib import Path p=Path('stt_benchm...
+[2026-05-18T00:56:21.711Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import json from pathlib import Path p=Path('stt_benchm... (exit 0)
+[2026-05-18T00:56:39.977Z] Assistant message captured: The sidecar is written. It found `653/1000` multi-start samples and a `1.7 s` max stop-to-nex...
+
+[2026-05-18T00:56:39.977Z] Assistant message
+The sidecar is written. It found `653/1000` multi-start samples and a `1.7 s` max stop-to-next-start gap with this exact offline Pipecat Silero path; that differs from the plan’s approximate `2.70 s`, so I’ll call that out as a concern rather than hiding it. I’m also quieting Pipecat’s debug logging in the measurement script before the final self-check run.
+[2026-05-18T00:56:44.924Z] Applying 1 file change(s).
+[2026-05-18T00:56:44.935Z] File changes completed.
+[2026-05-18T00:56:50.105Z] Running command: /bin/bash -lc 'uv run python -m py_compile scripts/measure.py src/stt_benchmark/nemotron_loca...
+[2026-05-18T00:56:50.210Z] Command completed: /bin/bash -lc 'uv run python -m py_compile scripts/measure.py src/stt_benchmark/nemotron_loca... (exit 0)
+[2026-05-18T00:56:54.357Z] Running command: /bin/bash -lc 'uv run python scripts/measure.py self-check --bootstrap 1000'
+[2026-05-18T00:56:55.138Z] Command completed: /bin/bash -lc 'uv run python scripts/measure.py self-check --bootstrap 1000' (exit 0)
+[2026-05-18T00:57:02.419Z] Running command: /bin/bash -lc 'cat stt_benchmark_data/run_metadata/measure_selfcheck.json'
+[2026-05-18T00:57:02.431Z] Command completed: /bin/bash -lc 'cat stt_benchmark_data/run_metadata/measure_selfcheck.json' (exit 0)
+[2026-05-18T00:57:02.450Z] Running command: /bin/bash -lc 'tail -n 3 stt_benchmark_data/client_telemetry/measure_smoke.jsonl'
+[2026-05-18T00:57:02.450Z] Command completed: /bin/bash -lc 'tail -n 3 stt_benchmark_data/client_telemetry/measure_smoke.jsonl' (exit 0)
+[2026-05-18T00:57:02.534Z] Running command: /bin/bash -lc "python - <<'PY' import json from pathlib import Path for p in ['stt_benchmark_...
+[2026-05-18T00:57:02.755Z] Command failed: /bin/bash -lc "python - <<'PY' import json from pathlib import Path for p in ['stt_benchmark_... (exit 127)
+[2026-05-18T00:57:08.131Z] Running command: /bin/bash -lc "uv run python - <<'PY' import json from pathlib import Path for p in ['stt_ben...
+[2026-05-18T00:57:08.238Z] Command completed: /bin/bash -lc "uv run python - <<'PY' import json from pathlib import Path for p in ['stt_ben... (exit 0)
+[2026-05-18T00:57:12.192Z] Running command: /bin/bash -lc "uv run python scripts/measure.py ttfs --tag '' --telemetry-tag measure_smoke"
+[2026-05-18T00:57:12.345Z] Command completed: /bin/bash -lc "uv run python scripts/measure.py ttfs --tag '' --telemetry-tag measure_smoke" (exit 0)
+[2026-05-18T00:57:16.506Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-18T00:57:16.507Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-18T00:57:29.007Z] Running command: /bin/bash -lc 'uv run python scripts/measure.py vad-preflight'
+[2026-05-18T00:57:29.177Z] Command completed: /bin/bash -lc 'uv run python scripts/measure.py vad-preflight' (exit 0)
+[2026-05-18T00:57:36.575Z] Running command: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py scripts/measure.py --stat'
+[2026-05-18T00:57:36.575Z] Command completed: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py scripts/measure.py --stat' (exit 0)
+[2026-05-18T00:57:36.653Z] Running command: /bin/bash -lc "git diff -- src/stt_benchmark/nemotron_local_stt.py | sed -n '1,260p'"
+[2026-05-18T00:57:36.664Z] Running command: /bin/bash -lc "find stt_benchmark_data -maxdepth 3 \\( -path '*/slices/*' -o -path '*/run_met...
+[2026-05-18T00:57:36.761Z] Command completed: /bin/bash -lc "git diff -- src/stt_benchmark/nemotron_local_stt.py | sed -n '1,260p'" (exit 0)
+[2026-05-18T00:57:36.872Z] Command completed: /bin/bash -lc "find stt_benchmark_data -maxdepth 3 \\( -path '*/slices/*' -o -path '*/run_met... (exit 0)
+[2026-05-18T00:57:55.555Z] Running command: /bin/bash -lc "find proj-2026-05-17-1708 -maxdepth 2 -type f -name '*.py' -o -name '*.json' -...
+[2026-05-18T00:57:55.556Z] Command completed: /bin/bash -lc "find proj-2026-05-17-1708 -maxdepth 2 -type f -name '*.py' -o -name '*.json' -... (exit 0)
+[2026-05-18T00:57:55.562Z] Running command: /bin/bash -lc 'rg -n "multi-start|multi_start|stop.*next|vad_preflight|max observed gap|Siler...
+[2026-05-18T00:57:55.562Z] Command completed: /bin/bash -lc 'rg -n "multi-start|multi_start|stop.*next|vad_preflight|max observed gap|Siler... (exit 0)
+[2026-05-18T00:58:00.922Z] Applying 1 file change(s).
+[2026-05-18T00:58:00.932Z] File changes completed.
+[2026-05-18T00:58:06.693Z] Running command: /bin/bash -lc 'uv run python scripts/measure.py telemetry-smoke --tag measure_smoke2 && tail ...
+[2026-05-18T00:58:06.704Z] Running command: /bin/bash -lc 'uv run python -m py_compile scripts/measure.py src/stt_benchmark/nemotron_loca...
+[2026-05-18T00:58:06.919Z] Command completed: /bin/bash -lc 'uv run python -m py_compile scripts/measure.py src/stt_benchmark/nemotron_loca... (exit 0)
+[2026-05-18T00:58:07.280Z] Command completed: /bin/bash -lc 'uv run python scripts/measure.py telemetry-smoke --tag measure_smoke2 && tail ... (exit 0)
+[2026-05-18T00:58:12.225Z] Running command: /bin/bash -lc 'uv run python scripts/measure.py self-check --bootstrap 1000'
+[2026-05-18T00:58:12.975Z] Command completed: /bin/bash -lc 'uv run python scripts/measure.py self-check --bootstrap 1000' (exit 0)
+[2026-05-18T00:58:17.851Z] Running command: /bin/bash -lc "uv run python scripts/measure.py ttfs --tag '' --telemetry-tag measure_smoke"
+[2026-05-18T00:58:18.004Z] Command completed: /bin/bash -lc "uv run python scripts/measure.py ttfs --tag '' --telemetry-tag measure_smoke" (exit 0)
+[2026-05-18T00:58:21.734Z] Running command: /bin/bash -lc "uv run python scripts/measure.py --help | sed -n '1,120p'"
+[2026-05-18T00:58:21.879Z] Command completed: /bin/bash -lc "uv run python scripts/measure.py --help | sed -n '1,120p'" (exit 0)
+[2026-05-18T00:58:28.742Z] Running command: /bin/bash -lc 'rm stt_benchmark_data/client_telemetry/measure_smoke2.jsonl'
+[2026-05-18T00:58:28.743Z] Command completed: /bin/bash -lc 'rm stt_benchmark_data/client_telemetry/measure_smoke2.jsonl' (exit 0)
+[2026-05-18T00:58:36.026Z] Running command: /bin/bash -lc "rm -f stt_benchmark_data/client_telemetry/measure_smoke.jsonl && uv run python...
+[2026-05-18T00:58:36.728Z] Command completed: /bin/bash -lc "rm -f stt_benchmark_data/client_telemetry/measure_smoke.jsonl && uv run python... (exit 0)
+[2026-05-18T00:58:40.910Z] Running command: /bin/bash -lc 'git status --short --untracked-files=all'
+[2026-05-18T00:58:40.910Z] Command completed: /bin/bash -lc 'git status --short --untracked-files=all' (exit 0)
+[2026-05-18T00:58:45.467Z] Running command: /bin/bash -lc 'cat .gitignore'
+[2026-05-18T00:58:45.467Z] Command completed: /bin/bash -lc 'cat .gitignore' (exit 0)
+[2026-05-18T00:59:07.107Z] Assistant message captured: Implemented Step 1 without touching framework files. **Files** - Created [scripts/measure.py]...
+
+[2026-05-18T00:59:07.108Z] Assistant message
+Implemented Step 1 without touching framework files.
+
+**Files**
+- Created [scripts/measure.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/scripts/measure.py): slice sidecars, scorer, metadata recorder, TTFS/counter reader, offline Silero preflight, telemetry smoke.
+- Modified [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py): telemetry only via `NEMOTRON_RUN_TAG` / `NEMOTRON_TELEMETRY_RUN_TAG` / `STT_BENCHMARK_RUN_TAG`.
+- Persisted sidecars under `stt_benchmark_data/`: `slices/`, `vad_preflight_silero_stop0.2.json`, `run_metadata/measure_selfcheck.json`, `client_telemetry/measure_smoke.jsonl`.
+
+**Self-Check**
+Ran from `stt-benchmark/`:
+
+```bash
+uv run python scripts/measure.py self-check --bootstrap 1000
+```
+
+Key output:
+- Baseline `model_name=''` slice-A: `2.7364%` semantic WER, CI `[2.0653%, 3.4843%]`
+- Baseline slice-B: `3.0091%`, CI `[2.1729%, 3.8555%]`
+- `rc1ref` slice-A: `1.3560%`, paired delta vs baseline `-1.3804 pp`
+- `rc1ref` slice-B: `1.0694%` on available rows `n=36`, paired delta `-1.7497 pp`
+- Observer TTFS baseline: median `211.3 ms`, p95 `219.9 ms`
+- Offline VAD preflight: `1000` samples, `653` multi-start, `1389` gaps, max gap `1.7 s`, p95 `0.8 s`
+
+Telemetry smoke:
+```bash
+uv run python scripts/measure.py ttfs --tag '' --telemetry-tag measure_smoke
+```
+returned `telemetry_n=1`, `hard_resets/sample=1.0`, `final_frames/sample=1.0`, `early_final_count=1`.
+
+**Concerns**
+The offline Silero result is close on multi-start count but not on max gap: I measured `1.7 s`, while the plan notes approximately `2.70 s`. The sidecar was generated using `SileroVADAnalyzer` with `VADParams(stop_secs=0.2)` and live-style 20 ms chunks, so I would resolve that discrepancy before choosing the Phase G hold window.
+
+**Next Step**
+Use `measure.py` outputs to set up Step 2, but first decide whether Phase G should use the measured `1.7 s + margin` hold or investigate the expected `2.70 s` gap source.
+[2026-05-18T00:59:07.151Z] Turn completed.
+
+[2026-05-18T00:59:07.176Z] Final output
+Implemented Step 1 without touching framework files.
+
+**Files**
+- Created [scripts/measure.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/scripts/measure.py): slice sidecars, scorer, metadata recorder, TTFS/counter reader, offline Silero preflight, telemetry smoke.
+- Modified [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py): telemetry only via `NEMOTRON_RUN_TAG` / `NEMOTRON_TELEMETRY_RUN_TAG` / `STT_BENCHMARK_RUN_TAG`.
+- Persisted sidecars under `stt_benchmark_data/`: `slices/`, `vad_preflight_silero_stop0.2.json`, `run_metadata/measure_selfcheck.json`, `client_telemetry/measure_smoke.jsonl`.
+
+**Self-Check**
+Ran from `stt-benchmark/`:
+
+```bash
+uv run python scripts/measure.py self-check --bootstrap 1000
+```
+
+Key output:
+- Baseline `model_name=''` slice-A: `2.7364%` semantic WER, CI `[2.0653%, 3.4843%]`
+- Baseline slice-B: `3.0091%`, CI `[2.1729%, 3.8555%]`
+- `rc1ref` slice-A: `1.3560%`, paired delta vs baseline `-1.3804 pp`
+- `rc1ref` slice-B: `1.0694%` on available rows `n=36`, paired delta `-1.7497 pp`
+- Observer TTFS baseline: median `211.3 ms`, p95 `219.9 ms`
+- Offline VAD preflight: `1000` samples, `653` multi-start, `1389` gaps, max gap `1.7 s`, p95 `0.8 s`
+
+Telemetry smoke:
+```bash
+uv run python scripts/measure.py ttfs --tag '' --telemetry-tag measure_smoke
+```
+returned `telemetry_n=1`, `hard_resets/sample=1.0`, `final_frames/sample=1.0`, `early_final_count=1`.
+
+**Concerns**
+The offline Silero result is close on multi-start count but not on max gap: I measured `1.7 s`, while the plan notes approximately `2.70 s`. The sidecar was generated using `SileroVADAnalyzer` with `VADParams(stop_secs=0.2)` and live-style 20 ms chunks, so I would resolve that discrepancy before choosing the Phase G hold window.
+
+**Next Step**
+Use `measure.py` outputs to set up Step 2, but first decide whether Phase G should use the measured `1.7 s + margin` hold or investigate the expected `2.70 s` gap source.
