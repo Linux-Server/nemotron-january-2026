@@ -42,8 +42,22 @@ class ASRSession:
     id: str
     websocket: Any
 
-    # Accumulated audio buffer (all audio received so far)
+    # Legacy/debug audio buffer name. Step 6b keeps this bounded to pending
+    # audio only; the preprocessor must never see a growing full-stream buffer.
     accumulated_audio: Optional[np.ndarray] = None
+
+    # Raw audio not yet advanced past `emitted_frames * hop_samples`.
+    pending_audio: Optional[np.ndarray] = None
+
+    # Total real audio samples received in this session, excluding synthetic
+    # finalization padding.
+    total_audio_samples: int = 0
+
+    # STFT boundary state: trailing window_size - hop samples before pending.
+    raw_audio_ring: Optional[np.ndarray] = None
+
+    # Cache-aware chunker state: trailing pre_encode_cache_size mel frames.
+    mel_frame_ring: Optional[torch.Tensor] = None
 
     # Number of mel frames already emitted to encoder
     emitted_frames: int = 0
@@ -108,6 +122,14 @@ class ASRServer:
         self.shift_frames = None
         self.pre_encode_cache_size = None
         self.hop_samples = None
+        self.window_size_samples = None
+        self.raw_audio_ring_samples = None
+        self.preprocess_align_pad_samples = None
+        self.preprocess_new_audio_samples = None
+        self.constant_preprocess_frames = None
+        self.constant_preprocess_samples = None
+        self.stream_preprocess_valid_samples = None
+        self.first_preprocess_mel_frame = None
 
         # Audio overlap for mid-utterance reset continuity (calculated in load_model)
         self.overlap_samples = None
@@ -178,7 +200,12 @@ class ASRServer:
         # Calculate parameters
         preprocessor_cfg = self.model.cfg.preprocessor
         hop_length_sec = preprocessor_cfg.get('window_stride', 0.01)
-        self.hop_samples = int(hop_length_sec * self.sample_rate)
+        window_size_sec = preprocessor_cfg.get('window_size', 0.025)
+        featurizer = self.model.preprocessor.featurizer
+        self.hop_samples = int(getattr(featurizer, "hop_length", int(hop_length_sec * self.sample_rate)))
+        self.window_size_samples = int(
+            getattr(featurizer, "win_length", int(window_size_sec * self.sample_rate))
+        )
 
         # shift_size[1] = 16 frames for 160ms chunks
         self.shift_frames = scfg.shift_size[1] if isinstance(scfg.shift_size, list) else scfg.shift_size
@@ -197,6 +224,37 @@ class ASRServer:
         self.final_padding_frames = (self.right_context + 1) * self.shift_frames
         padding_ms = self.final_padding_frames * hop_length_sec * 1000
 
+        # Constant-plan incremental preprocessor:
+        # - raw ring is only STFT boundary context (window - hop)
+        # - mel ring below is the cache-aware pre-encode context
+        # - one hop of right-edge guard matches the current streaming gate
+        self.raw_audio_ring_samples = self.window_size_samples - self.hop_samples
+        self.preprocess_align_pad_samples = (
+            self.hop_samples - (self.raw_audio_ring_samples % self.hop_samples)
+        ) % self.hop_samples
+        self.preprocess_new_audio_samples = (self.shift_frames + 1) * self.hop_samples
+        self.stream_preprocess_valid_samples = (
+            self.preprocess_align_pad_samples
+            + self.raw_audio_ring_samples
+            + self.preprocess_new_audio_samples
+        )
+        prefix_samples = self.preprocess_align_pad_samples + self.raw_audio_ring_samples
+        if prefix_samples % self.hop_samples != 0:
+            raise RuntimeError(
+                "Constant preprocessor prefix must align to mel frame hops: "
+                f"prefix={prefix_samples}, hop={self.hop_samples}"
+            )
+        self.first_preprocess_mel_frame = prefix_samples // self.hop_samples
+        min_plan_frames = (
+            self.first_preprocess_mel_frame
+            + self.pre_encode_cache_size
+            + self.shift_frames
+            + self.final_padding_frames
+            + 1
+        )
+        self.constant_preprocess_frames = 1 << (min_plan_frames - 1).bit_length()
+        self.constant_preprocess_samples = (self.constant_preprocess_frames - 1) * self.hop_samples
+
         # Calculate audio overlap for mid-utterance reset continuity
         # Use pre_encode_cache_size frames = 90ms of left-context
         # This allows the encoder to have proper context when starting a new segment
@@ -207,6 +265,14 @@ class ASRServer:
         logger.info(f"Model loaded: {type(self.model).__name__}")
         logger.info(f"Shift size: {shift_ms:.0f}ms ({self.shift_frames} frames)")
         logger.info(f"Pre-encode cache: {self.pre_encode_cache_size} frames")
+        logger.info(
+            "Constant preprocessor plan: "
+            f"K={self.constant_preprocess_samples} samples "
+            f"({self.constant_preprocess_frames} STFT frames, min={min_plan_frames}) "
+            f"(align={self.preprocess_align_pad_samples}, "
+            f"raw_ring={self.raw_audio_ring_samples}, "
+            f"new_audio={self.preprocess_new_audio_samples})"
+        )
         logger.info(f"Final chunk padding: {padding_ms:.0f}ms ({self.final_padding_frames} frames)")
         logger.info(f"Audio overlap for resets: {overlap_ms:.0f}ms ({self.overlap_samples} samples)")
 
@@ -227,17 +293,12 @@ class ASRServer:
         logger.info("Running warmup inference (streaming API) to claim GPU memory...")
         start = time.perf_counter()
 
-        # Generate 1 second of silence plus padding for warmup
-        warmup_samples = self.sample_rate + (self.final_padding_frames * self.hop_samples)
-        warmup_audio = np.zeros(warmup_samples, dtype=np.float32)
+        # Keep warmup on the same fixed preprocessor plan as live streaming.
+        warmup_audio = np.zeros(self.constant_preprocess_samples, dtype=np.float32)
 
         # Run streaming inference to force all CUDA kernels to compile
         with torch.inference_mode():
-            audio_tensor = torch.from_numpy(warmup_audio).unsqueeze(0).cuda()
-            audio_len = torch.tensor([len(warmup_audio)], device='cuda')
-
-            # Preprocess
-            mel, mel_len = self.model.preprocessor(input_signal=audio_tensor, length=audio_len)
+            mel, mel_len = self._preprocess_fixed_audio(warmup_audio, len(warmup_audio))
 
             # Get initial cache
             cache = self.model.encoder.get_initial_cache_state(batch_size=1)
@@ -275,7 +336,9 @@ class ASRServer:
         # Reset audio buffer and frame counter
         # If overlap buffer exists, use it as the starting audio
         if session.overlap_buffer is not None and len(session.overlap_buffer) > 0:
-            session.accumulated_audio = session.overlap_buffer.copy()
+            session.pending_audio = session.overlap_buffer.copy()
+            session.accumulated_audio = session.pending_audio
+            session.total_audio_samples = len(session.pending_audio)
             overlap_ms = len(session.overlap_buffer) * 1000 / self.sample_rate
             logger.debug(
                 f"Session {session.id}: prepending {len(session.overlap_buffer)} samples "
@@ -283,7 +346,12 @@ class ASRServer:
             )
             session.overlap_buffer = None  # Clear after use
         else:
-            session.accumulated_audio = np.array([], dtype=np.float32)
+            session.pending_audio = np.array([], dtype=np.float32)
+            session.accumulated_audio = session.pending_audio
+            session.total_audio_samples = 0
+
+        session.raw_audio_ring = np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
+        session.mel_frame_ring = None
 
         # (Removed 2026-05-18 baseline hardening: the NEMOTRON_ONSET_WARMUP_MS
         # buffer-prepend was an ineffective + buggy onset warm-up. PLAN Step 8
@@ -294,6 +362,58 @@ class ASRServer:
         session.previous_hypotheses = None
         session.pred_out_stream = None
         session.current_text = ""
+
+    def _preprocess_fixed_audio(
+        self,
+        audio: np.ndarray,
+        valid_samples: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run the preprocessor with an invariant input shape.
+
+        `valid_samples` may be shorter for final partial chunks; the tensor
+        shape stays fixed so CUDA uses the same STFT/cuFFT plan every call.
+        """
+        if len(audio) != self.constant_preprocess_samples:
+            raise ValueError(
+                f"Expected fixed preprocessor input of {self.constant_preprocess_samples} samples, "
+                f"got {len(audio)}"
+            )
+        audio_tensor = torch.from_numpy(np.ascontiguousarray(audio)).unsqueeze(0).cuda()
+        audio_len = torch.tensor([valid_samples], device='cuda', dtype=torch.long)
+        return self.model.preprocessor(input_signal=audio_tensor, length=audio_len)
+
+    def _build_fixed_preprocess_audio(
+        self,
+        raw_audio_ring: np.ndarray,
+        new_audio: np.ndarray,
+    ) -> tuple[np.ndarray, int]:
+        """Assemble align-pad + raw ring + new audio and zero-pad to K."""
+        if len(raw_audio_ring) != self.raw_audio_ring_samples:
+            raise ValueError(
+                f"Expected raw ring of {self.raw_audio_ring_samples} samples, "
+                f"got {len(raw_audio_ring)}"
+            )
+        prefix_len = self.preprocess_align_pad_samples + self.raw_audio_ring_samples
+        valid_samples = prefix_len + len(new_audio)
+        if valid_samples > self.constant_preprocess_samples:
+            raise ValueError(
+                f"Fixed preprocessor valid span {valid_samples} exceeds K={self.constant_preprocess_samples}"
+            )
+
+        audio = np.zeros(self.constant_preprocess_samples, dtype=np.float32)
+        cursor = self.preprocess_align_pad_samples
+        audio[cursor : cursor + self.raw_audio_ring_samples] = raw_audio_ring
+        cursor += self.raw_audio_ring_samples
+        audio[cursor : cursor + len(new_audio)] = new_audio
+        return audio, valid_samples
+
+    def _update_mel_frame_ring(self, session: ASRSession, new_mel: torch.Tensor) -> None:
+        """Retain the mel pre-encode cache separately from raw STFT context."""
+        if session.mel_frame_ring is None:
+            combined = new_mel.detach()
+        else:
+            combined = torch.cat((session.mel_frame_ring, new_mel.detach()), dim=-1)
+        session.mel_frame_ring = combined[:, :, -self.pre_encode_cache_size :].detach()
 
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle a WebSocket client connection."""
@@ -366,13 +486,15 @@ class ASRServer:
             chunk_hash = hashlib.md5(audio_bytes).hexdigest()[:8]
             logger.debug(f"Session {session.id}: recv chunk {len(audio_bytes)}B hash={chunk_hash}")
 
-        session.accumulated_audio = np.concatenate([session.accumulated_audio, audio_np])
+        session.pending_audio = np.concatenate([session.pending_audio, audio_np])
+        session.accumulated_audio = session.pending_audio
+        session.total_audio_samples += len(audio_np)
 
         # Process if we have enough audio for new frames
         # We need shift_frames worth of new mel frames (after skipping edge frame)
         min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
 
-        while len(session.accumulated_audio) >= min_audio_for_chunk:
+        while session.total_audio_samples >= min_audio_for_chunk:
             async with self.inference_lock:
                 text = await asyncio.get_event_loop().run_in_executor(
                     None, self._process_chunk, session
@@ -391,46 +513,47 @@ class ASRServer:
             min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
 
     def _process_chunk(self, session: ASRSession) -> Optional[str]:
-        """Process accumulated audio, extract new mel frames, run streaming inference."""
+        """Process one fixed-plan audio window and run streaming inference."""
         try:
-            # Preprocess ALL accumulated audio
-            audio_tensor = torch.from_numpy(session.accumulated_audio).unsqueeze(0).cuda()
-            audio_len = torch.tensor([len(session.accumulated_audio)], device='cuda')
+            if len(session.pending_audio) < self.preprocess_new_audio_samples:
+                return session.current_text
 
             if DEBUG_ASR:
-                audio_hash = _hash_audio(session.accumulated_audio)
-                logger.debug(f"Session {session.id}: process audio={len(session.accumulated_audio)} hash={audio_hash}")
+                audio_hash = _hash_audio(session.pending_audio)
+                logger.debug(
+                    f"Session {session.id}: process pending={len(session.pending_audio)} "
+                    f"total={session.total_audio_samples} hash={audio_hash}"
+                )
+
+            new_audio = session.pending_audio[: self.preprocess_new_audio_samples]
+            fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+                session.raw_audio_ring,
+                new_audio,
+            )
 
             with torch.inference_mode():
-                mel, mel_len = self.model.preprocessor(
-                    input_signal=audio_tensor,
-                    length=audio_len
-                )
+                mel, mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
 
                 if DEBUG_ASR:
                     mel_hash = hashlib.md5(mel.cpu().numpy().tobytes()).hexdigest()[:8]
                     logger.debug(f"Session {session.id}: mel shape={mel.shape[-1]} hash={mel_hash}")
 
-                # Available frames (excluding last edge frame)
-                available_frames = mel.shape[-1] - 1
-                new_frame_count = available_frames - session.emitted_frames
-
-                if new_frame_count < self.shift_frames:
-                    return session.current_text  # Not enough new frames
+                valid_new_mel = mel[
+                    :,
+                    :,
+                    self.first_preprocess_mel_frame : self.first_preprocess_mel_frame + self.shift_frames,
+                ]
 
                 # Extract chunk with pre-encode cache
                 if session.emitted_frames == 0:
-                    # First chunk: just shift_frames, no cache
-                    chunk_start = 0
-                    chunk_end = self.shift_frames
+                    # First chunk: just shift_frames, no mel cache
+                    chunk_mel = valid_new_mel
                     drop_extra = 0
                 else:
-                    # Subsequent chunks: include pre_encode_cache frames before
-                    chunk_start = session.emitted_frames - self.pre_encode_cache_size
-                    chunk_end = session.emitted_frames + self.shift_frames
+                    # Subsequent chunks: prepend retained mel pre-encode cache
+                    chunk_mel = torch.cat((session.mel_frame_ring, valid_new_mel), dim=-1)
                     drop_extra = self.drop_extra
 
-                chunk_mel = mel[:, :, chunk_start:chunk_end]
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
 
                 # Run streaming inference
@@ -455,6 +578,17 @@ class ASRServer:
                 )
 
                 # Update emitted frame count
+                consumed_audio = session.pending_audio[: self.shift_frames * self.hop_samples]
+                if len(consumed_audio) >= self.raw_audio_ring_samples:
+                    session.raw_audio_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+                else:
+                    keep = self.raw_audio_ring_samples - len(consumed_audio)
+                    session.raw_audio_ring = np.concatenate(
+                        [session.raw_audio_ring[-keep:], consumed_audio]
+                    ).astype(np.float32, copy=False)
+                session.pending_audio = session.pending_audio[self.shift_frames * self.hop_samples :]
+                session.accumulated_audio = session.pending_audio
+                self._update_mel_frame_ring(session, valid_new_mel)
                 session.emitted_frames += self.shift_frames
 
                 # Extract text
@@ -500,11 +634,12 @@ class ASRServer:
         import time
 
         # Log audio state at reset for diagnostics
-        audio_samples = len(session.accumulated_audio) if session.accumulated_audio is not None else 0
+        audio_samples = session.total_audio_samples
         audio_duration_ms = (audio_samples * 1000) // self.sample_rate
         logger.debug(
             f"Session {session.id} {'hard' if finalize else 'soft'} reset: "
-            f"accumulated={audio_samples} samples ({audio_duration_ms}ms), "
+            f"audio={audio_samples} samples ({audio_duration_ms}ms), "
+            f"pending={len(session.pending_audio)} samples, "
             f"emitted={session.emitted_frames} frames"
         )
 
@@ -529,18 +664,19 @@ class ASRServer:
 
         # HARD RESET: Full finalization with padding
         # Save original audio length before adding padding
-        original_audio_length = len(session.accumulated_audio) if session.accumulated_audio is not None else 0
+        original_audio_length = session.total_audio_samples
 
         # Pad with silence to ensure the model has enough trailing context
         # to finalize the last word. Padding = (right_context + 1) * shift_frames.
         if original_audio_length > 0:
             padding_samples = self.final_padding_frames * self.hop_samples
             silence_padding = np.zeros(padding_samples, dtype=np.float32)
-            session.accumulated_audio = np.concatenate([session.accumulated_audio, silence_padding])
+            session.pending_audio = np.concatenate([session.pending_audio, silence_padding])
+            session.accumulated_audio = session.pending_audio
 
         # Process all remaining audio with keep_all_outputs=True
         final_text = session.current_text
-        if session.accumulated_audio is not None and len(session.accumulated_audio) > 0:
+        if session.pending_audio is not None and len(session.pending_audio) > 0:
             start_time = time.perf_counter()
             async with self.inference_lock:
                 text = await asyncio.get_event_loop().run_in_executor(
@@ -600,23 +736,17 @@ class ASRServer:
         )
 
     def _process_final_chunk(self, session: ASRSession) -> Optional[str]:
-        """Process all remaining audio with keep_all_outputs=True."""
+        """Process remaining pending audio with fixed-plan preprocessing."""
         try:
-            if len(session.accumulated_audio) == 0:
+            if len(session.pending_audio) == 0:
                 return session.current_text
 
-            # Preprocess ALL accumulated audio
-            audio_tensor = torch.from_numpy(session.accumulated_audio).unsqueeze(0).cuda()
-            audio_len = torch.tensor([len(session.accumulated_audio)], device='cuda')
-
             with torch.inference_mode():
-                mel, mel_len = self.model.preprocessor(
-                    input_signal=audio_tensor,
-                    length=audio_len
-                )
-
                 # For final chunk, use ALL remaining frames (including edge)
-                total_mel_frames = mel.shape[-1]
+                padded_total_samples = (
+                    session.emitted_frames * self.hop_samples + len(session.pending_audio)
+                )
+                total_mel_frames = (padded_total_samples // self.hop_samples) + 1
                 remaining_frames = total_mel_frames - session.emitted_frames
 
                 logger.debug(
@@ -629,15 +759,49 @@ class ASRServer:
                     logger.warning(f"Session {session.id}: No remaining frames to process!")
                     return session.current_text
 
+                pending = session.pending_audio
+                raw_ring = session.raw_audio_ring
+                new_mels: list[torch.Tensor] = []
+                frames_collected = 0
+                while frames_collected < remaining_frames:
+                    frames_this_call = min(self.shift_frames, remaining_frames - frames_collected)
+                    needed_new_samples = min(
+                        len(pending),
+                        self.preprocess_new_audio_samples,
+                    )
+                    new_audio = pending[:needed_new_samples]
+                    fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+                        raw_ring,
+                        new_audio,
+                    )
+                    mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+                    start = self.first_preprocess_mel_frame
+                    new_mels.append(mel[:, :, start : start + frames_this_call])
+
+                    if frames_this_call == self.shift_frames:
+                        consumed_samples = min(self.shift_frames * self.hop_samples, len(pending))
+                        consumed_audio = pending[:consumed_samples]
+                        if len(consumed_audio) >= self.raw_audio_ring_samples:
+                            raw_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+                        elif len(consumed_audio) > 0:
+                            keep = self.raw_audio_ring_samples - len(consumed_audio)
+                            raw_ring = np.concatenate([raw_ring[-keep:], consumed_audio]).astype(
+                                np.float32,
+                                copy=False,
+                            )
+                        pending = pending[consumed_samples:]
+                    frames_collected += frames_this_call
+
+                new_mel = torch.cat(new_mels, dim=-1)
+
                 # Extract final chunk with pre-encode cache
                 if session.emitted_frames == 0:
-                    chunk_start = 0
+                    chunk_mel = new_mel
                     drop_extra = 0
                 else:
-                    chunk_start = session.emitted_frames - self.pre_encode_cache_size
+                    chunk_mel = torch.cat((session.mel_frame_ring, new_mel), dim=-1)
                     drop_extra = self.drop_extra
 
-                chunk_mel = mel[:, :, chunk_start:]
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
 
                 (

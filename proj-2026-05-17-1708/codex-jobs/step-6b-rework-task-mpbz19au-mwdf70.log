@@ -1,0 +1,350 @@
+[2026-05-19T01:45:41.721Z] Starting Codex Task.
+[2026-05-19T01:45:44.036Z] Starting Codex task thread.
+[2026-05-19T01:45:44.879Z] Thread ready (019e3de9-108d-7232-93a5-90974384159e).
+[2026-05-19T01:45:44.893Z] Turn started (019e3de9-10bb-77f0-ba58-e230db025730).
+[2026-05-19T01:45:54.797Z] Assistant message captured: I’ll start by reading the plan clauses and the current implementation/harness, then make the ...
+
+[2026-05-19T01:45:54.797Z] Assistant message
+I’ll start by reading the plan clauses and the current implementation/harness, then make the smallest scoped changes in `server.py` and `equiv_harness.py` only. After that I’ll run the expanded fixture validation and compile checks with the specified venv.
+[2026-05-19T01:45:54.832Z] Running command: /bin/bash -lc 'rg -n "Step 6b|Step 6a|Step 6c|Ring buffer before continuous context|REVISED R...
+[2026-05-19T01:45:54.844Z] Command completed: /bin/bash -lc 'rg -n "Step 6b|Step 6a|Step 6c|Ring buffer before continuous context|REVISED R... (exit 0)
+[2026-05-19T01:45:54.844Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-19T01:45:54.844Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-19T01:45:54.844Z] Running command: /bin/bash -lc "sed -n '1,260p' src/nemotron_speech/server.py"
+[2026-05-19T01:45:54.844Z] Command completed: /bin/bash -lc "sed -n '1,260p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T01:45:54.844Z] Running command: /bin/bash -lc "sed -n '1,280p' proj-2026-05-17-1708/equiv_harness.py"
+[2026-05-19T01:45:54.844Z] Command completed: /bin/bash -lc "sed -n '1,280p' proj-2026-05-17-1708/equiv_harness.py" (exit 0)
+[2026-05-19T01:46:03.290Z] Assistant message captured: The plan confirms the key acceptance change: Step 6 is now a constant-plan ring-buffer prepro...
+
+[2026-05-19T01:46:03.290Z] Assistant message
+The plan confirms the key acceptance change: Step 6 is now a constant-plan ring-buffer preprocessor, with expanded multi-length mel closeness and Step 6c WER as the later decisive gate. I’m pulling the exact streaming/final paths and existing harness details next so the replacement preserves the encoder call surface.
+[2026-05-19T01:46:03.325Z] Running command: /bin/bash -lc "sed -n '260,760p' src/nemotron_speech/server.py"
+[2026-05-19T01:46:03.325Z] Running command: /bin/bash -lc "sed -n '360,470p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-19T01:46:03.325Z] Command completed: /bin/bash -lc "sed -n '260,760p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T01:46:03.325Z] Command completed: /bin/bash -lc "sed -n '360,470p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-19T01:46:03.380Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/stft_feasibility.py"
+[2026-05-19T01:46:03.380Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/stft_feasibility.py" (exit 0)
+[2026-05-19T01:46:03.382Z] Running command: /bin/bash -lc "sed -n '280,760p' proj-2026-05-17-1708/equiv_harness.py"
+[2026-05-19T01:46:03.383Z] Command completed: /bin/bash -lc "sed -n '280,760p' proj-2026-05-17-1708/equiv_harness.py" (exit 0)
+[2026-05-19T01:46:22.673Z] Assistant message captured: The current server has the expected O(n²) path in both `_process_chunk` and `_process_final_c...
+
+[2026-05-19T01:46:22.673Z] Assistant message
+The current server has the expected O(n²) path in both `_process_chunk` and `_process_final_chunk`: every call feeds `session.accumulated_audio` into `model.preprocessor`. The harness is still byte-golden oriented, so I’m going to add a parallel in-memory reference-vs-candidate path instead of changing or rewriting `equiv_golden`.
+[2026-05-19T01:46:22.730Z] Running command: /bin/bash -lc "sed -n '1,320p' proj-2026-05-17-1708/probe_alias.py"
+[2026-05-19T01:46:22.730Z] Command completed: /bin/bash -lc "sed -n '1,320p' proj-2026-05-17-1708/probe_alias.py" (exit 0)
+[2026-05-19T01:46:22.735Z] Running command: /bin/bash -lc "rg -n \"def forward|class.*Spectrogram|stft|center|exact_pad|pad_to|win_length...
+[2026-05-19T01:46:22.735Z] Command failed: /bin/bash -lc "rg -n \"def forward|class.*Spectrogram|stft|center|exact_pad|pad_to|win_length... (exit 2)
+[2026-05-19T01:46:22.742Z] Running command: /bin/bash -lc 'git status --short && git rev-parse --short HEAD && rg -n "INCREMENTAL_PREPROC...
+[2026-05-19T01:46:22.742Z] Command completed: /bin/bash -lc 'git status --short && git rev-parse --short HEAD && rg -n "INCREMENTAL_PREPROC... (exit 0)
+[2026-05-19T01:46:22.743Z] Running command: /bin/bash -lc 'rg --files stt-benchmark/stt_benchmark_data/audio | head -80'
+[2026-05-19T01:46:22.743Z] Command completed: /bin/bash -lc 'rg --files stt-benchmark/stt_benchmark_data/audio | head -80' (exit 0)
+[2026-05-19T01:46:34.681Z] Running command: /bin/bash -lc "find stt-benchmark/stt_benchmark_data/audio -name '*.pcm' -printf '%s %f\\n' |...
+[2026-05-19T01:46:34.681Z] Command completed: /bin/bash -lc "find stt-benchmark/stt_benchmark_data/audio -name '*.pcm' -printf '%s %f\\n' |... (exit 0)
+[2026-05-19T01:46:34.688Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import nem...
+[2026-05-19T01:46:34.688Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import nem... (exit 0)
+[2026-05-19T01:46:34.724Z] Running command: /bin/bash -lc "find /home/khkramer/src/nemotron-nano-omni/.venv-asr -path '*nemo/collections/...
+[2026-05-19T01:46:34.724Z] Command completed: /bin/bash -lc "find /home/khkramer/src/nemotron-nano-omni/.venv-asr -path '*nemo/collections/... (exit 0)
+[2026-05-19T01:46:34.729Z] Running command: /bin/bash -lc "find /home/khkramer/src/nemotron-nano-omni/.venv-asr -path '*audio_preprocessi...
+[2026-05-19T01:46:34.730Z] Command completed: /bin/bash -lc "find /home/khkramer/src/nemotron-nano-omni/.venv-asr -path '*audio_preprocessi... (exit 0)
+[2026-05-19T01:46:43.424Z] Running command: /bin/bash -lc 'rg -n "streaming|cache_aware|pre_encode_cache|drop_extra_pre_encoded" /home/kh...
+[2026-05-19T01:46:43.424Z] Command completed: /bin/bash -lc 'rg -n "streaming|cache_aware|pre_encode_cache|drop_extra_pre_encoded" /home/kh... (exit 0)
+[2026-05-19T01:46:43.429Z] Running command: /bin/bash -lc "rg -n \"class.*Mel|class.*Spectrogram|torch.stft|center|exact_pad|pad_to|win_l...
+[2026-05-19T01:46:43.430Z] Command completed: /bin/bash -lc "rg -n \"class.*Mel|class.*Spectrogram|torch.stft|center|exact_pad|pad_to|win_l... (exit 0)
+[2026-05-19T01:46:43.437Z] Running command: /bin/bash -lc "find stt-benchmark/stt_benchmark_data/audio -name '*.pcm' -printf '%s %f\\n' |...
+[2026-05-19T01:46:43.437Z] Command completed: /bin/bash -lc "find stt-benchmark/stt_benchmark_data/audio -name '*.pcm' -printf '%s %f\\n' |... (exit 0)
+[2026-05-19T01:46:52.643Z] Running command: /bin/bash -lc "sed -n '240,520p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/...
+[2026-05-19T01:46:52.643Z] Command completed: /bin/bash -lc "sed -n '240,520p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/... (exit 0)
+[2026-05-19T01:46:52.645Z] Running command: /bin/bash -lc "sed -n '1560,1695p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collection...
+[2026-05-19T01:46:52.645Z] Command completed: /bin/bash -lc "sed -n '1560,1695p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collection... (exit 0)
+[2026-05-19T01:46:52.737Z] Running command: /bin/bash -lc "sed -n '1695,1835p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collection...
+[2026-05-19T01:46:52.737Z] Running command: /bin/bash -lc "sed -n '380,430p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/...
+[2026-05-19T01:46:52.737Z] Command completed: /bin/bash -lc "sed -n '1695,1835p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collection... (exit 0)
+[2026-05-19T01:46:52.737Z] Command completed: /bin/bash -lc "sed -n '380,430p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/... (exit 0)
+[2026-05-19T01:47:04.424Z] Running command: /bin/bash -lc "sed -n '1,200p' proj-2026-05-17-1708/equiv_golden/PARAMS.md"
+[2026-05-19T01:47:04.424Z] Command completed: /bin/bash -lc "sed -n '1,200p' proj-2026-05-17-1708/equiv_golden/PARAMS.md" (exit 0)
+[2026-05-19T01:47:04.428Z] Running command: /bin/bash -lc 'rg -n "normalize_batch" /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collec...
+[2026-05-19T01:47:04.428Z] Command completed: /bin/bash -lc 'rg -n "normalize_batch" /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collec... (exit 0)
+[2026-05-19T01:47:04.432Z] Running command: /bin/bash -lc "rg -n \"def normalize_batch|normalize_type\" /home/khkramer/src/nemotron-nano-...
+[2026-05-19T01:47:04.432Z] Command completed: /bin/bash -lc "rg -n \"def normalize_batch|normalize_type\" /home/khkramer/src/nemotron-nano-... (exit 0)
+[2026-05-19T01:47:04.435Z] Running command: /bin/bash -lc 'ls -la proj-2026-05-17-1708/equiv_golden && git ls-files proj-2026-05-17-1708/...
+[2026-05-19T01:47:04.435Z] Command completed: /bin/bash -lc 'ls -la proj-2026-05-17-1708/equiv_golden && git ls-files proj-2026-05-17-1708/... (exit 0)
+[2026-05-19T01:47:08.088Z] Running command: /bin/bash -lc "sed -n '40,115p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/a...
+[2026-05-19T01:47:08.088Z] Command completed: /bin/bash -lc "sed -n '40,115p' /home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/a... (exit 0)
+[2026-05-19T01:47:15.490Z] Running command: /bin/bash -lc "find ~/.cache/huggingface -iname '*config*' -o -iname '*.yaml' -o -iname '*.ne...
+[2026-05-19T01:47:15.490Z] Command completed: /bin/bash -lc "find ~/.cache/huggingface -iname '*config*' -o -iname '*.yaml' -o -iname '*.ne... (exit 0)
+[2026-05-19T01:47:15.608Z] Running command: /bin/bash -lc "rg -n \"nemotron-speech-streaming-en-0.6b|normalize:|normalize =|window_size|w...
+[2026-05-19T01:47:15.620Z] Running command: /bin/bash -lc "find /home/khkramer -name '*nemotron*0.6b*' -o -name '*.nemo' | head -80"
+[2026-05-19T01:47:16.252Z] Command completed: /bin/bash -lc "rg -n \"nemotron-speech-streaming-en-0.6b|normalize:|normalize =|window_size|w... (exit 0)
+[2026-05-19T01:47:21.321Z] Command completed: /bin/bash -lc "find /home/khkramer -name '*nemotron*0.6b*' -o -name '*.nemo' | head -80" (exit 0)
+[2026-05-19T01:47:30.682Z] Running command: /bin/bash -lc 'tar -tf /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-...
+[2026-05-19T01:47:30.683Z] Command completed: /bin/bash -lc 'tar -tf /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-... (exit 0)
+[2026-05-19T01:47:30.766Z] Running command: /bin/bash -lc "tar -xOf /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech...
+[2026-05-19T01:47:30.766Z] Command completed: /bin/bash -lc "tar -xOf /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech... (exit 0)
+[2026-05-19T01:47:30.768Z] Running command: /bin/bash -lc "tar -xOf /home/khkramer/src/nemotron-january-2026/.cache/huggingface/hub/model...
+[2026-05-19T01:47:30.768Z] Command completed: /bin/bash -lc "tar -xOf /home/khkramer/src/nemotron-january-2026/.cache/huggingface/hub/model... (exit 0)
+[2026-05-19T01:48:33.641Z] Running command: /bin/bash -lc "sed -n '260,620p' proj-2026-05-17-1708/stft_feasibility.py"
+[2026-05-19T01:48:33.642Z] Command completed: /bin/bash -lc "sed -n '260,620p' proj-2026-05-17-1708/stft_feasibility.py" (exit 0)
+[2026-05-19T01:51:17.277Z] Running command: /bin/bash -lc "rg -n \"preprocessor\\(\" src/nemotron_speech/server.py proj-2026-05-17-1708/e...
+[2026-05-19T01:51:17.277Z] Command completed: /bin/bash -lc "rg -n \"preprocessor\\(\" src/nemotron_speech/server.py proj-2026-05-17-1708/e... (exit 0)
+[2026-05-19T01:51:17.291Z] Running command: /bin/bash -lc 'nvidia-smi --query-gpu=index,name,memory.used,memory.free --format=csv,noheade...
+[2026-05-19T01:51:17.291Z] Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=index,name,memory.used,memory.free --format=csv,noheade... (exit 0)
+[2026-05-19T01:51:55.503Z] Assistant message captured: I’m about to edit `server.py`. The implementation will keep audio only as a bounded pending q...
+
+[2026-05-19T01:51:55.503Z] Assistant message
+I’m about to edit `server.py`. The implementation will keep audio only as a bounded pending queue plus a 240-sample STFT ring, and it will feed a fixed-size padded tensor into the preprocessor on every server-side preprocessor call; the pre-encode cache remains a separate 9-frame mel ring.
+[2026-05-19T01:52:33.585Z] Applying 1 file change(s).
+[2026-05-19T01:52:33.594Z] File changes completed.
+[2026-05-19T01:53:21.806Z] Applying 1 file change(s).
+[2026-05-19T01:53:21.807Z] File changes completed.
+[2026-05-19T01:53:28.314Z] Running command: /bin/bash -lc "rg -n \"chunk_start|audio_len|accumulated_audio|pending_audio|constant_preproc...
+[2026-05-19T01:53:28.325Z] Command completed: /bin/bash -lc "rg -n \"chunk_start|audio_len|accumulated_audio|pending_audio|constant_preproc... (exit 0)
+[2026-05-19T01:53:28.325Z] Running command: /bin/bash -lc "sed -n '70,260p' src/nemotron_speech/server.py"
+[2026-05-19T01:53:28.325Z] Command completed: /bin/bash -lc "sed -n '70,260p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T01:53:28.325Z] Running command: /bin/bash -lc "sed -n '360,760p' src/nemotron_speech/server.py"
+[2026-05-19T01:53:28.325Z] Command completed: /bin/bash -lc "sed -n '360,760p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T01:53:31.432Z] Running command: /bin/bash -lc "sed -n '740,870p' src/nemotron_speech/server.py"
+[2026-05-19T01:53:31.432Z] Command completed: /bin/bash -lc "sed -n '740,870p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T01:54:17.353Z] Assistant message captured: The server edit is in place; next I’m adding the harness’s in-memory reference-vs-ring mode. ...
+
+[2026-05-19T01:54:17.353Z] Assistant message
+The server edit is in place; next I’m adding the harness’s in-memory reference-vs-ring mode. It will keep the old golden capture/assert commands intact and add a separate expanded-fixture `closeness` command that never writes into `equiv_golden`.
+[2026-05-19T01:54:27.176Z] Applying 1 file change(s).
+[2026-05-19T01:54:27.188Z] File changes completed.
+[2026-05-19T01:54:38.869Z] Applying 1 file change(s).
+[2026-05-19T01:54:38.869Z] File changes completed.
+[2026-05-19T01:55:03.298Z] Applying 1 file change(s).
+[2026-05-19T01:55:03.299Z] File changes completed.
+[2026-05-19T01:55:28.040Z] Applying 1 file change(s).
+[2026-05-19T01:55:28.041Z] File changes completed.
+[2026-05-19T01:55:57.863Z] Applying 1 file change(s).
+[2026-05-19T01:55:57.864Z] File changes completed.
+[2026-05-19T01:56:06.333Z] Applying 1 file change(s).
+[2026-05-19T01:56:06.334Z] File changes completed.
+[2026-05-19T01:56:27.362Z] Applying 1 file change(s).
+[2026-05-19T01:56:27.363Z] File changes completed.
+[2026-05-19T01:56:36.849Z] Applying 1 file change(s).
+[2026-05-19T01:56:36.849Z] File changes completed.
+[2026-05-19T01:56:59.913Z] Applying 1 file change(s).
+[2026-05-19T01:56:59.914Z] File changes completed.
+[2026-05-19T01:57:14.420Z] Assistant message captured: Both files now have the intended code paths. I’m doing a quick static pass before running the...
+
+[2026-05-19T01:57:14.420Z] Assistant message
+Both files now have the intended code paths. I’m doing a quick static pass before running the GPU harness: checking for stale forbidden constants, compile errors, and preprocessor call sites in the server.
+[2026-05-19T01:57:14.471Z] Running command: /bin/bash -lc "rg -n \"INCREMENTAL_PREPROCESS|fixture-position|position-gated|magic|preproces...
+[2026-05-19T01:57:14.482Z] Command completed: /bin/bash -lc "rg -n \"INCREMENTAL_PREPROCESS|fixture-position|position-gated|magic|preproces... (exit 0)
+[2026-05-19T01:57:14.491Z] Running command: /bin/bash -lc "git diff -- src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_harness.p...
+[2026-05-19T01:57:14.491Z] Command completed: /bin/bash -lc "git diff -- src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_harness.p... (exit 0)
+[2026-05-19T01:57:14.505Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast...
+[2026-05-19T01:57:14.505Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast... (exit 0)
+[2026-05-19T01:57:14.557Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a...
+[2026-05-19T01:57:14.557Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a... (exit 0)
+[2026-05-19T01:57:20.947Z] Assistant message captured: Static checks passed: both files compile and AST-parse, and `server.py` now has a single prep...
+
+[2026-05-19T01:57:20.947Z] Assistant message
+Static checks passed: both files compile and AST-parse, and `server.py` now has a single preprocessor call site behind the fixed-shape helper. I’m starting the expanded GPU closeness run now; if it fails on closeness, I’ll inspect the first mismatch rather than tuning to fixture positions.
+[2026-05-19T01:57:22.341Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python proj-2026-05-17-170...
+[2026-05-19T01:57:42.082Z] Command failed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python proj-2026-05-17-170... (exit 1)
+[2026-05-19T01:58:17.175Z] Assistant message captured: The first expanded run failed only on the mel tolerance for 2 of 12 fixtures; text and bounda...
+
+[2026-05-19T01:58:17.175Z] Assistant message
+The first expanded run failed only on the mel tolerance for 2 of 12 fixtures; text and boundaries were exact everywhere, and max absolute error stayed at about `1.9e-6`. I’m checking whether this is a clean fixed-plan choice issue or a real alignment bug; I won’t add any fixture- or position-specific exception.
+[2026-05-19T01:58:25.417Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys...
+[2026-05-19T02:00:35.918Z] Assistant message captured: The K probe is still running. The first two clean variants (`K=3040` and `K=3200`) show the s...
+
+[2026-05-19T02:00:35.918Z] Assistant message
+The K probe is still running. The first two clean variants (`K=3040` and `K=3200`) show the same worst relative error, which points toward plan-size rounding near very small mel values rather than a chunk-boundary alignment error.
+[2026-05-19T02:01:42.225Z] Command failed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys... (exit 1)
+[2026-05-19T02:01:58.070Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys...
+[2026-05-19T02:02:28.730Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys... (exit 0)
+[2026-05-19T02:02:56.377Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys...
+[2026-05-19T02:03:26.989Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys... (exit 0)
+[2026-05-19T02:03:57.030Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys...
+[2026-05-19T02:04:13.463Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import sys... (exit 0)
+[2026-05-19T02:04:29.007Z] Assistant message captured: A clean fixed plan with a 64-frame STFT batch eliminates the relative-error spike on the fail...
+
+[2026-05-19T02:04:29.007Z] Assistant message
+A clean fixed plan with a 64-frame STFT batch eliminates the relative-error spike on the failing cases. I’m changing the K derivation to a model-constant power-of-two frame plan: enough frames for STFT alignment, 9 mel pre-encode frames, the 16-frame shift, final padding frames, and the edge frame, rounded up to 64 frames (`K=(64-1)*160=10080` samples for rc1).
+[2026-05-19T02:04:40.401Z] Applying 1 file change(s).
+[2026-05-19T02:04:40.411Z] File changes completed.
+[2026-05-19T02:04:46.750Z] Running command: /bin/bash -lc "sed -n '210,255p' src/nemotron_speech/server.py"
+[2026-05-19T02:04:46.761Z] Command completed: /bin/bash -lc "sed -n '210,255p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T02:04:56.811Z] Applying 1 file change(s).
+[2026-05-19T02:04:56.820Z] File changes completed.
+[2026-05-19T02:05:10.061Z] Applying 1 file change(s).
+[2026-05-19T02:05:10.061Z] File changes completed.
+[2026-05-19T02:05:23.145Z] Running command: /bin/bash -lc "rg -n \"RingPlan\\(\" proj-2026-05-17-1708/equiv_harness.py src/nemotron_speec...
+[2026-05-19T02:05:23.155Z] Command completed: /bin/bash -lc "rg -n \"RingPlan\\(\" proj-2026-05-17-1708/equiv_harness.py src/nemotron_speec... (exit 0)
+[2026-05-19T02:05:23.179Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast...
+[2026-05-19T02:05:23.179Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast... (exit 0)
+[2026-05-19T02:05:23.229Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a...
+[2026-05-19T02:05:23.229Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a... (exit 0)
+[2026-05-19T02:05:32.480Z] Assistant message captured: The fixed K is now `10080` samples via the 64-frame plan derivation, and the quick compile/AS...
+
+[2026-05-19T02:05:32.480Z] Assistant message
+The fixed K is now `10080` samples via the 64-frame plan derivation, and the quick compile/AST pass still succeeds. I’m rerunning the full 12-fixture closeness harness with the final code.
+[2026-05-19T02:05:34.821Z] Running command: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python proj-2026-05-17-170...
+[2026-05-19T02:05:54.223Z] Command completed: /bin/bash -lc '/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python proj-2026-05-17-170... (exit 0)
+[2026-05-19T02:06:15.209Z] Assistant message captured: The full expanded closeness run now passes: all 12 fixtures are within tolerance with exact t...
+
+[2026-05-19T02:06:15.209Z] Assistant message
+The full expanded closeness run now passes: all 12 fixtures are within tolerance with exact text and boundaries. I’m doing the final compile/AST checks again and then a bounded server start/health probe on a temporary port, with cleanup immediately after health succeeds.
+[2026-05-19T02:06:15.264Z] Running command: /bin/bash -lc "rg -n \"INCREMENTAL_PREPROCESS|position-gated|fixture-position|fixture_tuned|m...
+[2026-05-19T02:06:15.264Z] Command completed: /bin/bash -lc "rg -n \"INCREMENTAL_PREPROCESS|position-gated|fixture-position|fixture_tuned|m... (exit 0)
+[2026-05-19T02:06:15.265Z] Running command: /bin/bash -lc 'git status --short src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha...
+[2026-05-19T02:06:15.265Z] Command completed: /bin/bash -lc 'git status --short src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha... (exit 0)
+[2026-05-19T02:06:15.279Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast...
+[2026-05-19T02:06:15.279Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast... (exit 0)
+[2026-05-19T02:06:15.317Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a...
+[2026-05-19T02:06:15.317Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a... (exit 0)
+[2026-05-19T02:06:30.653Z] Running command: /bin/bash -lc 'rm -rf src/nemotron_speech/__pycache__ proj-2026-05-17-1708/__pycache__ && fin...
+[2026-05-19T02:06:30.653Z] Command failed: /bin/bash -lc 'rm -rf src/nemotron_speech/__pycache__ proj-2026-05-17-1708/__pycache__ && fin... (exit 1)
+[2026-05-19T02:06:30.790Z] Running command: /bin/bash -lc "bash -s <<'SH' set -u port=18080 log="'$(mktemp) PYTHONUNBUFFERED=1 /home/khkr...
+[2026-05-19T02:06:37.951Z] Command completed: /bin/bash -lc "bash -s <<'SH' set -u port=18080 log="'$(mktemp) PYTHONUNBUFFERED=1 /home/khkr... (exit 0)
+[2026-05-19T02:06:51.894Z] Assistant message captured: The bounded start probe passed on port `18080` and the process was killed immediately after `...
+
+[2026-05-19T02:06:51.894Z] Assistant message
+The bounded start probe passed on port `18080` and the process was killed immediately after `/health` returned healthy. The repo already has root-owned `src/nemotron_speech/__pycache__` files that this user cannot remove; I’m cleaning the project harness cache and will report the root-owned cache as a residual environment issue.
+[2026-05-19T02:06:51.930Z] Running command: /bin/bash -lc "rm -rf proj-2026-05-17-1708/__pycache__ && find src proj-2026-05-17-1708 -type...
+[2026-05-19T02:06:51.930Z] Running command: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_harness.p...
+[2026-05-19T02:06:51.930Z] Command completed: /bin/bash -lc "rm -rf proj-2026-05-17-1708/__pycache__ && find src proj-2026-05-17-1708 -type... (exit 0)
+[2026-05-19T02:06:51.930Z] Command completed: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_harness.p... (exit 0)
+[2026-05-19T02:06:51.945Z] Running command: /bin/bash -lc 'git status --short src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha...
+[2026-05-19T02:06:51.945Z] Command completed: /bin/bash -lc 'git status --short src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha... (exit 0)
+[2026-05-19T02:06:51.955Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '40,90p;120,285p;350,620p;725,82...
+[2026-05-19T02:06:51.955Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '40,90p;120,285p;350,620p;725,82... (exit 0)
+[2026-05-19T02:07:07.310Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '70,130p;250,330p;480,61...
+[2026-05-19T02:07:07.310Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '70,130p;250,330p;480,61... (exit 0)
+[2026-05-19T02:07:07.319Z] Running command: /bin/bash -lc "git status --short src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha...
+[2026-05-19T02:07:07.319Z] Command completed: /bin/bash -lc "git status --short src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha... (exit 0)
+[2026-05-19T02:07:07.323Z] Running command: /bin/bash -lc 'git diff --stat -- src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha...
+[2026-05-19T02:07:07.323Z] Command completed: /bin/bash -lc 'git diff --stat -- src/nemotron_speech/server.py proj-2026-05-17-1708/equiv_ha... (exit 0)
+[2026-05-19T02:07:07.409Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a...
+[2026-05-19T02:07:07.409Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX=$(mktemp -d) /home/khkramer/src/nemotron-nano-omni/.venv-a... (exit 0)
+[2026-05-19T02:07:12.125Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '1240,1335p'"
+[2026-05-19T02:07:12.125Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/equiv_harness.py | sed -n '1240,1335p'" (exit 0)
+[2026-05-19T02:07:21.647Z] Running command: /bin/bash -lc 'pgrep -af "src/nemotron_speech/server.py|nemotron_speech/server.py" || true'
+[2026-05-19T02:07:21.647Z] Command completed: /bin/bash -lc 'pgrep -af "src/nemotron_speech/server.py|nemotron_speech/server.py" || true' (exit 0)
+[2026-05-19T02:07:21.657Z] Running command: /bin/bash -lc "ss -ltnp | rg ':18080|:8080' || true"
+[2026-05-19T02:07:21.657Z] Command completed: /bin/bash -lc "ss -ltnp | rg ':18080|:8080' || true" (exit 0)
+[2026-05-19T02:08:03.496Z] Assistant message captured: Implemented Step 6b rework in only: - [server.py](/home/khkramer/src/nemotron-january-2026/sr...
+
+[2026-05-19T02:08:03.496Z] Assistant message
+Implemented Step 6b rework in only:
+
+- [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:45)
+- [equiv_harness.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:79)
+
+**Design**
+Fixed preprocessor plan is `K=10080` samples. Derivation is model-constant: `first_mel_frame=2` from STFT alignment, `pre_encode=9`, `shift=16`, `final_padding=32`, `edge=1` gives `60` required STFT frames, rounded to a 64-frame constant plan; NeMo STFT shape uses `floor(K / hop) + 1`, so `K=(64-1)*160=10080`.
+
+Server state is now split:
+- raw-audio ring: `400 - 160 = 240` samples
+- mel-frame ring: `pre_encode_cache_size = 9` frames
+
+All server preprocessor calls go through `_preprocess_fixed_audio()` with a fixed `input_signal` shape of `10080` samples; valid length is only used for masking. No growing audio buffer is fed to the preprocessor. Streaming and final `conformer_stream_step` call args/shape semantics are preserved, and `emitted_frames += shift_frames` remains streaming-only.
+
+Changed server areas:
+- session state: [server.py:45](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:45)
+- K/ring derivation: [server.py:227](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:227)
+- fixed preprocessor helper: [server.py:366](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:366)
+- audio ingestion/chunk loop: [server.py:481](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:481)
+- streaming chunk path: [server.py:515](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:515)
+- final chunk path: [server.py:738](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:738)
+
+Harness additions:
+- ring plan/session and fixture spread: [equiv_harness.py:79](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:79)
+- constant-plan mirror: [equiv_harness.py:260](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:260)
+- ring streaming capture: [equiv_harness.py:483](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:483)
+- in-memory closeness mode: [equiv_harness.py:1254](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:1254)
+
+**Validation**
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python proj-2026-05-17-1708/equiv_harness.py closeness`
+
+| fixture | seconds | chunks | max rel | max abs | text | boundary |
+|---|---:|---:|---:|---:|---|---|
+| c84503ca... | 1.000 | 6 | 1.186e-07 | 1.907e-06 | PASS | PASS |
+| d63ff87d... | 2.440 | 15 | 1.163e-07 | 1.907e-06 | PASS | PASS |
+| 924b86d5... | 3.711 | 23 | 7.952e-06 | 9.537e-07 | PASS | PASS |
+| 6c691fa4... | 5.090 | 31 | 1.181e-07 | 1.907e-06 | PASS | PASS |
+| b5bb19f2... | 6.495 | 40 | 1.178e-07 | 9.537e-07 | PASS | PASS |
+| 50e0a1a7... | 7.814 | 48 | 1.192e-07 | 1.907e-06 | PASS | PASS |
+| 46996288... | 9.172 | 57 | 1.187e-07 | 1.907e-06 | PASS | PASS |
+| 2c22d5d0... | 10.553 | 65 | 1.981e-07 | 1.907e-06 | PASS | PASS |
+| 025285c0... | 11.895 | 74 | 2.171e-07 | 9.537e-07 | PASS | PASS |
+| 8a77b416... | 13.255 | 82 | 1.185e-07 | 9.537e-07 | PASS | PASS |
+| 9452e608... | 14.626 | 91 | 1.191e-07 | 1.907e-06 | PASS | PASS |
+| 00065230... | 16.000 | 99 | 1.188e-07 | 9.537e-07 | PASS | PASS |
+
+Overall verdict: PASS, exit code 0.
+
+**Checks**
+- `py_compile` passed with `PYTHONPYCACHEPREFIX=$(mktemp -d)`.
+- `ast.parse` passed for both files.
+- Server start/health probe passed on `127.0.0.1:18080`; process was killed after health returned healthy.
+- No `INCREMENTAL_PREPROCESS_*` or position/fixture-gated constants were added.
+
+**Scope**
+Only `server.py` and `equiv_harness.py` changed. `equiv_golden/` is untouched.
+
+Only residual: existing `src/nemotron_speech/__pycache__` is root-owned and could not be removed; project harness `__pycache__` was cleaned. Next step is Step 6c full-1000 `ringbuf` WER-within-CI + O(N) perf validation.
+[2026-05-19T02:08:03.516Z] Turn completed.
+
+[2026-05-19T02:08:03.542Z] Final output
+Implemented Step 6b rework in only:
+
+- [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:45)
+- [equiv_harness.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:79)
+
+**Design**
+Fixed preprocessor plan is `K=10080` samples. Derivation is model-constant: `first_mel_frame=2` from STFT alignment, `pre_encode=9`, `shift=16`, `final_padding=32`, `edge=1` gives `60` required STFT frames, rounded to a 64-frame constant plan; NeMo STFT shape uses `floor(K / hop) + 1`, so `K=(64-1)*160=10080`.
+
+Server state is now split:
+- raw-audio ring: `400 - 160 = 240` samples
+- mel-frame ring: `pre_encode_cache_size = 9` frames
+
+All server preprocessor calls go through `_preprocess_fixed_audio()` with a fixed `input_signal` shape of `10080` samples; valid length is only used for masking. No growing audio buffer is fed to the preprocessor. Streaming and final `conformer_stream_step` call args/shape semantics are preserved, and `emitted_frames += shift_frames` remains streaming-only.
+
+Changed server areas:
+- session state: [server.py:45](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:45)
+- K/ring derivation: [server.py:227](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:227)
+- fixed preprocessor helper: [server.py:366](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:366)
+- audio ingestion/chunk loop: [server.py:481](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:481)
+- streaming chunk path: [server.py:515](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:515)
+- final chunk path: [server.py:738](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:738)
+
+Harness additions:
+- ring plan/session and fixture spread: [equiv_harness.py:79](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:79)
+- constant-plan mirror: [equiv_harness.py:260](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:260)
+- ring streaming capture: [equiv_harness.py:483](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:483)
+- in-memory closeness mode: [equiv_harness.py:1254](/home/khkramer/src/nemotron-january-2026/proj-2026-05-17-1708/equiv_harness.py:1254)
+
+**Validation**
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python proj-2026-05-17-1708/equiv_harness.py closeness`
+
+| fixture | seconds | chunks | max rel | max abs | text | boundary |
+|---|---:|---:|---:|---:|---|---|
+| c84503ca... | 1.000 | 6 | 1.186e-07 | 1.907e-06 | PASS | PASS |
+| d63ff87d... | 2.440 | 15 | 1.163e-07 | 1.907e-06 | PASS | PASS |
+| 924b86d5... | 3.711 | 23 | 7.952e-06 | 9.537e-07 | PASS | PASS |
+| 6c691fa4... | 5.090 | 31 | 1.181e-07 | 1.907e-06 | PASS | PASS |
+| b5bb19f2... | 6.495 | 40 | 1.178e-07 | 9.537e-07 | PASS | PASS |
+| 50e0a1a7... | 7.814 | 48 | 1.192e-07 | 1.907e-06 | PASS | PASS |
+| 46996288... | 9.172 | 57 | 1.187e-07 | 1.907e-06 | PASS | PASS |
+| 2c22d5d0... | 10.553 | 65 | 1.981e-07 | 1.907e-06 | PASS | PASS |
+| 025285c0... | 11.895 | 74 | 2.171e-07 | 9.537e-07 | PASS | PASS |
+| 8a77b416... | 13.255 | 82 | 1.185e-07 | 9.537e-07 | PASS | PASS |
+| 9452e608... | 14.626 | 91 | 1.191e-07 | 1.907e-06 | PASS | PASS |
+| 00065230... | 16.000 | 99 | 1.188e-07 | 9.537e-07 | PASS | PASS |
+
+Overall verdict: PASS, exit code 0.
+
+**Checks**
+- `py_compile` passed with `PYTHONPYCACHEPREFIX=$(mktemp -d)`.
+- `ast.parse` passed for both files.
+- Server start/health probe passed on `127.0.0.1:18080`; process was killed after health returned healthy.
+- No `INCREMENTAL_PREPROCESS_*` or position/fixture-gated constants were added.
+
+**Scope**
+Only `server.py` and `equiv_harness.py` changed. `equiv_golden/` is untouched.
+
+Only residual: existing `src/nemotron_speech/__pycache__` is root-owned and could not be removed; project harness `__pycache__` was cleaned. Next step is Step 6c full-1000 `ringbuf` WER-within-CI + O(N) perf validation.
