@@ -184,8 +184,20 @@ nemotron_local --model <tag>`.
   redesign), so it is **gated on Gp only, not Ga** — a failed aliasing probe
   must not block the still-needed preprocessing fix.
 - **Ring buffer before continuous context:** Step 6 (incremental preprocessor)
-  must land and be verified **chunk/mel/text byte-equivalent** (not merely
-  WER-within-CI) before Step 7 removes the per-utterance reset.
+  must land before Step 7 removes the per-utterance reset. **Byte-equivalence
+  to the current growing-reprocess path is INFEASIBLE** (2026-05-18 dual
+  feasibility review, empirical + analytical: CUDA cuFFT is plan-size
+  sensitive — identical leading samples yield ULP-different mel frames at
+  different total stream lengths; residual ≤4 ULP, ≤2e-6 abs / ~5e-7 rel;
+  CPU/determinism-flag regimes do not fix it; only a constant FFT plan does).
+  Step 6 must therefore be a **length-independent constant-plan** incremental
+  preprocessor (O(1)/chunk; constant cuFFT batch every call; **NO
+  fixture-position-tuned constants**). **Acceptance = BOTH:** (a) **Step 6c
+  paired full-1000 `ringbuf` WER-within-CI on both slices** vs the matched
+  hard-reset baseline (the decisive gate); and (b) a **6a mel-closeness**
+  check on an EXPANDED multi-length fixture set — max relative mel error
+  ≤ 1e-5 and zero length-tuned constants (kills over-fit + gross bugs). Bit
+  identity is explicitly dropped (proven infeasible).
 - Fork flush must hold `inference_lock` (no concurrent parent-stream + fork on
   the same model object); count that latency honestly.
 - Each step is independently committable and leaves the benchmark runnable.
@@ -392,11 +404,15 @@ nemotron_local --model <tag>`.
   as golden references; document the exact preprocessor params used today
   (`window_stride`/`hop_samples` at `server.py:178-179`; `pre_encode_cache_size`;
   `:403-415`, `:615-623` re-preprocess sites). No server behavior change.
-  Success: golden artifacts persisted; harness re-runs green against unchanged
-  server (byte-identical).
+  Success: golden artifacts persisted; harness re-runs deterministic.
+  **REVISED 2026-05-18:** byte-identity vs the growing-reprocess path is
+  infeasible (cuFFT plan-size sensitivity — see Rules). The 6a golden is
+  retained as a *reference*; acceptance moves to **ULP-closeness (max relative
+  mel-err ≤ 1e-5) on an EXPANDED multi-length real-fixture set** (built in the
+  6b rework). Bit-identity dropped.
   Key files: `proj-2026-05-17-1708/` harness (new), `src/nemotron_speech/server.py` (read-only)
 
-- [ ] **6b. Incremental ring-buffer preprocessor implementation**
+- [~] **6b. Incremental ring-buffer preprocessor implementation**
   In `src/nemotron_speech/server.py` replace the re-preprocess-all path with
   incremental preprocessing, two distinct retained states (do not conflate raw
   STFT overlap with NeMo's mel/pre-encode cache): (i) a **raw-audio ring** of
@@ -405,7 +421,18 @@ nemotron_local --model <tag>`.
   prepends (cf. NeMo `parts/utils/streaming_utils.py:1640,1778`). Keep the
   `conformer_stream_step` call shape and `emitted_frames` semantics unchanged.
   Success: 6a harness passes — **deterministic mel equality, chunk-boundary
-  equality, emitted-text equality** vs golden, on all fixtures.
+  equality, emitted-text equality vs golden — **SUPERSEDED 2026-05-18**.
+  **6b REWORK (clean, length-independent):** a **constant-plan** incremental
+  preprocessor — every `preprocessor` call uses an identical FIXED frame plan
+  (constant cuFFT batch ⇒ deterministic, O(1)/chunk), plus a raw-audio ring
+  for STFT-boundary context and a mel-frame ring of `pre_encode_cache_size`
+  for the cache-aware chunker. **NO `INCREMENTAL_PREPROCESS_*` /
+  fixture-position-tuned constants** — the first impl's over-fit is rejected
+  and reverted. `conformer_stream_step` shape + `emitted_frames` semantics
+  unchanged; rebuild on the hardened `c4b496b` baseline. Validate via the
+  **expanded-fixture mel-closeness** harness (many varied real lengths; max
+  rel mel-err ≤ 1e-5; no length-tuned constants). Full WER acceptance is
+  **Step 6c** (paired full-1000 `ringbuf` WER-within-CI both slices).
   Key files: `src/nemotron_speech/server.py`
 
 - [ ] **6c. Perf + WER-parity validation (tag `ringbuf`)**
@@ -413,6 +440,11 @@ nemotron_local --model <tag>`.
   paired full-1000 run (tag `ringbuf`, hard reset still in place) is
   WER-identical (Δ within CI) to the matched baseline on both slices.
   Success: O(N) confirmed; paired Δ ≈ 0 within CI both slices.
+  **6c is now THE Step-6 acceptance gate (criterion revised 2026-05-18):**
+  paired full-1000 `ringbuf` WER-within-CI on BOTH slices vs the matched
+  hard-reset baseline + O(N) perf confirmed + the 6a expanded-fixture
+  mel-closeness ≤ 1e-5. If WER Δ exceeds CI on either slice → 6b is reworked,
+  NOT accepted. (Byte-identity is infeasible — proven; see Rules.)
   Key files: `stt-benchmark/scripts/measure.py`, `src/nemotron_speech/server.py`
 
   *(Steps 7a–7d = Phase 2b. 7a/7b gated by Gp; 7c/7d gated by Gp **and** Ga.
@@ -530,9 +562,9 @@ nemotron_local --model <tag>`.
 | 3 | Aliasing probe (NeMo fork safety, serialized) | done | `eab05dd` | **Gate Ga PASS** (probe + independent re-run, exit 0): detector-selftest PASS (injected cache + `root.y_sequence` corruption caught); server-path `GreedyRNNTInfer`/loop_labels=False shallow+deep all clean; batched `GreedyBatchedRNNTInfer` shallow corrupts (hyps+continuation) / deep clean → deep-clone recipe robust even on the hazard path. Serialized-only: fork flush holds `inference_lock`, no concurrent parent step. 7c/7d proceed w/ deep-clone recipe. DOC-CORRECTION (B-Ga) queued → Step 9 |
 | 4 | Phase 0 rc0-vs-rc1 + vad-stop-secs control | done | `d23b067` | **rc0 UNSUPPORTED**: `att_context=[70,0]` deterministically crashes upstream NeMo `multi_head_attention.py:267 rel_shift` (0-element reshape; 7.5h burned, 35M crashes, 0 transcriptions, 1st crash 2s into sample 1). Per user decision: rc0 dropped + recorded unsupported. Scope → `rc1_base` + `vad020/040/060/100` (5 cfg, all rc1). Sweep relaunched (5cfg). **Revised 2026-05-18 (user): run incrementally — rc1_base→vad020→vad100; defer vad040/vad060, evaluate vad100 then decide whether to backfill full frontier.** rc1_base done=3.18% (≈ '' 3.08%, reproducible). rc0 row → Step 9 table/doc. **CONCLUDED 2026-05-18:** in-budget points ≈ baseline (rc1_base sliceA 2.84%/sliceB 3.16%, Δ +0.10/+0.16pp CIs incl 0; vad020 2.89%/3.33% ≈ base); real-observer TTFS median ~212ms (**IN <400ms budget**) but accuracy-damaged (2.45 hard-resets/sample, 654/1000 early-final). vad-stop>0.2s + vad100 NOT run (exceed <400ms, no insight beyond Gp); rc0 unsupported. Conclusion: VAD tuning ≠ WER lever — Steps 6–7 must deliver Phase-G accuracy at ~212ms-class latency |
 | 5 | Phase 1 client plumbing fix (sweep CUT) | done | `382c0cf` (stt-bench) | **GUTTED 2026-05-18 (user):** debounce-hold sweep out of <400ms budget + redundant w/ Gate Gp. Only the `_handle_transcript` finalize/interim plumbing fix Step 7a reuses; **no `dbnc*` runs**, implement + code-verify only. ✓ DONE: finalize/interim split + empty/dup/unarmed suppression + confirm_finalize + post-final stop() skip + `_send_finalize_reset` (reuses `_audio_send_lock`, no 2nd lock); default `''`/phaseG_single preserved; py_compile+import OK; no measurement (7a exercises it) |
-| 6a | Equivalence harness + fixture characterization | done | `c48f1c9` | golden oracle: `equiv_harness.py` + `equiv_golden/` (3 sha256-pinned fixtures: 6/68/99 chunks). Independent `assert` re-run byte-identical PASS exit 0 (deterministic). Production untouched. **6b must add a ring-buffer mode to the harness that reproduces this golden via the new server path** |
-| 6b | Incremental ring-buffer preprocessor impl | pending | — | gated Gp; needs 6a (byte-equal) |
-| 6c | Perf + WER-parity validation (`ringbuf`) | pending | — | gated Gp; needs 6b |
+| 6a | Equivalence harness + fixture characterization | done | `c48f1c9` | golden oracle: `equiv_harness.py` + `equiv_golden/` (3 sha256-pinned fixtures: 6/68/99 chunks). Independent `assert` re-run byte-identical PASS exit 0 (deterministic). Production untouched. **REVISED 2026-05-18:** byte-reproduction infeasible (cuFFT plan-sensitivity, dual-reviewed); golden kept as reference, acceptance → ULP-closeness (≤1e-5) on EXPANDED fixtures, rebuilt in the 6b rework |
+| 6b | Incremental ring-buffer preprocessor impl | in-progress (NOT accepted) | — | First impl passes the 3-fixture 6a gate **only via fixture-tuned STFT-plan magic windows** (`_incremental_frame_plan` [384,624)→512 / [1472,1536)→1536) = over-fit, code-confirmed. Deeper: CUDA cuFFT STFT is plan-size-sensitive → bit-exact incremental==growing-full-reprocess may be **infeasible as written**. User decision 2026-05-18: **feasibility review (dual) + fixture-length sweep first → then likely relax the byte-equiv Rule to 6c WER-within-CI + require a length-INDEPENDENT impl**. 6b NOT accepted; Codex's over-fit server.py/harness changes parked uncommitted pending rework. **RESOLVED 2026-05-18:** over-fit reverted to `c4b496b`; Step-6 criterion relaxed (WER-within-CI + length-independent constant-plan ring, NO magic windows); feasibility proven (cuFFT plan-sensitivity); re-delegated clean. |
+| 6c | Perf + WER-parity validation (`ringbuf`) | pending | — | **THE Step-6 acceptance gate (criterion revised 2026-05-18):** full-1000 `ringbuf` WER-within-CI BOTH slices + O(N) + 6a closeness ≤1e-5; Δ over CI → 6b reworked not accepted. gated Gp; needs 6b |
 | 7a | WS protocol + thin-client translator | pending | — | gated Gp; needs 6c |
 | 7b | Server continuous-context state machine (no fork) | pending | — | gated Gp; needs 7a |
 | 7c | Serialized disposable fork flush | pending | — | gated Gp+Ga; needs 7b |
