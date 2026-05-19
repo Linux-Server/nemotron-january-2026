@@ -1,0 +1,214 @@
+[2026-05-19T06:01:57.484Z] Starting Codex Task.
+[2026-05-19T06:01:59.795Z] Starting Codex task thread.
+[2026-05-19T06:02:00.088Z] Thread ready (019e3ed3-abf6-7bb0-89cc-04b53e797825).
+[2026-05-19T06:02:00.100Z] Turn started (019e3ed3-ac23-7542-afee-eb0c7dfe8f87).
+[2026-05-19T06:02:12.034Z] Assistant message captured: I’ll read the plan sections and the two target files first, then make the smallest protocol-o...
+
+[2026-05-19T06:02:12.034Z] Assistant message
+I’ll read the plan sections and the two target files first, then make the smallest protocol-only edits and verify with the requested compile, AST, and contained websocket smoke.
+[2026-05-19T06:02:12.074Z] Running command: /bin/bash -lc 'rg -n "Step 7a|Step 7b|Step 2|Step 5|Rules|RULES|Gp|6c" proj-2026-05-17-1708/P...
+[2026-05-19T06:02:12.085Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-19T06:02:12.085Z] Command completed: /bin/bash -lc 'rg -n "Step 7a|Step 7b|Step 2|Step 5|Rules|RULES|Gp|6c" proj-2026-05-17-1708/P... (exit 0)
+[2026-05-19T06:02:12.085Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-19T06:02:12.085Z] Running command: /bin/bash -lc "sed -n '1,260p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-19T06:02:12.085Z] Command completed: /bin/bash -lc "sed -n '1,260p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-19T06:02:12.085Z] Running command: /bin/bash -lc "sed -n '1,320p' src/nemotron_speech/server.py"
+[2026-05-19T06:02:12.085Z] Command completed: /bin/bash -lc "sed -n '1,320p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T06:02:21.175Z] Assistant message captured: I’ve confirmed the plan’s hard constraints: Step 7a is additive protocol plumbing only, while...
+
+[2026-05-19T06:02:21.175Z] Assistant message
+I’ve confirmed the plan’s hard constraints: Step 7a is additive protocol plumbing only, while the reset/finalize behavior and ring preprocessor stay untouched. Next I’m reading the exact Step 2/5/7 text and the websocket/client control paths so the edit lands on the existing handshake instead of adding parallel machinery.
+[2026-05-19T06:02:21.211Z] Running command: /bin/bash -lc "sed -n '260,620p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-19T06:02:21.211Z] Running command: /bin/bash -lc "sed -n '260,520p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-19T06:02:21.211Z] Command completed: /bin/bash -lc "sed -n '260,620p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-19T06:02:21.211Z] Command completed: /bin/bash -lc "sed -n '260,520p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-19T06:02:21.220Z] Running command: /bin/bash -lc "sed -n '320,760p' src/nemotron_speech/server.py"
+[2026-05-19T06:02:21.220Z] Command completed: /bin/bash -lc "sed -n '320,760p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T06:02:21.223Z] Running command: /bin/bash -lc 'git status --short -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py sr...
+[2026-05-19T06:02:21.223Z] Command completed: /bin/bash -lc 'git status --short -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py sr... (exit 0)
+[2026-05-19T06:02:54.777Z] Running command: /bin/bash -lc "sed -n '760,980p' src/nemotron_speech/server.py"
+[2026-05-19T06:02:54.777Z] Command completed: /bin/bash -lc "sed -n '760,980p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T06:02:54.779Z] Running command: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py src/nemotron...
+[2026-05-19T06:02:54.779Z] Command completed: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py src/nemotron... (exit 0)
+[2026-05-19T06:02:54.780Z] Running command: /bin/bash -lc "rg -n \"NEMOTRON_FINALIZE_MODE|phaseG_single|request_finalize|confirm_finalize...
+[2026-05-19T06:02:54.780Z] Command completed: /bin/bash -lc "rg -n \"NEMOTRON_FINALIZE_MODE|phaseG_single|request_finalize|confirm_finalize... (exit 0)
+[2026-05-19T06:02:58.903Z] Assistant message captured: The current client already has the Step 2/5 pieces: one `_audio_send_lock`, `request_finalize...
+
+[2026-05-19T06:02:58.903Z] Assistant message
+The current client already has the Step 2/5 pieces: one `_audio_send_lock`, `request_finalize()` only around the hard reset, `confirm_finalize()` immediately before the final frame, and interim/final split in `_handle_transcript`. I’m going to add a small control-message sender for the VAD protocol and parse-ignore those message types on the server.
+[2026-05-19T06:03:10.281Z] Applying 1 file change(s).
+[2026-05-19T06:03:10.290Z] File changes completed.
+[2026-05-19T06:03:14.773Z] Applying 1 file change(s).
+[2026-05-19T06:03:14.774Z] File changes completed.
+[2026-05-19T06:03:22.418Z] Assistant message captured: The code edits are in place: VAD messages are additive and the hard-reset path is still the s...
+
+[2026-05-19T06:03:22.418Z] Assistant message
+The code edits are in place: VAD messages are additive and the hard-reset path is still the same helper with the existing `request_finalize()` hook. I’m checking the diff now for scope and accidental behavior changes before running verification.
+[2026-05-19T06:03:22.448Z] Running command: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py src/nemotron...
+[2026-05-19T06:03:22.461Z] Command completed: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py src/nemotron... (exit 0)
+[2026-05-19T06:03:22.477Z] Running command: /bin/bash -lc 'git status --short -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py sr...
+[2026-05-19T06:03:22.477Z] Command completed: /bin/bash -lc 'git status --short -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py sr... (exit 0)
+[2026-05-19T06:03:22.484Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '430,520p'"
+[2026-05-19T06:03:22.484Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '430,520p'" (exit 0)
+[2026-05-19T06:03:22.484Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '1,460p'"
+[2026-05-19T06:03:22.484Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '1,460p'" (exit 0)
+[2026-05-19T06:03:32.422Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-19T06:03:32.422Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-19T06:03:32.426Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-19T06:03:32.426Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-19T06:03:32.430Z] Running command: /bin/bash -lc 'git -C stt-benchmark rev-parse --show-toplevel'
+[2026-05-19T06:03:32.430Z] Command completed: /bin/bash -lc 'git -C stt-benchmark rev-parse --show-toplevel' (exit 0)
+[2026-05-19T06:03:32.430Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-19T06:03:32.430Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-19T06:03:42.034Z] Assistant message captured: The root repo already has unrelated local changes and treats `stt-benchmark/` as a nested che...
+
+[2026-05-19T06:03:42.034Z] Assistant message
+The root repo already has unrelated local changes and treats `stt-benchmark/` as a nested checkout; inside that checkout only `src/stt_benchmark/nemotron_local_stt.py` is modified. I’m running the requested compile and AST checks with bytecode redirected to a temp prefix.
+[2026-05-19T06:03:44.546Z] Running command: /bin/bash -lc 'tmp_pycache=$(mktemp -d); PYTHONPYCACHEPREFIX="$tmp_pycache" /home/khkramer/sr...
+[2026-05-19T06:03:44.546Z] Command completed: /bin/bash -lc 'tmp_pycache=$(mktemp -d); PYTHONPYCACHEPREFIX="$tmp_pycache" /home/khkramer/sr... (exit 0)
+[2026-05-19T06:03:49.366Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast...
+[2026-05-19T06:03:49.366Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast... (exit 0)
+[2026-05-19T06:04:08.486Z] Assistant message captured: Compile and AST parsing passed. I’m checking port 8080, then I’ll run the contained smoke in ...
+
+[2026-05-19T06:04:08.486Z] Assistant message
+Compile and AST parsing passed. I’m checking port 8080, then I’ll run the contained smoke in one shell with a cleanup trap so the server is killed even if the client assertion fails.
+[2026-05-19T06:04:09.652Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true"
+[2026-05-19T06:04:09.652Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true" (exit 0)
+[2026-05-19T06:04:51.899Z] Running command: /bin/bash -lc 'set -euo pipefail PY=/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/pytho...
+[2026-05-19T06:04:56.772Z] Assistant message captured: The smoke is running under a trap-managed shell. It has started the server process and is wai...
+
+[2026-05-19T06:04:56.772Z] Assistant message
+The smoke is running under a trap-managed shell. It has started the server process and is waiting on the short health poll before opening the websocket client.
+[2026-05-19T06:05:04.387Z] Command failed: /bin/bash -lc 'set -euo pipefail PY=/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/pytho... (exit 1)
+[2026-05-19T06:05:09.474Z] Assistant message captured: The first smoke attempt cleaned up correctly but the 12-second health poll expired while the ...
+
+[2026-05-19T06:05:09.474Z] Assistant message
+The first smoke attempt cleaned up correctly but the 12-second health poll expired while the model was still in warmup, before the HTTP server bound. I’m rerunning with a longer bounded poll; the protocol exercise itself is still the same single lightweight websocket round trip.
+[2026-05-19T06:05:10.748Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true"
+[2026-05-19T06:05:10.748Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true" (exit 0)
+[2026-05-19T06:05:30.791Z] Running command: /bin/bash -lc 'set -euo pipefail PY=/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/pytho...
+[2026-05-19T06:05:44.353Z] Command failed: /bin/bash -lc 'set -euo pipefail PY=/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/pytho... (exit 1)
+[2026-05-19T06:05:48.320Z] Assistant message captured: The longer poll reached health; the client side failed only because that venv lacks `websocke...
+
+[2026-05-19T06:05:48.320Z] Assistant message
+The longer poll reached health; the client side failed only because that venv lacks `websockets` as an importable module. Since `aiohttp` is already present for the server, I’m rerunning the same smoke using `aiohttp.ClientSession.ws_connect` for the test client.
+[2026-05-19T06:05:49.366Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true"
+[2026-05-19T06:05:49.366Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true" (exit 0)
+[2026-05-19T06:06:07.211Z] Running command: /bin/bash -lc 'set -euo pipefail PY=/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/pytho...
+[2026-05-19T06:06:20.874Z] Command completed: /bin/bash -lc 'set -euo pipefail PY=/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/pytho... (exit 0)
+[2026-05-19T06:06:34.490Z] Assistant message captured: The smoke passed: the server log shows both `vad_start` and `vad_stop` parsed as no-op, then ...
+
+[2026-05-19T06:06:34.490Z] Assistant message
+The smoke passed: the server log shows both `vad_start` and `vad_stop` parsed as no-op, then the existing `reset` path produced a final transcript. I’m doing final cleanup checks now: no port listener, no generated bytecode in the touched trees, and only the intended files changed by this task.
+[2026-05-19T06:06:34.529Z] Running command: /bin/bash -lc 'find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac...
+[2026-05-19T06:06:34.529Z] Command completed: /bin/bash -lc 'find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac... (exit 0)
+[2026-05-19T06:06:34.533Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-19T06:06:34.533Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-19T06:06:34.535Z] Running command: /bin/bash -lc 'git status --short -- src/nemotron_speech/server.py'
+[2026-05-19T06:06:34.535Z] Command completed: /bin/bash -lc 'git status --short -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T06:06:34.541Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true"
+[2026-05-19T06:06:34.541Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true" (exit 0)
+[2026-05-19T06:06:41.512Z] Running command: /bin/bash -lc 'find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac...
+[2026-05-19T06:06:41.512Z] Command failed: /bin/bash -lc 'find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac... (exit 1)
+[2026-05-19T06:06:51.853Z] Assistant message captured: The cleanup removed benchmark-side caches, but `src/nemotron_speech/__pycache__` contains roo...
+
+[2026-05-19T06:06:51.853Z] Assistant message
+The cleanup removed benchmark-side caches, but `src/nemotron_speech/__pycache__` contains root-owned files and cannot be deleted from this user account. The verification commands used `PYTHONPYCACHEPREFIX`, so no new writable repo bytecode was created.
+[2026-05-19T06:06:51.889Z] Running command: /bin/bash -lc "find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac...
+[2026-05-19T06:06:51.889Z] Command completed: /bin/bash -lc "find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac... (exit 0)
+[2026-05-19T06:06:51.894Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-19T06:06:51.894Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-19T06:06:51.896Z] Running command: /bin/bash -lc 'git status --short -- src/nemotron_speech/server.py'
+[2026-05-19T06:06:51.896Z] Command completed: /bin/bash -lc 'git status --short -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T06:06:51.918Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true"
+[2026-05-19T06:06:51.918Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true" (exit 0)
+[2026-05-19T06:07:08.206Z] Assistant message captured: One ordering detail is worth tightening: I don’t want the new `vad_start` send to delay Pipec...
+
+[2026-05-19T06:07:08.206Z] Assistant message
+One ordering detail is worth tightening: I don’t want the new `vad_start` send to delay Pipecat’s existing start-frame bookkeeping. I’m moving that additive send to immediately after the existing `super().process_frame(...)` call, keeping the old start handling intact before any new network await.
+[2026-05-19T06:07:11.543Z] Applying 1 file change(s).
+[2026-05-19T06:07:11.554Z] File changes completed.
+[2026-05-19T06:07:15.991Z] Assistant message captured: The start-frame ordering is now less invasive: telemetry/timer cancellation and the base clas...
+
+[2026-05-19T06:07:15.991Z] Assistant message
+The start-frame ordering is now less invasive: telemetry/timer cancellation and the base class run first, then the additive `vad_start` is sent. I’m rerunning compile and AST after that adjustment.
+[2026-05-19T06:07:18.474Z] Running command: /bin/bash -lc 'tmp_pycache=$(mktemp -d); PYTHONPYCACHEPREFIX="$tmp_pycache" /home/khkramer/sr...
+[2026-05-19T06:07:18.488Z] Command completed: /bin/bash -lc 'tmp_pycache=$(mktemp -d); PYTHONPYCACHEPREFIX="$tmp_pycache" /home/khkramer/sr... (exit 0)
+[2026-05-19T06:07:22.648Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast...
+[2026-05-19T06:07:22.648Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import ast... (exit 0)
+[2026-05-19T06:07:33.368Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py'
+[2026-05-19T06:07:33.369Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff -- src/stt_benchmark/nemotron_local_stt.py' (exit 0)
+[2026-05-19T06:07:33.373Z] Running command: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py'
+[2026-05-19T06:07:33.373Z] Command completed: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T06:07:33.380Z] Running command: /bin/bash -lc "find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac...
+[2026-05-19T06:07:33.380Z] Command completed: /bin/bash -lc "find stt-benchmark/src/stt_benchmark src/nemotron_speech -type d -name __pycac... (exit 0)
+[2026-05-19T06:07:33.392Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true"
+[2026-05-19T06:07:33.392Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :8080 )' || true" (exit 0)
+[2026-05-19T06:07:41.539Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '440,460p'"
+[2026-05-19T06:07:41.539Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '440,460p'" (exit 0)
+[2026-05-19T06:07:41.540Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '260,410p'"
+[2026-05-19T06:07:41.540Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '260,410p'" (exit 0)
+[2026-05-19T06:07:41.551Z] Running command: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py...
+[2026-05-19T06:07:41.551Z] Command completed: /bin/bash -lc 'git -C stt-benchmark status --short -- src/stt_benchmark/nemotron_local_stt.py... (exit 0)
+[2026-05-19T06:08:02.455Z] Assistant message captured: Implemented Step 7a as pure plumbing. 1. Protocol additions: - Client VAD emits are in [nemot...
+
+[2026-05-19T06:08:02.455Z] Assistant message
+Implemented Step 7a as pure plumbing.
+
+1. Protocol additions:
+   - Client VAD emits are in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:398): `vad_start`, and [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:404): `vad_stop`.
+   - Both use new `_send_vad_signal()` at [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:272), reusing the existing `_audio_send_lock`.
+   - Server parse/no-op branch is in [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:453).
+
+2. Behavior unchanged:
+   - Existing reset/end handling still calls `_reset_session(... finalize=...)` unchanged.
+   - Default mode still sends the existing finalize reset after `vad_stop`.
+   - `NEMOTRON_FINALIZE_MODE=single` still uses the existing armed timer/reset path.
+   - Step-5 `_handle_transcript` finalize/interim split and Step-2 `request_finalize()` / `confirm_finalize()` discipline were left intact.
+
+3. Verification:
+   - `py_compile` passed for both files using `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python` with `PYTHONPYCACHEPREFIX`.
+   - `ast.parse` passed for both files.
+   - Contained WS smoke passed: server returned `ready`, parsed `vad_start` and `vad_stop` as no-op, then the existing `reset` returned a final transcript: `{"type":"transcript","is_final":true,"finalize":true,"text":""}`.
+   - Server was killed cleanly; port `8080` has no listener.
+
+4. Scope:
+   - Modified only `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py` and `src/nemotron_speech/server.py`.
+   - Existing unrelated root worktree changes were left untouched.
+
+5. Blockers:
+   - No implementation blockers. Cleanup note: `src/nemotron_speech/__pycache__` contains pre-existing root-owned files, so I could not remove that directory; benchmark-side caches were removed and verification used a temp pycache prefix.
+
+6. Suggested next step:
+   - Step 7b: server continuous-context state machine. Its full-1000 run should absorb the 7a no-regression parity check as planned.
+[2026-05-19T06:08:02.495Z] Turn completed.
+
+[2026-05-19T06:08:02.523Z] Final output
+Implemented Step 7a as pure plumbing.
+
+1. Protocol additions:
+   - Client VAD emits are in [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:398): `vad_start`, and [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:404): `vad_stop`.
+   - Both use new `_send_vad_signal()` at [nemotron_local_stt.py](/home/khkramer/src/nemotron-january-2026/stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:272), reusing the existing `_audio_send_lock`.
+   - Server parse/no-op branch is in [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:453).
+
+2. Behavior unchanged:
+   - Existing reset/end handling still calls `_reset_session(... finalize=...)` unchanged.
+   - Default mode still sends the existing finalize reset after `vad_stop`.
+   - `NEMOTRON_FINALIZE_MODE=single` still uses the existing armed timer/reset path.
+   - Step-5 `_handle_transcript` finalize/interim split and Step-2 `request_finalize()` / `confirm_finalize()` discipline were left intact.
+
+3. Verification:
+   - `py_compile` passed for both files using `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python` with `PYTHONPYCACHEPREFIX`.
+   - `ast.parse` passed for both files.
+   - Contained WS smoke passed: server returned `ready`, parsed `vad_start` and `vad_stop` as no-op, then the existing `reset` returned a final transcript: `{"type":"transcript","is_final":true,"finalize":true,"text":""}`.
+   - Server was killed cleanly; port `8080` has no listener.
+
+4. Scope:
+   - Modified only `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py` and `src/nemotron_speech/server.py`.
+   - Existing unrelated root worktree changes were left untouched.
+
+5. Blockers:
+   - No implementation blockers. Cleanup note: `src/nemotron_speech/__pycache__` contains pre-existing root-owned files, so I could not remove that directory; benchmark-side caches were removed and verification used a temp pycache prefix.
+
+6. Suggested next step:
+   - Step 7b: server continuous-context state machine. Its full-1000 run should absorb the 7a no-regression parity check as planned.

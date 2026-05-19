@@ -450,6 +450,10 @@ class ASRServer:
                             # finalize=False: soft reset, just return current text
                             finalize = data.get("finalize", True)
                             await self._reset_session(session, finalize=finalize)
+                        elif msg_type == "vad_start" or msg_type == "vad_stop":
+                            logger.debug(
+                                f"Client {session_id}: received {msg_type} (no-op)"
+                            )
                         else:
                             logger.warning(f"Client {session_id}: unknown message type: {msg_type}")
 
