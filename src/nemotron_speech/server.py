@@ -2,6 +2,7 @@
 
 import asyncio
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -15,6 +16,23 @@ from loguru import logger
 
 # Enable debug logging with DEBUG_ASR=1
 DEBUG_ASR = os.environ.get("DEBUG_ASR", "0") == "1"
+
+_DEFAULT_FINALIZE_SILENCE_MS = 2500
+_MAX_FINALIZE_SILENCE_MS = 10_000
+
+STREAMING = "STREAMING"
+PENDING_FINALIZE = "PENDING_FINALIZE"
+FINALIZED = "FINALIZED"
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError as e:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from e
 
 
 def _hash_audio(audio: np.ndarray) -> str:
@@ -78,6 +96,18 @@ class ASRSession:
     # We only send the delta (new portion) to avoid downstream duplication
     last_emitted_text: str = ""
 
+    # Continuous-context mode state. These fields are only used when
+    # NEMOTRON_CONTINUOUS=1; the default hard-reset path ignores them.
+    state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    continuous_state: str = STREAMING
+    committed_text: str = ""
+    continuous_event_queue: Optional[asyncio.Queue] = None
+    continuous_worker_task: Optional[asyncio.Task] = None
+    continuous_debounce_task: Optional[asyncio.Task] = None
+    continuous_stop_seq: int = 0
+    continuous_reset_seen: bool = False
+    continuous_post_stop_audio: bytearray = field(default_factory=bytearray)
+
     # Audio overlap buffer for mid-utterance reset continuity
     # This preserves the last N ms of audio to provide encoder left-context
     # when a new segment starts after a reset
@@ -111,6 +141,19 @@ class ASRServer:
 
         # Inference lock
         self.inference_lock = asyncio.Lock()
+
+        self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
+        self.finalize_silence_ms = _DEFAULT_FINALIZE_SILENCE_MS
+        if self.continuous_context:
+            self.finalize_silence_ms = _env_int(
+                "NEMOTRON_FINALIZE_SILENCE_MS", _DEFAULT_FINALIZE_SILENCE_MS
+            )
+            if not (0 <= self.finalize_silence_ms < _MAX_FINALIZE_SILENCE_MS):
+                raise ValueError(
+                    "NEMOTRON_FINALIZE_SILENCE_MS must be >= 0 and < "
+                    f"{_MAX_FINALIZE_SILENCE_MS}"
+                )
+        self.finalize_silence_seconds = self.finalize_silence_ms / 1000
 
         # Active sessions
         self.sessions: dict[str, ASRSession] = {}
@@ -434,10 +477,17 @@ class ASRServer:
                     None, self._init_session, session
                 )
 
+            if self.continuous_context:
+                self._start_continuous_session(session)
+
             await ws.send_str(json.dumps({"type": "ready"}))
             logger.debug(f"Client {session_id}: sent ready")
 
             async for msg in ws:
+                if self.continuous_context:
+                    await self._queue_continuous_ws_message(session, msg)
+                    continue
+
                 if msg.type == WSMsgType.BINARY:
                     await self._handle_audio(session, msg.data)
                 elif msg.type == WSMsgType.TEXT:
@@ -477,12 +527,466 @@ class ASRServer:
             except:
                 pass
         finally:
+            if self.continuous_context:
+                await self._close_continuous_session(session)
             if session_id in self.sessions:
                 del self.sessions[session_id]
 
         return ws
 
+    def _start_continuous_session(self, session: ASRSession) -> None:
+        """Start the ordered per-session event worker for continuous mode."""
+        session.continuous_event_queue = asyncio.Queue()
+        session.continuous_worker_task = asyncio.create_task(
+            self._continuous_session_worker(session),
+            name=f"nemotron-continuous-session-{session.id}",
+        )
+        logger.info(
+            f"Session {session.id}: continuous context enabled "
+            f"(debounce={self.finalize_silence_ms}ms)"
+        )
+
+    async def _queue_continuous_ws_message(self, session: ASRSession, msg) -> None:
+        """Queue raw WS events so continuous-mode control/audio is ordered."""
+        queue = session.continuous_event_queue
+        if queue is None:
+            logger.warning(f"Session {session.id}: continuous event queue missing")
+            return
+
+        if msg.type == WSMsgType.BINARY:
+            await queue.put(("audio", msg.data))
+        elif msg.type == WSMsgType.TEXT:
+            try:
+                data = json.loads(msg.data)
+            except json.JSONDecodeError:
+                logger.warning(f"Client {session.id}: invalid JSON")
+                return
+
+            msg_type = data.get("type")
+            if msg_type == "reset" or msg_type == "end":
+                finalize = data.get("finalize", True)
+                await queue.put(("reset", finalize, msg_type))
+            elif msg_type == "vad_start" or msg_type == "vad_stop":
+                await queue.put((msg_type,))
+            else:
+                logger.warning(f"Client {session.id}: unknown message type: {msg_type}")
+        elif msg.type == WSMsgType.ERROR:
+            logger.error(f"Client {session.id} WebSocket error: {session.websocket.exception()}")
+
+    async def _continuous_session_worker(self, session: ASRSession) -> None:
+        """Process continuous-mode events in arrival order."""
+        queue = session.continuous_event_queue
+        if queue is None:
+            return
+
+        while True:
+            event = await queue.get()
+            should_stop = event[0] == "close"
+            try:
+                event_type = event[0]
+
+                async with session.state_lock:
+                    if event_type == "close":
+                        await self._continuous_handle_close_locked(session)
+                    elif event_type == "audio":
+                        await self._continuous_handle_audio_locked(session, event[1])
+                    elif event_type == "vad_start":
+                        await self._continuous_handle_vad_start_locked(session)
+                    elif event_type == "vad_stop":
+                        await self._continuous_handle_vad_stop_locked(session)
+                    elif event_type == "reset":
+                        await self._continuous_handle_reset_locked(
+                            session,
+                            finalize=event[1],
+                            msg_type=event[2],
+                        )
+                    elif event_type == "debounce_expired":
+                        await self._continuous_handle_debounce_expired_locked(
+                            session,
+                            stop_seq=event[1],
+                        )
+                    else:
+                        logger.warning(
+                            f"Session {session.id}: unknown continuous event {event_type}"
+                        )
+            except Exception as e:
+                logger.error(f"Session {session.id} continuous worker error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                try:
+                    await session.websocket.send_str(json.dumps({
+                        "type": "error",
+                        "message": str(e)
+                    }))
+                except Exception:
+                    pass
+            finally:
+                queue.task_done()
+                if should_stop:
+                    return
+
+    async def _close_continuous_session(self, session: ASRSession) -> None:
+        """Drain pending finalization through the worker and stop continuous mode."""
+        queue = session.continuous_event_queue
+        worker = session.continuous_worker_task
+        if queue is not None and worker is not None and not worker.done():
+            await queue.put(("close",))
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker
+
+        task = session.continuous_debounce_task
+        session.continuous_debounce_task = None
+        session.continuous_stop_seq += 1
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        session.continuous_event_queue = None
+        session.continuous_worker_task = None
+        session.continuous_post_stop_audio.clear()
+
+    async def _continuous_debounce_timer(self, session_id: str, stop_seq: int) -> None:
+        """Wake after server-side silence and enqueue a finalize decision."""
+        try:
+            await asyncio.sleep(self.finalize_silence_seconds)
+            session = self.sessions.get(session_id)
+            if session is None or session.continuous_event_queue is None:
+                return
+            await session.continuous_event_queue.put(("debounce_expired", stop_seq))
+        except asyncio.CancelledError:
+            pass
+
+    async def _continuous_cancel_debounce_locked(
+        self,
+        session: ASRSession,
+        *,
+        invalidate: bool,
+    ) -> None:
+        task = session.continuous_debounce_task
+        session.continuous_debounce_task = None
+        if invalidate:
+            session.continuous_stop_seq += 1
+
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def _continuous_handle_audio_locked(
+        self,
+        session: ASRSession,
+        audio_bytes: bytes,
+    ) -> None:
+        if session.continuous_state == PENDING_FINALIZE:
+            session.continuous_post_stop_audio.extend(audio_bytes)
+            if DEBUG_ASR:
+                samples = len(session.continuous_post_stop_audio) // 2
+                logger.debug(
+                    f"Session {session.id}: held {len(audio_bytes)}B post-vad_stop "
+                    f"audio ({samples} total samples) while pending finalize"
+                )
+            return
+
+        await self._handle_audio_locked(session, audio_bytes)
+
+    async def _continuous_flush_post_stop_audio_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        if not session.continuous_post_stop_audio:
+            return
+
+        audio_bytes = bytes(session.continuous_post_stop_audio)
+        session.continuous_post_stop_audio.clear()
+        samples = len(audio_bytes) // 2
+        logger.debug(
+            f"Session {session.id}: flushing {samples} post-vad_stop samples "
+            f"for {reason}"
+        )
+        await self._handle_audio_locked(session, audio_bytes)
+
+    def _continuous_discard_post_stop_audio_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        if not session.continuous_post_stop_audio:
+            return
+
+        samples = len(session.continuous_post_stop_audio) // 2
+        session.continuous_post_stop_audio.clear()
+        logger.debug(
+            f"Session {session.id}: discarded {samples} post-vad_stop samples "
+            f"at true boundary ({reason})"
+        )
+
+    async def _continuous_force_finalize_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+        include_post_stop_audio: bool,
+    ) -> None:
+        await self._continuous_cancel_debounce_locked(session, invalidate=True)
+        if include_post_stop_audio:
+            await self._continuous_flush_post_stop_audio_locked(session, reason=reason)
+        else:
+            self._continuous_discard_post_stop_audio_locked(session, reason=reason)
+
+        if not self._continuous_has_audio_or_text(session):
+            session.continuous_state = STREAMING
+            session.continuous_reset_seen = False
+            logger.debug(
+                f"Session {session.id}: ignored empty forced continuous finalize "
+                f"for {reason}"
+            )
+            return
+
+        session.continuous_state = FINALIZED
+        logger.debug(f"Session {session.id}: forced continuous finalize for {reason}")
+        await self._continuous_finalize_and_reset_locked(session, reason=reason)
+
+    async def _continuous_handle_close_locked(self, session: ASRSession) -> None:
+        if (
+            session.continuous_state == PENDING_FINALIZE
+            or self._continuous_has_audio_or_text(session)
+            or session.continuous_post_stop_audio
+        ):
+            await self._continuous_force_finalize_locked(
+                session,
+                reason="close",
+                include_post_stop_audio=True,
+            )
+            return
+
+        logger.debug(
+            f"Session {session.id}: continuous close with no pending final"
+        )
+
+    async def _continuous_handle_vad_start_locked(self, session: ASRSession) -> None:
+        if session.continuous_state == PENDING_FINALIZE:
+            await self._continuous_cancel_debounce_locked(session, invalidate=True)
+            session.continuous_state = STREAMING
+            session.continuous_reset_seen = False
+            logger.debug(
+                f"Session {session.id}: vad_start canceled pending finalize; "
+                "continuing same ASR context"
+            )
+            await self._continuous_flush_post_stop_audio_locked(
+                session,
+                reason="vad_start",
+            )
+        else:
+            logger.debug(
+                f"Session {session.id}: vad_start in state={session.continuous_state}"
+            )
+
+    async def _continuous_handle_vad_stop_locked(self, session: ASRSession) -> None:
+        await self._continuous_cancel_debounce_locked(session, invalidate=False)
+        session.continuous_stop_seq += 1
+        stop_seq = session.continuous_stop_seq
+        session.continuous_state = PENDING_FINALIZE
+        session.continuous_reset_seen = False
+        session.continuous_debounce_task = asyncio.create_task(
+            self._continuous_debounce_timer(session.id, stop_seq),
+            name=f"nemotron-continuous-debounce-{session.id}-{stop_seq}",
+        )
+        logger.debug(
+            f"Session {session.id}: vad_stop armed pending finalize seq={stop_seq} "
+            f"({self.finalize_silence_ms}ms)"
+        )
+
+    async def _continuous_handle_reset_locked(
+        self,
+        session: ASRSession,
+        *,
+        finalize: bool,
+        msg_type: str,
+    ) -> None:
+        if not finalize:
+            text = session.current_text
+            await session.websocket.send_str(json.dumps({
+                "type": "transcript",
+                "text": text,
+                "is_final": True,
+                "finalize": False
+            }))
+            logger.debug(
+                f"Session {session.id}: continuous soft reset: "
+                f"'{text[-50:] if len(text) > 50 else text}'"
+            )
+            return
+
+        if session.continuous_state == PENDING_FINALIZE:
+            session.continuous_reset_seen = True
+            if msg_type == "end":
+                await self._continuous_force_finalize_locked(
+                    session,
+                    reason=msg_type,
+                    include_post_stop_audio=True,
+                )
+                return
+
+            logger.debug(
+                f"Session {session.id}: delayed client {msg_type} while "
+                "server debounce is pending"
+            )
+            return
+
+        if self._continuous_has_audio_or_text(session):
+            logger.debug(
+                f"Session {session.id}: immediate continuous {msg_type} without "
+                "pending VAD stop"
+            )
+            await self._continuous_force_finalize_locked(
+                session,
+                reason=msg_type,
+                include_post_stop_audio=True,
+            )
+            return
+
+        logger.debug(
+            f"Session {session.id}: ignored empty continuous {msg_type} in "
+            f"state={session.continuous_state}"
+        )
+
+    async def _continuous_handle_debounce_expired_locked(
+        self,
+        session: ASRSession,
+        *,
+        stop_seq: int,
+    ) -> None:
+        if (
+            session.continuous_state != PENDING_FINALIZE
+            or stop_seq != session.continuous_stop_seq
+        ):
+            logger.debug(
+                f"Session {session.id}: ignored stale debounce expiry "
+                f"seq={stop_seq} current={session.continuous_stop_seq} "
+                f"state={session.continuous_state}"
+            )
+            return
+
+        session.continuous_debounce_task = None
+        reset_seen = session.continuous_reset_seen
+        session.continuous_reset_seen = False
+        session.continuous_state = FINALIZED
+        logger.debug(
+            f"Session {session.id}: debounce expired seq={stop_seq}; "
+            f"finalizing (reset_seen={reset_seen})"
+        )
+        await self._continuous_finalize_and_reset_locked(
+            session,
+            reason="reset_then_debounce" if reset_seen else "debounce_expired",
+        )
+
+    def _continuous_has_audio_or_text(self, session: ASRSession) -> bool:
+        pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
+        return bool(session.current_text) or session.total_audio_samples > 0 or pending_len > 0
+
+    async def _continuous_finalize_and_reset_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        """Finalize once using the existing in-place padded final chunk path."""
+        import time
+
+        audio_samples = session.total_audio_samples
+        audio_duration_ms = (audio_samples * 1000) // self.sample_rate
+        pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
+        held_len = len(session.continuous_post_stop_audio) // 2
+        logger.debug(
+            f"Session {session.id} continuous finalize ({reason}): "
+            f"audio={audio_samples} samples ({audio_duration_ms}ms), "
+            f"pending={pending_len} samples, held_post_stop={held_len} samples, "
+            f"emitted={session.emitted_frames} frames"
+        )
+
+        original_audio_length = session.total_audio_samples
+        if original_audio_length > 0:
+            padding_samples = self.final_padding_frames * self.hop_samples
+            silence_padding = np.zeros(padding_samples, dtype=np.float32)
+            session.pending_audio = np.concatenate([session.pending_audio, silence_padding])
+            session.accumulated_audio = session.pending_audio
+
+        final_text = session.current_text
+        if session.pending_audio is not None and len(session.pending_audio) > 0:
+            start_time = time.perf_counter()
+            async with self.inference_lock:
+                text = await asyncio.get_event_loop().run_in_executor(
+                    None, self._process_final_chunk, session
+                )
+                if text is not None:
+                    final_text = text
+                    session.current_text = text
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"Session {session.id} continuous final chunk processed in "
+                f"{elapsed_ms:.1f}ms: "
+                f"'{final_text[-50:] if len(final_text) > 50 else final_text}'"
+            )
+
+        if final_text.startswith(session.committed_text):
+            delta_text = final_text[len(session.committed_text):].lstrip()
+        else:
+            delta_text = final_text
+            logger.debug(
+                f"Session {session.id}: continuous ASR correction detected, "
+                f"committed='{session.committed_text[-30:]}', "
+                f"new='{final_text[-30:]}'"
+            )
+
+        session.committed_text = final_text
+        session.last_emitted_text = final_text
+
+        if delta_text:
+            try:
+                await session.websocket.send_str(json.dumps({
+                    "type": "transcript",
+                    "text": delta_text,
+                    "is_final": True,
+                    "finalize": True
+                }))
+                logger.debug(
+                    f"Session {session.id} continuous final: delta='{delta_text}' "
+                    f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}')"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Session {session.id}: failed to send continuous final "
+                    f"for {reason}: {e}"
+                )
+        else:
+            logger.debug(
+                f"Session {session.id}: suppressed empty/duplicate continuous final "
+                f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}')"
+            )
+
+        # True utterance boundary: now it is safe to cold-reset the ASR state.
+        session.committed_text = ""
+        session.last_emitted_text = ""
+        session.overlap_buffer = None
+        session.continuous_post_stop_audio.clear()
+        session.continuous_reset_seen = False
+        session.continuous_stop_seq += 1
+        self._init_session(session)
+        session.continuous_state = STREAMING
+
+        logger.debug(
+            f"Session {session.id}: continuous true-boundary reset complete"
+        )
+
     async def _handle_audio(self, session: ASRSession, audio_bytes: bytes):
+        """Accumulate audio and process when enough frames available."""
+        await self._handle_audio_locked(session, audio_bytes)
+
+    async def _handle_audio_locked(self, session: ASRSession, audio_bytes: bytes):
         """Accumulate audio and process when enough frames available."""
         audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 

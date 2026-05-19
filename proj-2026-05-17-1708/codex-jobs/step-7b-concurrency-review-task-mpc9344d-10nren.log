@@ -1,0 +1,134 @@
+[2026-05-19T06:27:04.480Z] Starting Codex Task.
+[2026-05-19T06:27:06.874Z] Starting Codex task thread.
+[2026-05-19T06:27:06.930Z] Thread ready (019e3eea-aa13-7ae0-b1df-5b3f14568429).
+[2026-05-19T06:27:06.943Z] Turn started (019e3eea-aa3e-7260-8a40-2c377f5fbf16).
+[2026-05-19T06:27:20.282Z] Assistant message captured: I’ll keep this strictly read-only: diff and surrounding source only, plus the relevant PLAN s...
+
+[2026-05-19T06:27:20.282Z] Assistant message
+I’ll keep this strictly read-only: diff and surrounding source only, plus the relevant PLAN sections. I’m going to trace the continuous event paths against the actual lock/queue behavior rather than trusting the summary.
+[2026-05-19T06:27:20.320Z] Running command: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py'
+[2026-05-19T06:27:20.330Z] Running command: /bin/bash -lc 'rg -n "Step 7b|Step 7c|Step 7d|Rules|global inference_lock|per-session control...
+[2026-05-19T06:27:20.330Z] Command failed: /bin/bash -lc 'rg -n "Step 7b|Step 7c|Step 7d|Rules|global inference_lock|per-session control... (exit 2)
+[2026-05-19T06:27:20.330Z] Command completed: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T06:27:20.330Z] Running command: /bin/bash -lc 'rg -n "continuous|inference_lock|state_lock|_handle_audio|_process_final_chunk...
+[2026-05-19T06:27:20.330Z] Command completed: /bin/bash -lc 'rg -n "continuous|inference_lock|state_lock|_handle_audio|_process_final_chunk... (exit 0)
+[2026-05-19T06:27:29.817Z] Assistant message captured: PLAN.md isn’t at the repo root, so I’m locating it before using it. The first diff pass confi...
+
+[2026-05-19T06:27:29.817Z] Assistant message
+PLAN.md isn’t at the repo root, so I’m locating it before using it. The first diff pass confirms the new path wraps websocket messages into a per-session queue, but the worker holds `state_lock` across awaits, including inference, so I’m reading the full surrounding code before calling that safe or unsafe.
+[2026-05-19T06:27:29.850Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1,180p'"
+[2026-05-19T06:27:29.850Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1,180p'" (exit 0)
+[2026-05-19T06:27:29.857Z] Running command: /bin/bash -lc "rg --files -g 'PLAN.md' -g '*PLAN*'"
+[2026-05-19T06:27:29.857Z] Command completed: /bin/bash -lc "rg --files -g 'PLAN.md' -g '*PLAN*'" (exit 0)
+[2026-05-19T06:27:29.862Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '430,900p'"
+[2026-05-19T06:27:29.862Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '430,900p'" (exit 0)
+[2026-05-19T06:27:29.864Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '900,1215p'"
+[2026-05-19T06:27:29.864Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '900,1215p'" (exit 0)
+[2026-05-19T06:27:37.227Z] Running command: /bin/bash -lc "nl -ba pipecat_bots/PLAN.md | sed -n '1,260p'"
+[2026-05-19T06:27:37.227Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1215,1295p'"
+[2026-05-19T06:27:37.227Z] Command completed: /bin/bash -lc "nl -ba pipecat_bots/PLAN.md | sed -n '1,260p'" (exit 0)
+[2026-05-19T06:27:37.227Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1215,1295p'" (exit 0)
+[2026-05-19T06:27:37.231Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '1,260p'"
+[2026-05-19T06:27:37.231Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '1,260p'" (exit 0)
+[2026-05-19T06:27:37.240Z] Running command: /bin/bash -lc 'git diff --numstat -- src/nemotron_speech/server.py && git diff --check -- src...
+[2026-05-19T06:27:37.249Z] Command completed: /bin/bash -lc 'git diff --numstat -- src/nemotron_speech/server.py && git diff --check -- src... (exit 0)
+[2026-05-19T06:27:43.645Z] Running command: /bin/bash -lc 'rg -n "7b|7c|7d|Step 7b|Step 7c|Step 7d|fork|continuous|debounce|global infere...
+[2026-05-19T06:27:43.657Z] Command completed: /bin/bash -lc 'rg -n "7b|7c|7d|Step 7b|Step 7c|Step 7d|fork|continuous|debounce|global infere... (exit 0)
+[2026-05-19T06:27:43.657Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '520,760p'"
+[2026-05-19T06:27:43.657Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '520,760p'" (exit 0)
+[2026-05-19T06:27:43.658Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '760,980p'"
+[2026-05-19T06:27:43.658Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '760,980p'" (exit 0)
+[2026-05-19T06:27:46.169Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '440,510p'"
+[2026-05-19T06:27:46.170Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-17-1708/PLAN.md | sed -n '440,510p'" (exit 0)
+[2026-05-19T06:27:54.868Z] Assistant message captured: The plan text matches the risk area: Step 7b explicitly requires audio, VAD controls, timer e...
+
+[2026-05-19T06:27:54.868Z] Assistant message
+The plan text matches the risk area: Step 7b explicitly requires audio, VAD controls, timer expiry, and reset to be ordered per session because `inference_lock` alone is insufficient. I’m now checking whether the added worker satisfies that contract under disconnect and pending-finalize cases, not just the happy path.
+[2026-05-19T06:27:54.902Z] Running command: /bin/bash -lc "rg -n \"vad_start|vad_stop|reset|end|finalize|confirm_finalize|request_finaliz...
+[2026-05-19T06:27:54.902Z] Command completed: /bin/bash -lc "rg -n \"vad_start|vad_stop|reset|end|finalize|confirm_finalize|request_finaliz... (exit 0)
+[2026-05-19T06:27:54.913Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '1,280p'"
+[2026-05-19T06:27:54.913Z] Running command: /bin/bash -lc 'git diff -U80 -- src/nemotron_speech/server.py'
+[2026-05-19T06:27:54.914Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '1,280p'" (exit 0)
+[2026-05-19T06:27:54.914Z] Command completed: /bin/bash -lc 'git diff -U80 -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T06:28:01.016Z] Running command: /bin/bash -lc 'rg -n "def _init_session|final_padding_frames|drop_extra|shift_frames|preproce...
+[2026-05-19T06:28:01.016Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '280,500p'"
+[2026-05-19T06:28:01.016Z] Command completed: /bin/bash -lc 'rg -n "def _init_session|final_padding_frames|drop_extra|shift_frames|preproce... (exit 0)
+[2026-05-19T06:28:01.016Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '280,500p'" (exit 0)
+[2026-05-19T06:28:01.028Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '300,425p'"
+[2026-05-19T06:28:01.028Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '300,425p'" (exit 0)
+[2026-05-19T06:28:21.830Z] Running command: /bin/bash -lc 'rg -n "continuous_reset_seen" src/nemotron_speech/server.py'
+[2026-05-19T06:28:21.831Z] Command completed: /bin/bash -lc 'rg -n "continuous_reset_seen" src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T06:31:12.527Z] Running command: /bin/bash -lc "rg -n \"async with (session\\.state_lock|self\\.inference_lock)|state_lock|_cl...
+[2026-05-19T06:31:12.527Z] Command completed: /bin/bash -lc "rg -n \"async with (session\\.state_lock|self\\.inference_lock)|state_lock|_cl... (exit 0)
+[2026-05-19T06:31:12.529Z] Running command: /bin/bash -lc "rg -n \"queue\\.put|queue\\.get|WSMsgType\\.BINARY|WSMsgType\\.TEXT|debounce_e...
+[2026-05-19T06:31:12.529Z] Command completed: /bin/bash -lc "rg -n \"queue\\.put|queue\\.get|WSMsgType\\.BINARY|WSMsgType\\.TEXT|debounce_e... (exit 0)
+[2026-05-19T06:31:12.533Z] Running command: /bin/bash -lc "rg -n \"async with self\\.inference_lock|async with session\\.state_lock|state...
+[2026-05-19T06:31:12.533Z] Command completed: /bin/bash -lc "rg -n \"async with self\\.inference_lock|async with session\\.state_lock|state... (exit 0)
+[2026-05-19T06:32:53.145Z] Assistant message captured: Read-only review only; no edits, no server/test/benchmark runs. **Findings** 1. **Blocker: de...
+
+[2026-05-19T06:32:53.145Z] Assistant message
+Read-only review only; no edits, no server/test/benchmark runs.
+
+**Findings**
+
+1. **Blocker: delayed reset/end is write-only, so pending finals can be lost or emitted unarmed.**  
+   In PENDING_FINALIZE, reset/end only sets `continuous_reset_seen=True` and returns: [server.py:721](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:721). That flag is never read; `rg` shows only writes/resets.
+
+   Interleaving: `vad_stop` arms debounce seq k at [server.py:685](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:685), client reset/end arrives and is “delayed”, then disconnect/EndFrame closes before debounce expiry. `_close_continuous_session` queues `"close"` and waits for the worker at [server.py:628](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:628); the worker exits on `"close"` at [server.py:585](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:585); then close cancels the debounce task at [server.py:633](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:633). Result: 0 finals.
+
+   Related short-debounce race: debounce expiry can finalize at [server.py:763](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:763) before the client reset/request has arrived; the later reset sees an empty STREAMING session and is ignored at [server.py:729](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:729). Fix: make reset/end a real part of the state machine. Track “final requested” and “debounce elapsed”; emit only when both are satisfied, or make `vad_stop` itself the finalize request. Treat `end`/disconnect-with-pending-request as a force-finalize path before closing.
+
+2. **Major: resumed audio can be processed while PENDING_FINALIZE without cancelling the pending debounce.**  
+   Audio is dispatched directly to `_handle_audio_locked` regardless of continuous state at [server.py:588](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:588). Only `vad_start` cancels the debounce at [server.py:671](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:671). If new-speech audio arrives before/delayed ahead of `vad_start`, `_handle_audio_locked` appends/processes it at [server.py:874](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:874), but seq/state still allow the old debounce to finalize at [server.py:752](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:752). Result: early final containing the next utterance prefix, then later another final or word loss after reset. Fix: enforce `vad_start` before resumed audio at protocol level, or make the server’s audio handler state-aware so post-stop resumed speech invalidates the pending final.
+
+**Deadlock Analysis**
+
+No `state_lock` ↔ `inference_lock` deadlock found. The only continuous lock order is `state_lock` then `inference_lock`: worker takes `state_lock` at [server.py:588](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:588), then audio/finalize may take `inference_lock` at [server.py:883](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:883) or [server.py:805](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:805). I found no path that holds `inference_lock` and then awaits `state_lock`; connect/default reset take only `inference_lock`. There are awaits while holding `state_lock`, but they cause head-of-line blocking, not a lock cycle.
+
+**Emit-Once**
+
+Can be 0 finals: the pending reset/end + close path above; also empty/duplicate finals are suppressed at [server.py:832](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:832) and the session is still reset. I do not see a pure stale-timer double-final: `stop_seq` invalidation and state checks at [server.py:752](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:752) are mostly airtight. Two semantic finals are still possible through the “audio before `vad_start`” interleaving.
+
+**Audio Queue**
+
+Binary audio is funneled through the continuous queue: [server.py:486](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:486), [server.py:555](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:555), then processed by the single worker. I found no binary bypass of the queue in `NEMOTRON_CONTINUOUS=1`.
+
+**Default Preservation / Cleanup**
+
+Env-unset/default path appears preserved: continuous worker starts only behind [server.py:479](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:479), messages bypass only behind [server.py:486](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:486), close cleanup only behind [server.py:529](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:529). Cleanup cancels worker/debounce tasks, but the same cleanup is also the lost-final path.
+
+Verdict: **not SAFE to run the multi-hour full-1000 7b measured run as-is; fold the pending reset/end state-machine fixes first.**
+[2026-05-19T06:32:53.164Z] Turn completed.
+
+[2026-05-19T06:32:53.196Z] Final output
+Read-only review only; no edits, no server/test/benchmark runs.
+
+**Findings**
+
+1. **Blocker: delayed reset/end is write-only, so pending finals can be lost or emitted unarmed.**  
+   In PENDING_FINALIZE, reset/end only sets `continuous_reset_seen=True` and returns: [server.py:721](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:721). That flag is never read; `rg` shows only writes/resets.
+
+   Interleaving: `vad_stop` arms debounce seq k at [server.py:685](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:685), client reset/end arrives and is “delayed”, then disconnect/EndFrame closes before debounce expiry. `_close_continuous_session` queues `"close"` and waits for the worker at [server.py:628](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:628); the worker exits on `"close"` at [server.py:585](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:585); then close cancels the debounce task at [server.py:633](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:633). Result: 0 finals.
+
+   Related short-debounce race: debounce expiry can finalize at [server.py:763](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:763) before the client reset/request has arrived; the later reset sees an empty STREAMING session and is ignored at [server.py:729](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:729). Fix: make reset/end a real part of the state machine. Track “final requested” and “debounce elapsed”; emit only when both are satisfied, or make `vad_stop` itself the finalize request. Treat `end`/disconnect-with-pending-request as a force-finalize path before closing.
+
+2. **Major: resumed audio can be processed while PENDING_FINALIZE without cancelling the pending debounce.**  
+   Audio is dispatched directly to `_handle_audio_locked` regardless of continuous state at [server.py:588](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:588). Only `vad_start` cancels the debounce at [server.py:671](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:671). If new-speech audio arrives before/delayed ahead of `vad_start`, `_handle_audio_locked` appends/processes it at [server.py:874](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:874), but seq/state still allow the old debounce to finalize at [server.py:752](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:752). Result: early final containing the next utterance prefix, then later another final or word loss after reset. Fix: enforce `vad_start` before resumed audio at protocol level, or make the server’s audio handler state-aware so post-stop resumed speech invalidates the pending final.
+
+**Deadlock Analysis**
+
+No `state_lock` ↔ `inference_lock` deadlock found. The only continuous lock order is `state_lock` then `inference_lock`: worker takes `state_lock` at [server.py:588](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:588), then audio/finalize may take `inference_lock` at [server.py:883](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:883) or [server.py:805](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:805). I found no path that holds `inference_lock` and then awaits `state_lock`; connect/default reset take only `inference_lock`. There are awaits while holding `state_lock`, but they cause head-of-line blocking, not a lock cycle.
+
+**Emit-Once**
+
+Can be 0 finals: the pending reset/end + close path above; also empty/duplicate finals are suppressed at [server.py:832](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:832) and the session is still reset. I do not see a pure stale-timer double-final: `stop_seq` invalidation and state checks at [server.py:752](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:752) are mostly airtight. Two semantic finals are still possible through the “audio before `vad_start`” interleaving.
+
+**Audio Queue**
+
+Binary audio is funneled through the continuous queue: [server.py:486](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:486), [server.py:555](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:555), then processed by the single worker. I found no binary bypass of the queue in `NEMOTRON_CONTINUOUS=1`.
+
+**Default Preservation / Cleanup**
+
+Env-unset/default path appears preserved: continuous worker starts only behind [server.py:479](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:479), messages bypass only behind [server.py:486](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:486), close cleanup only behind [server.py:529](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:529). Cleanup cancels worker/debounce tasks, but the same cleanup is also the lost-final path.
+
+Verdict: **not SAFE to run the multi-hour full-1000 7b measured run as-is; fold the pending reset/end state-machine fixes first.**
