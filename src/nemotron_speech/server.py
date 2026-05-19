@@ -2,7 +2,9 @@
 
 import asyncio
 import argparse
+import copy
 import contextlib
+import dataclasses
 import hashlib
 import json
 import os
@@ -40,6 +42,190 @@ def _hash_audio(audio: np.ndarray) -> str:
     if audio is None or len(audio) == 0:
         return "empty"
     return hashlib.md5(audio.tobytes()).hexdigest()[:8]
+
+
+def tensor_clone(tensor: torch.Tensor) -> torch.Tensor:
+    return tensor.detach().clone()
+
+
+def clone_tree(obj: Any, memo: Optional[dict[int, Any]] = None) -> Any:
+    """Tensor-aware deepcopy for disposable ASR fork state."""
+    if memo is None:
+        memo = {}
+
+    oid = id(obj)
+    if oid in memo:
+        return memo[oid]
+
+    if torch.is_tensor(obj):
+        return tensor_clone(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.copy()
+    if obj is None or isinstance(obj, (str, bytes, int, float, bool)):
+        return obj
+    if isinstance(obj, list):
+        cloned_list: list[Any] = []
+        memo[oid] = cloned_list
+        cloned_list.extend(clone_tree(item, memo) for item in obj)
+        return cloned_list
+    if isinstance(obj, tuple):
+        placeholder: list[Any] = []
+        memo[oid] = placeholder
+        cloned_tuple = tuple(clone_tree(item, memo) for item in obj)
+        memo[oid] = cloned_tuple
+        return cloned_tuple
+    if isinstance(obj, dict):
+        cloned_dict: dict[Any, Any] = {}
+        memo[oid] = cloned_dict
+        for key, value in obj.items():
+            cloned_dict[clone_tree(key, memo)] = clone_tree(value, memo)
+        return cloned_dict
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        cloned_obj = copy.copy(obj)
+        memo[oid] = cloned_obj
+        for field in dataclasses.fields(obj):
+            setattr(cloned_obj, field.name, clone_tree(getattr(obj, field.name), memo))
+        return cloned_obj
+
+    # Some NeMo helper objects may live inside optional fields. Avoid copying
+    # modules or other heavy objects; copy plain object state only when present.
+    if hasattr(obj, "__dict__") and obj.__class__.__module__.startswith("nemo."):
+        cloned_obj = copy.copy(obj)
+        memo[oid] = cloned_obj
+        for key, value in vars(obj).items():
+            setattr(cloned_obj, key, clone_tree(value, memo))
+        return cloned_obj
+
+    try:
+        return copy.deepcopy(obj, memo)
+    except Exception:
+        return obj
+
+
+def clone_hypotheses_deep(previous_hypotheses: Any) -> Any:
+    """Deep-copy each Hypothesis and recursively clone all tensor fields."""
+    if previous_hypotheses is None:
+        return None
+    return [clone_tree(hyp) for hyp in previous_hypotheses]
+
+
+def _tensor_assert_hash(tensor: torch.Tensor) -> str:
+    cpu_tensor = tensor.detach().cpu().contiguous()
+    digest = hashlib.md5()
+    digest.update(str(tuple(cpu_tensor.shape)).encode("utf-8"))
+    digest.update(str(cpu_tensor.dtype).encode("utf-8"))
+    digest.update(cpu_tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()[:12]
+
+
+def _array_assert_hash(array: np.ndarray) -> str:
+    contiguous = np.ascontiguousarray(array)
+    digest = hashlib.md5()
+    digest.update(str(contiguous.shape).encode("utf-8"))
+    digest.update(str(contiguous.dtype).encode("utf-8"))
+    digest.update(contiguous.tobytes())
+    return digest.hexdigest()[:12]
+
+
+def _assert_tree_equal(label: str, before: Any, after: Any) -> None:
+    if torch.is_tensor(before) or torch.is_tensor(after):
+        if not (torch.is_tensor(before) and torch.is_tensor(after)):
+            raise AssertionError(f"{label}: tensor/non-tensor mismatch")
+        same_meta = (
+            tuple(before.shape) == tuple(after.shape)
+            and before.dtype == after.dtype
+            and before.device == after.device
+        )
+        same_bytes = same_meta and torch.equal(before, after)
+        if not same_bytes:
+            raise AssertionError(
+                f"{label}: tensor changed "
+                f"before(shape={tuple(before.shape)}, dtype={before.dtype}, "
+                f"device={before.device}, hash={_tensor_assert_hash(before)}) "
+                f"after(shape={tuple(after.shape)}, dtype={after.dtype}, "
+                f"device={after.device}, hash={_tensor_assert_hash(after)})"
+            )
+        return
+
+    if isinstance(before, np.ndarray) or isinstance(after, np.ndarray):
+        if not (isinstance(before, np.ndarray) and isinstance(after, np.ndarray)):
+            raise AssertionError(f"{label}: ndarray/non-ndarray mismatch")
+        if (
+            before.shape != after.shape
+            or before.dtype != after.dtype
+            or not np.array_equal(before, after)
+        ):
+            raise AssertionError(
+                f"{label}: ndarray changed "
+                f"before(shape={before.shape}, dtype={before.dtype}, "
+                f"hash={_array_assert_hash(before)}) "
+                f"after(shape={after.shape}, dtype={after.dtype}, "
+                f"hash={_array_assert_hash(after)})"
+            )
+        return
+
+    if before is None or after is None or isinstance(before, (str, bytes, int, float, bool)):
+        if before != after:
+            raise AssertionError(f"{label}: value changed from {before!r} to {after!r}")
+        return
+
+    if isinstance(before, list) or isinstance(after, list):
+        if not (isinstance(before, list) and isinstance(after, list)):
+            raise AssertionError(f"{label}: list/non-list mismatch")
+        if len(before) != len(after):
+            raise AssertionError(f"{label}: list length changed {len(before)} -> {len(after)}")
+        for index, (before_item, after_item) in enumerate(zip(before, after)):
+            _assert_tree_equal(f"{label}[{index}]", before_item, after_item)
+        return
+
+    if isinstance(before, tuple) or isinstance(after, tuple):
+        if not (isinstance(before, tuple) and isinstance(after, tuple)):
+            raise AssertionError(f"{label}: tuple/non-tuple mismatch")
+        if len(before) != len(after):
+            raise AssertionError(f"{label}: tuple length changed {len(before)} -> {len(after)}")
+        for index, (before_item, after_item) in enumerate(zip(before, after)):
+            _assert_tree_equal(f"{label}[{index}]", before_item, after_item)
+        return
+
+    if isinstance(before, dict) or isinstance(after, dict):
+        if not (isinstance(before, dict) and isinstance(after, dict)):
+            raise AssertionError(f"{label}: dict/non-dict mismatch")
+        if before.keys() != after.keys():
+            raise AssertionError(f"{label}: dict keys changed")
+        for key in before:
+            _assert_tree_equal(f"{label}[{key!r}]", before[key], after[key])
+        return
+
+    before_is_dataclass = dataclasses.is_dataclass(before) and not isinstance(before, type)
+    after_is_dataclass = dataclasses.is_dataclass(after) and not isinstance(after, type)
+    if before_is_dataclass or after_is_dataclass:
+        if not (before_is_dataclass and after_is_dataclass and before.__class__ is after.__class__):
+            raise AssertionError(f"{label}: dataclass type changed")
+        for field in dataclasses.fields(before):
+            _assert_tree_equal(
+                f"{label}.{field.name}",
+                getattr(before, field.name),
+                getattr(after, field.name),
+            )
+        return
+
+    before_is_nemo_obj = hasattr(before, "__dict__") and before.__class__.__module__.startswith("nemo.")
+    after_is_nemo_obj = hasattr(after, "__dict__") and after.__class__.__module__.startswith("nemo.")
+    if before_is_nemo_obj or after_is_nemo_obj:
+        if not (before_is_nemo_obj and after_is_nemo_obj and before.__class__ is after.__class__):
+            raise AssertionError(f"{label}: NeMo object type changed")
+        if vars(before).keys() != vars(after).keys():
+            raise AssertionError(f"{label}: NeMo object fields changed")
+        for key in vars(before):
+            _assert_tree_equal(f"{label}.{key}", getattr(before, key), getattr(after, key))
+        return
+
+    try:
+        equal = before == after
+    except Exception:
+        equal = repr(before) == repr(after)
+    if not equal:
+        raise AssertionError(f"{label}: object changed from {before!r} to {after!r}")
 
 # Default model - HuggingFace model name (auto-downloads) or local .nemo path
 DEFAULT_MODEL = "nvidia/nemotron-speech-streaming-en-0.6b"
@@ -143,6 +329,7 @@ class ASRServer:
         self.inference_lock = asyncio.Lock()
 
         self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
+        self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
         self.finalize_silence_ms = _DEFAULT_FINALIZE_SILENCE_MS
         if self.continuous_context:
             self.finalize_silence_ms = _env_int(
@@ -888,13 +1075,116 @@ class ASRServer:
         pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
         return bool(session.current_text) or session.total_audio_samples > 0 or pending_len > 0
 
+    def _build_continuous_finalize_fork(self, session: ASRSession) -> ASRSession:
+        """Create a disposable fork for final padding without touching parent state."""
+        pending_audio = (
+            session.pending_audio.copy()
+            if session.pending_audio is not None
+            else np.array([], dtype=np.float32)
+        )
+        padding_samples = 0
+        if session.total_audio_samples > 0:
+            padding_samples = self.final_padding_frames * self.hop_samples
+            silence_padding = np.zeros(padding_samples, dtype=np.float32)
+            pending_audio = np.concatenate([pending_audio, silence_padding])
+
+        fork = ASRSession(id=f"{session.id}:fork", websocket=None)
+        fork.pending_audio = pending_audio
+        fork.accumulated_audio = fork.pending_audio
+        fork.total_audio_samples = session.total_audio_samples + padding_samples
+        fork.raw_audio_ring = (
+            session.raw_audio_ring.copy()
+            if session.raw_audio_ring is not None
+            else np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
+        )
+        fork.mel_frame_ring = clone_tree(session.mel_frame_ring)
+        fork.emitted_frames = session.emitted_frames
+        fork.cache_last_channel = (
+            tensor_clone(session.cache_last_channel)
+            if session.cache_last_channel is not None
+            else None
+        )
+        fork.cache_last_time = (
+            tensor_clone(session.cache_last_time)
+            if session.cache_last_time is not None
+            else None
+        )
+        fork.cache_last_channel_len = (
+            tensor_clone(session.cache_last_channel_len)
+            if session.cache_last_channel_len is not None
+            else None
+        )
+        fork.previous_hypotheses = clone_hypotheses_deep(session.previous_hypotheses)
+        fork.pred_out_stream = clone_tree(session.pred_out_stream)
+        fork.current_text = session.current_text
+        fork.last_emitted_text = session.last_emitted_text
+        fork.committed_text = session.committed_text
+        return fork
+
+    def _snapshot_fork_assert_parent(self, session: ASRSession) -> dict[str, Any]:
+        return {
+            "cache_last_channel": (
+                tensor_clone(session.cache_last_channel)
+                if session.cache_last_channel is not None
+                else None
+            ),
+            "cache_last_time": (
+                tensor_clone(session.cache_last_time)
+                if session.cache_last_time is not None
+                else None
+            ),
+            "cache_last_channel_len": (
+                tensor_clone(session.cache_last_channel_len)
+                if session.cache_last_channel_len is not None
+                else None
+            ),
+            "previous_hypotheses": clone_hypotheses_deep(session.previous_hypotheses),
+        }
+
+    def _assert_fork_flush_parent_unchanged(
+        self,
+        session: ASRSession,
+        snapshot: dict[str, Any],
+    ) -> None:
+        try:
+            _assert_tree_equal(
+                "cache_last_channel",
+                snapshot["cache_last_channel"],
+                session.cache_last_channel,
+            )
+            _assert_tree_equal(
+                "cache_last_time",
+                snapshot["cache_last_time"],
+                session.cache_last_time,
+            )
+            _assert_tree_equal(
+                "cache_last_channel_len",
+                snapshot["cache_last_channel_len"],
+                session.cache_last_channel_len,
+            )
+            _assert_tree_equal(
+                "previous_hypotheses",
+                snapshot["previous_hypotheses"],
+                session.previous_hypotheses,
+            )
+        except AssertionError as e:
+            logger.error(
+                f"Session {session.id}: fork alias assertion FAILED: {e}"
+            )
+            raise
+
+        logger.info(
+            f"Session {session.id}: fork alias assertion PASSED "
+            "(parent cache tensors + previous_hypotheses byte-identical)"
+        )
+
     async def _continuous_finalize_and_reset_locked(
         self,
         session: ASRSession,
         *,
         reason: str,
     ) -> None:
-        """Finalize once using the existing in-place padded final chunk path."""
+        """Finalize once on a disposable fork, then reset the parent at boundary."""
         import time
 
         audio_samples = session.total_audio_samples
@@ -908,26 +1198,31 @@ class ASRServer:
             f"emitted={session.emitted_frames} frames"
         )
 
-        original_audio_length = session.total_audio_samples
-        if original_audio_length > 0:
-            padding_samples = self.final_padding_frames * self.hop_samples
-            silence_padding = np.zeros(padding_samples, dtype=np.float32)
-            session.pending_audio = np.concatenate([session.pending_audio, silence_padding])
-            session.accumulated_audio = session.pending_audio
-
         final_text = session.current_text
-        if session.pending_audio is not None and len(session.pending_audio) > 0:
+        should_flush = (
+            session.total_audio_samples > 0
+            or (session.pending_audio is not None and len(session.pending_audio) > 0)
+        )
+        if should_flush:
+            parent_snapshot = (
+                self._snapshot_fork_assert_parent(session)
+                if self.fork_assert_enabled
+                else None
+            )
+            fork = self._build_continuous_finalize_fork(session)
             start_time = time.perf_counter()
-            async with self.inference_lock:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, self._process_final_chunk, session
-                )
-                if text is not None:
-                    final_text = text
-                    session.current_text = text
+            if fork.pending_audio is not None and len(fork.pending_audio) > 0:
+                async with self.inference_lock:
+                    text = await asyncio.get_event_loop().run_in_executor(
+                        None, self._process_final_chunk, fork
+                    )
+                    if text is not None:
+                        final_text = text
+            if parent_snapshot is not None:
+                self._assert_fork_flush_parent_unchanged(session, parent_snapshot)
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.debug(
-                f"Session {session.id} continuous final chunk processed in "
+                f"Session {session.id} continuous fork final chunk processed in "
                 f"{elapsed_ms:.1f}ms: "
                 f"'{final_text[-50:] if len(final_text) > 50 else final_text}'"
             )
