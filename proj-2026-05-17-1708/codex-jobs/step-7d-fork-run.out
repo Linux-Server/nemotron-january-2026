@@ -1,0 +1,57 @@
+[09:31:36] starting Nemotron server (cuda, greedy, right-context=1)
+[09:31:45] server healthy after 4 polls
+[09:31:45] RUN: full-1000 fork (right-context=1; NEMOTRON_FINALIZE_MODE unset)
+[12:53:18] run fork complete; tail:
+    P99:    0.371
+  By Audio Duration:
+    0-2s: 0.364s
+    2-5s: 0.365s
+    5-10s: 0.365s
+    10s+: 0.365s
+
+================================================================================
+[12:53:18] WER judge fork
+This evaluates errors that would impact LLM agent understanding.
+  Mean Semantic WER: 2.10%
+Rankings (by mean semantic WER, lower is better):
+[12:59:38] record run metadata fork
+metadata: tag=fork -> /home/khkramer/src/nemotron-january-2026/stt-benchmark/stt_benchmark_data/run_metadata/fork.json
+================ STEP 7d-fork SCORING ================
+service=nemotron_local baseline='' bootstrap=2000 seed=1234
+
+tag='' rows=1000
+  slice-A: n=200/200 mean=2.7364% ci95=[2.0035%, 3.4680%] paired_n=200 delta_vs_baseline=+0.0000 pp ci95=[0.0000 pp, 0.0000 pp]
+  slice-B: n=200/200 mean=3.0091% ci95=[2.1933%, 3.8547%] paired_n=200 delta_vs_baseline=+0.0000 pp ci95=[0.0000 pp, 0.0000 pp]
+
+tag=rc1_base rows=1000
+  slice-A: n=200/200 mean=2.8362% ci95=[2.1044%, 3.6897%] paired_n=200 delta_vs_baseline=+0.0997 pp ci95=[-0.1319 pp, 0.3219 pp]
+  slice-B: n=200/200 mean=3.1642% ci95=[2.3195%, 4.0533%] paired_n=200 delta_vs_baseline=+0.1552 pp ci95=[-0.0465 pp, 0.3748 pp]
+
+tag=ringbuf rows=1000
+  slice-A: n=200/200 mean=2.9335% ci95=[2.2197%, 3.6645%] paired_n=200 delta_vs_baseline=+0.1971 pp ci95=[-0.0607 pp, 0.4522 pp]
+  slice-B: n=200/200 mean=3.1899% ci95=[2.3980%, 4.1017%] paired_n=200 delta_vs_baseline=+0.1808 pp ci95=[-0.0683 pp, 0.4639 pp]
+
+tag=cc7b rows=1000
+  slice-A: n=200/200 mean=1.4660% ci95=[0.9742%, 1.9907%] paired_n=200 delta_vs_baseline=-1.2704 pp ci95=[-1.7123 pp, -0.8557 pp]
+  slice-B: n=200/200 mean=1.7331% ci95=[1.2188%, 2.3681%] paired_n=200 delta_vs_baseline=-1.2759 pp ci95=[-1.8640 pp, -0.7909 pp]
+
+tag=cc7c rows=1000
+  slice-A: n=200/200 mean=1.4675% ci95=[0.9961%, 1.9726%] paired_n=200 delta_vs_baseline=-1.2690 pp ci95=[-1.7327 pp, -0.8451 pp]
+  slice-B: n=200/200 mean=1.7886% ci95=[1.2021%, 2.4228%] paired_n=200 delta_vs_baseline=-1.2205 pp ci95=[-1.7980 pp, -0.7665 pp]
+
+tag=fork rows=1000
+  slice-A: n=200/200 mean=1.6957% ci95=[1.1639%, 2.2626%] paired_n=200 delta_vs_baseline=-1.0408 pp ci95=[-1.4650 pp, -0.6366 pp]
+  slice-B: n=200/200 mean=1.9668% ci95=[1.3520%, 2.6551%] paired_n=200 delta_vs_baseline=-1.0422 pp ci95=[-1.4969 pp, -0.6289 pp]
+---- TTFS + telemetry for ringbuf ----
+tag=fork observer_TTFS_n=1000
+  TTFS median=364.8 ms p95=366.3 ms
+  telemetry_n=1000 hard_resets/sample=2.46 final_frames/sample=2.416 early_final_count=654
+---- FINALIZE BUDGET (the <400ms gate evidence, from the finalize JSONL) ----
+tag=fork finalize_budget telemetry_tag=fork telemetry_n=1000 finalize_events=2416
+  scope: single-session / sequential-benchmark observer latency (locked-Rule measurement), not concurrent-production latency
+  endpoint_wait(vad_stop->debounce_expiry): median=150.7 ms p95=151.9 ms n=2416
+  measured_finalize_flush_wallclock(fork_flush_start->final_sent): median=13.4 ms p95=14.4 ms n=2416
+  transport(final_sent->final_received): median=0.2 ms p95=0.4 ms n=2416
+  inference_lock_acquire_wait: median=0.0 ms p95=0.0 ms n=2416
+  budget_formula_total=endpoint_wait + rc1(160.0 ms model constant) + measured_finalize_flush_wallclock + transport: median=324.4 ms p95=325.8 ms n=2416 => PASS < 400.0 ms p95
+[12:59:44] STEP 7d-fork RUN COMPLETE; server stopped

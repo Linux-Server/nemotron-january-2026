@@ -1,0 +1,472 @@
+[2026-05-19T15:42:16.644Z] Starting Codex Task.
+[2026-05-19T15:42:18.920Z] Starting Codex task thread.
+[2026-05-19T15:42:19.914Z] Thread ready (019e40e6-fae8-7a92-a8f1-3906f6e93b44).
+[2026-05-19T15:42:19.932Z] Turn started (019e40e6-fb1b-7923-8ae9-709c29d4a615).
+[2026-05-19T15:42:37.657Z] Assistant message captured: I’ll inspect the current 7d edits and the continuous-finalize path first, then make the reset...
+
+[2026-05-19T15:42:37.657Z] Assistant message
+I’ll inspect the current 7d edits and the continuous-finalize path first, then make the reset split in the smallest possible scope across the three allowed files. After that I’ll run the requested compile checks and the contained smokes, including the real-gap multi-segment regression.
+[2026-05-19T15:42:37.701Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-19T15:42:37.712Z] Running command: /bin/bash -lc 'rg -n "_continuous_(finalize|handle_debounce|force_finalize|handle_reset|handl...
+[2026-05-19T15:42:37.712Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-19T15:42:37.712Z] Command completed: /bin/bash -lc 'rg -n "_continuous_(finalize|handle_debounce|force_finalize|handle_reset|handl... (exit 0)
+[2026-05-19T15:42:37.712Z] Running command: /bin/bash -lc 'rg -n "finalize_events|finalize|timing|budget|continuous|NEMOTRON" stt-benchma...
+[2026-05-19T15:42:37.712Z] Command completed: /bin/bash -lc 'rg -n "finalize_events|finalize|timing|budget|continuous|NEMOTRON" stt-benchma... (exit 0)
+[2026-05-19T15:42:45.536Z] Assistant message captured: The worktree already contains unrelated/uncommitted material, including the prior 7d server e...
+
+[2026-05-19T15:42:45.536Z] Assistant message
+The worktree already contains unrelated/uncommitted material, including the prior 7d server edit and an untracked `stt-benchmark` tree. I’ll keep the edit scope to the three requested files and ignore the rest.
+[2026-05-19T15:42:45.567Z] Running command: /bin/bash -lc "sed -n '240,330p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:45.568Z] Command completed: /bin/bash -lc "sed -n '240,330p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:45.569Z] Running command: /bin/bash -lc "sed -n '780,1140p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:45.570Z] Command completed: /bin/bash -lc "sed -n '780,1140p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:45.582Z] Running command: /bin/bash -lc "sed -n '1540,1630p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:45.582Z] Running command: /bin/bash -lc "sed -n '1130,1365p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:45.582Z] Command completed: /bin/bash -lc "sed -n '1540,1630p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:45.582Z] Command completed: /bin/bash -lc "sed -n '1130,1365p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:52.677Z] Running command: /bin/bash -lc "sed -n '330,450p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:52.678Z] Command completed: /bin/bash -lc "sed -n '330,450p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:52.684Z] Running command: /bin/bash -lc "sed -n '680,780p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:52.684Z] Command completed: /bin/bash -lc "sed -n '680,780p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:52.686Z] Running command: /bin/bash -lc "sed -n '1365,1545p' src/nemotron_speech/server.py"
+[2026-05-19T15:42:52.686Z] Command completed: /bin/bash -lc "sed -n '1365,1545p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:42:52.690Z] Running command: /bin/bash -lc "sed -n '1,220p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-19T15:42:52.690Z] Command completed: /bin/bash -lc "sed -n '1,220p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-19T15:42:59.569Z] Running command: /bin/bash -lc "sed -n '220,540p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-19T15:42:59.569Z] Running command: /bin/bash -lc "sed -n '520,700p' stt-benchmark/scripts/measure.py"
+[2026-05-19T15:42:59.569Z] Command completed: /bin/bash -lc "sed -n '220,540p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-19T15:42:59.569Z] Command completed: /bin/bash -lc "sed -n '520,700p' stt-benchmark/scripts/measure.py" (exit 0)
+[2026-05-19T15:42:59.582Z] Running command: /bin/bash -lc "sed -n '880,1010p' stt-benchmark/scripts/measure.py"
+[2026-05-19T15:42:59.582Z] Command completed: /bin/bash -lc "sed -n '880,1010p' stt-benchmark/scripts/measure.py" (exit 0)
+[2026-05-19T15:42:59.585Z] Running command: /bin/bash -lc 'rg -n "NEMOTRON_CONTINUOUS|continuous|single|finalize_mode|reset_sent|early_fi...
+[2026-05-19T15:42:59.585Z] Command completed: /bin/bash -lc 'rg -n "NEMOTRON_CONTINUOUS|continuous|single|finalize_mode|reset_sent|early_fi... (exit 0)
+[2026-05-19T15:43:22.165Z] Assistant message captured: The blocker is exactly where described: the fork/emit path is shared with an unconditional `_...
+
+[2026-05-19T15:43:22.165Z] Assistant message
+The blocker is exactly where described: the fork/emit path is shared with an unconditional `_init_session` epilogue. I’m also checking the benchmark client because the server now has to treat `reset` differently from the true `end` boundary in continuous mode.
+[2026-05-19T15:43:22.206Z] Running command: /bin/bash -lc "sed -n '120,180p' proj-2026-05-17-1708/PLAN.md"
+[2026-05-19T15:43:22.206Z] Command completed: /bin/bash -lc "sed -n '120,180p' proj-2026-05-17-1708/PLAN.md" (exit 0)
+[2026-05-19T15:43:22.211Z] Running command: /bin/bash -lc 'rg -n "7d|continuous|fork|speculative|reset for next utterance|phaseG_single|F...
+[2026-05-19T15:43:22.211Z] Command completed: /bin/bash -lc 'rg -n "7d|continuous|fork|speculative|reset for next utterance|phaseG_single|F... (exit 0)
+[2026-05-19T15:43:22.215Z] Running command: /bin/bash -lc "sed -n '700,735p' stt-benchmark/scripts/measure.py"
+[2026-05-19T15:43:22.215Z] Command completed: /bin/bash -lc "sed -n '700,735p' stt-benchmark/scripts/measure.py" (exit 0)
+[2026-05-19T15:43:22.217Z] Running command: /bin/bash -lc "sed -n '1040,1080p' stt-benchmark/scripts/measure.py"
+[2026-05-19T15:43:22.217Z] Command completed: /bin/bash -lc "sed -n '1040,1080p' stt-benchmark/scripts/measure.py" (exit 0)
+[2026-05-19T15:44:27.080Z] Running command: /bin/bash -lc "git show b757159:src/nemotron_speech/server.py | sed -n '900,1120p'"
+[2026-05-19T15:44:27.080Z] Command completed: /bin/bash -lc "git show b757159:src/nemotron_speech/server.py | sed -n '900,1120p'" (exit 0)
+[2026-05-19T15:44:27.085Z] Running command: /bin/bash -lc "git show 7cbdf09:src/nemotron_speech/server.py | sed -n '900,1270p'"
+[2026-05-19T15:44:27.085Z] Command completed: /bin/bash -lc "git show 7cbdf09:src/nemotron_speech/server.py | sed -n '900,1270p'" (exit 0)
+[2026-05-19T15:44:27.089Z] Running command: /bin/bash -lc "git show 7cbdf09:stt-benchmark/scripts/measure.py | sed -n '680,725p'"
+[2026-05-19T15:44:27.089Z] Running command: /bin/bash -lc "git show 7cbdf09:stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -...
+[2026-05-19T15:44:27.089Z] Command completed: /bin/bash -lc "git show 7cbdf09:stt-benchmark/scripts/measure.py | sed -n '680,725p'" (exit 0)
+[2026-05-19T15:44:27.089Z] Command completed: /bin/bash -lc "git show 7cbdf09:stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -... (exit 0)
+[2026-05-19T15:44:35.863Z] Running command: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py'
+[2026-05-19T15:44:35.863Z] Command completed: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T15:44:35.868Z] Running command: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py stt-benchmar...
+[2026-05-19T15:44:35.868Z] Command completed: /bin/bash -lc 'git diff -- stt-benchmark/src/stt_benchmark/nemotron_local_stt.py stt-benchmar... (exit 0)
+[2026-05-19T15:44:35.872Z] Running command: /bin/bash -lc "rg -n \"def _init_session|_init_session\\(\" src/nemotron_speech/server.py"
+[2026-05-19T15:44:35.872Z] Running command: /bin/bash -lc "sed -n '570,650p' src/nemotron_speech/server.py"
+[2026-05-19T15:44:35.872Z] Command completed: /bin/bash -lc "rg -n \"def _init_session|_init_session\\(\" src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:44:35.872Z] Command completed: /bin/bash -lc "sed -n '570,650p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:44:46.290Z] Running command: /bin/bash -lc "sed -n '1,80p' src/nemotron_speech/server.py"
+[2026-05-19T15:44:46.290Z] Command completed: /bin/bash -lc "sed -n '1,80p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:44:46.291Z] Running command: /bin/bash -lc "sed -n '530,580p' src/nemotron_speech/server.py"
+[2026-05-19T15:44:46.291Z] Command completed: /bin/bash -lc "sed -n '530,580p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:44:46.421Z] Running command: /bin/bash -lc 'rg -n "last_final_transcription_text|_final_transcription_committed|_finalize_...
+[2026-05-19T15:44:46.428Z] Running command: /bin/bash -lc "python - <<'PY' import inspect from pipecat.services.stt_service import Websoc...
+[2026-05-19T15:44:46.546Z] Command completed: /bin/bash -lc 'rg -n "last_final_transcription_text|_final_transcription_committed|_finalize_... (exit 0)
+[2026-05-19T15:44:46.651Z] Command failed: /bin/bash -lc "python - <<'PY' import inspect from pipecat.services.stt_service import Websoc... (exit 127)
+[2026-05-19T15:45:28.608Z] Running command: /bin/bash -lc "sed -n '1800,1905p' src/nemotron_speech/server.py"
+[2026-05-19T15:45:28.608Z] Running command: /bin/bash -lc "rg -n \"logger\\.|basicConfig|loguru|DEBUG_ASR|add\\(\" src/nemotron_speech/se...
+[2026-05-19T15:45:28.608Z] Command completed: /bin/bash -lc "sed -n '1800,1905p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:45:28.608Z] Command completed: /bin/bash -lc "rg -n \"logger\\.|basicConfig|loguru|DEBUG_ASR|add\\(\" src/nemotron_speech/se... (exit 0)
+[2026-05-19T15:45:28.621Z] Running command: /bin/bash -lc 'rg -n "logging|logger|DEBUG" stt-benchmark/scripts/measure.py stt-benchmark/sr...
+[2026-05-19T15:45:28.621Z] Command completed: /bin/bash -lc 'rg -n "logging|logger|DEBUG" stt-benchmark/scripts/measure.py stt-benchmark/sr... (exit 0)
+[2026-05-19T15:45:37.398Z] Running command: /bin/bash -lc "sed -n '1785,1845p' src/nemotron_speech/server.py"
+[2026-05-19T15:45:37.398Z] Running command: /bin/bash -lc "sed -n '1728,1785p' src/nemotron_speech/server.py"
+[2026-05-19T15:45:37.398Z] Command completed: /bin/bash -lc "sed -n '1785,1845p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:45:37.398Z] Command completed: /bin/bash -lc "sed -n '1728,1785p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:45:37.407Z] Running command: /bin/bash -lc "find . -maxdepth 3 -type f \\( -name '*smoke*' -o -name '*server*test*' -o -na...
+[2026-05-19T15:45:37.418Z] Command completed: /bin/bash -lc "find . -maxdepth 3 -type f \\( -name '*smoke*' -o -name '*server*test*' -o -na... (exit 0)
+[2026-05-19T15:45:37.418Z] Running command: /bin/bash -lc "rg -n \"websocket|vad_start|vad_stop|NEMOTRON_CONTINUOUS|server.py|fork alias ...
+[2026-05-19T15:45:37.428Z] Command completed: /bin/bash -lc "rg -n \"websocket|vad_start|vad_stop|NEMOTRON_CONTINUOUS|server.py|fork alias ... (exit 0)
+[2026-05-19T15:46:10.651Z] Assistant message captured: I’m going to split the server path now: the fork/emit code remains shared, debounce expiry ge...
+
+[2026-05-19T15:46:10.652Z] Assistant message
+I’m going to split the server path now: the fork/emit code remains shared, debounce expiry gets a context-retained epilogue, and only `close`/`end` can call the cold-reset epilogue. I’ll also adjust the benchmark client telemetry so normal continuous multi-segment finals are not counted as early-final failures or dropped as duplicate text deltas.
+[2026-05-19T15:46:12.391Z] Applying 1 file change(s).
+[2026-05-19T15:46:12.401Z] File changes completed.
+[2026-05-19T15:46:20.536Z] Applying 1 file change(s).
+[2026-05-19T15:46:20.537Z] File changes completed.
+[2026-05-19T15:46:31.672Z] Applying 1 file change(s).
+[2026-05-19T15:46:31.673Z] File changes completed.
+[2026-05-19T15:46:57.288Z] Applying 1 file change(s).
+[2026-05-19T15:46:57.288Z] File changes completed.
+[2026-05-19T15:47:02.302Z] Applying 1 file change(s).
+[2026-05-19T15:47:02.302Z] File changes completed.
+[2026-05-19T15:47:26.087Z] Applying 1 file change(s).
+[2026-05-19T15:47:26.087Z] File changes completed.
+[2026-05-19T15:47:36.635Z] Running command: /bin/bash -lc "sed -n '950,1145p' src/nemotron_speech/server.py"
+[2026-05-19T15:47:36.645Z] Command completed: /bin/bash -lc "sed -n '950,1145p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:47:36.645Z] Running command: /bin/bash -lc "sed -n '1210,1385p' src/nemotron_speech/server.py"
+[2026-05-19T15:47:36.645Z] Running command: /bin/bash -lc "sed -n '120,170p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py && sed...
+[2026-05-19T15:47:36.645Z] Command completed: /bin/bash -lc "sed -n '1210,1385p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:47:36.645Z] Command completed: /bin/bash -lc "sed -n '120,170p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py && sed... (exit 0)
+[2026-05-19T15:47:36.647Z] Running command: /bin/bash -lc "rg -n \"_continuous_finalize_and_reset_locked|_continuous_finalize_emit_locked...
+[2026-05-19T15:47:36.647Z] Command completed: /bin/bash -lc "rg -n \"_continuous_finalize_and_reset_locked|_continuous_finalize_emit_locked... (exit 0)
+[2026-05-19T15:47:44.671Z] Running command: /bin/bash -lc "sed -n '1138,1160p' src/nemotron_speech/server.py"
+[2026-05-19T15:47:44.671Z] Command completed: /bin/bash -lc "sed -n '1138,1160p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:47:44.674Z] Running command: /bin/bash -lc "sed -n '1380,1448p' src/nemotron_speech/server.py"
+[2026-05-19T15:47:44.674Z] Command completed: /bin/bash -lc "sed -n '1380,1448p' src/nemotron_speech/server.py" (exit 0)
+[2026-05-19T15:47:44.679Z] Running command: /bin/bash -lc "sed -n '374,415p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py"
+[2026-05-19T15:47:44.679Z] Command completed: /bin/bash -lc "sed -n '374,415p' stt-benchmark/src/stt_benchmark/nemotron_local_stt.py" (exit 0)
+[2026-05-19T15:47:44.680Z] Running command: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py stt-benchmark/src/stt_benchmark/nemo...
+[2026-05-19T15:47:44.681Z] Command completed: /bin/bash -lc 'git diff -- src/nemotron_speech/server.py stt-benchmark/src/stt_benchmark/nemo... (exit 0)
+[2026-05-19T15:47:59.468Z] Assistant message captured: The server now has separate speculative and true-boundary epilogues in code. I’m running the ...
+
+[2026-05-19T15:47:59.468Z] Assistant message
+The server now has separate speculative and true-boundary epilogues in code. I’m running the requested syntax checks before building the smoke so any basic parse errors get caught immediately.
+[2026-05-19T15:47:59.582Z] Running command: /bin/bash -lc 'rg -n "continuous cold reset requested|continuous true-boundary cold reset com...
+[2026-05-19T15:47:59.583Z] Command completed: /bin/bash -lc 'rg -n "continuous cold reset requested|continuous true-boundary cold reset com... (exit 0)
+[2026-05-19T15:47:59.612Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv...
+[2026-05-19T15:47:59.612Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv... (exit 0)
+[2026-05-19T15:47:59.615Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv...
+[2026-05-19T15:47:59.615Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv... (exit 0)
+[2026-05-19T15:48:10.385Z] Running command: /bin/bash -lc 'rg -n "DEFAULT_MODEL|NEMOTRON_MODEL|RESOLVED|MODEL" src/nemotron_speech/server...
+[2026-05-19T15:48:10.385Z] Command completed: /bin/bash -lc 'rg -n "DEFAULT_MODEL|NEMOTRON_MODEL|RESOLVED|MODEL" src/nemotron_speech/server... (exit 0)
+[2026-05-19T15:48:10.387Z] Running command: /bin/bash -lc "find /home/khkramer/src -maxdepth 4 -type f -name '*.nemo' -o -name '*nemo*' |...
+[2026-05-19T15:48:10.387Z] Command completed: /bin/bash -lc "find /home/khkramer/src -maxdepth 4 -type f -name '*.nemo' -o -name '*nemo*' |... (exit 0)
+[2026-05-19T15:48:10.390Z] Running command: /bin/bash -lc "ls -la /home/khkramer/src/nemotron-nano-omni/.venv-asr/bin | sed -n '1,80p'"
+[2026-05-19T15:48:10.390Z] Command completed: /bin/bash -lc "ls -la /home/khkramer/src/nemotron-nano-omni/.venv-asr/bin | sed -n '1,80p'" (exit 0)
+[2026-05-19T15:48:10.391Z] Running command: /bin/bash -lc 'find stt-benchmark -maxdepth 4 -type f | sort | head -80'
+[2026-05-19T15:48:10.392Z] Command completed: /bin/bash -lc 'find stt-benchmark -maxdepth 4 -type f | sort | head -80' (exit 0)
+[2026-05-19T15:48:17.549Z] Running command: /bin/bash -lc "sed -n '1,160p' stt-benchmark/.env"
+[2026-05-19T15:48:17.549Z] Running command: /bin/bash -lc 'find /home/khkramer/src/riva-speech/stt-benchmark/.artifacts/nemotron -maxdept...
+[2026-05-19T15:48:17.549Z] Command completed: /bin/bash -lc "sed -n '1,160p' stt-benchmark/.env" (exit 0)
+[2026-05-19T15:48:17.549Z] Command completed: /bin/bash -lc 'find /home/khkramer/src/riva-speech/stt-benchmark/.artifacts/nemotron -maxdept... (exit 0)
+[2026-05-19T15:48:17.562Z] Running command: /bin/bash -lc 'git status --short'
+[2026-05-19T15:48:17.562Z] Command completed: /bin/bash -lc 'git status --short' (exit 0)
+[2026-05-19T15:48:17.596Z] Running command: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py scripts/measure.py'
+[2026-05-19T15:48:17.597Z] Command completed: /bin/bash -lc 'git diff -- src/stt_benchmark/nemotron_local_stt.py scripts/measure.py' (exit 0)
+[2026-05-19T15:48:25.575Z] Running command: /bin/bash -lc 'tail -80 /home/khkramer/src/nemotron-nano-omni/nemotron-asr-uv.log'
+[2026-05-19T15:48:25.575Z] Command completed: /bin/bash -lc 'tail -80 /home/khkramer/src/nemotron-nano-omni/nemotron-asr-uv.log' (exit 0)
+[2026-05-19T15:48:25.576Z] Running command: /bin/bash -lc 'tail -80 /home/khkramer/src/nemotron-nano-omni/nemotron-asr.log'
+[2026-05-19T15:48:25.576Z] Command completed: /bin/bash -lc 'tail -80 /home/khkramer/src/nemotron-nano-omni/nemotron-asr.log' (exit 0)
+[2026-05-19T15:48:25.595Z] Running command: /bin/bash -lc "find /home/khkramer/.cache/huggingface -maxdepth 4 -type d -name '*nemotron*' ...
+[2026-05-19T15:48:25.595Z] Command completed: /bin/bash -lc "find /home/khkramer/.cache/huggingface -maxdepth 4 -type d -name '*nemotron*' ... (exit 0)
+[2026-05-19T15:48:25.609Z] Running command: /bin/bash -lc 'nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader'
+[2026-05-19T15:48:25.609Z] Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader' (exit 0)
+[2026-05-19T15:48:30.908Z] Assistant message captured: The compile/AST checks passed. I’m starting a short-lived continuous-mode server on a high lo...
+
+[2026-05-19T15:48:30.908Z] Assistant message
+The compile/AST checks passed. I’m starting a short-lived continuous-mode server on a high local port with fork assertions enabled, then I’ll drive direct WebSocket scenarios rather than the full benchmark.
+[2026-05-19T15:48:33.514Z] Running command: /bin/bash -lc 'NEMOTRON_CONTINUOUS=1 NEMOTRON_FORK_ASSERT=1 NEMOTRON_FINALIZE_SILENCE_MS=150 ...
+[2026-05-19T15:48:52.274Z] Running command: /bin/bash -lc 'curl -sS http://127.0.0.1:18080/health'
+[2026-05-19T15:48:52.274Z] Command completed: /bin/bash -lc 'curl -sS http://127.0.0.1:18080/health' (exit 0)
+[2026-05-19T15:48:52.286Z] Running command: /bin/bash -lc "find stt-benchmark -maxdepth 5 -type f \\( -name '*.jsonl' -o -name '*.json' -...
+[2026-05-19T15:48:52.286Z] Command completed: /bin/bash -lc "find stt-benchmark -maxdepth 5 -type f \\( -name '*.jsonl' -o -name '*.json' -... (exit 0)
+[2026-05-19T15:48:52.288Z] Running command: /bin/bash -lc "find /home/khkramer/src/riva-speech/stt-benchmark -maxdepth 5 -type f \\( -nam...
+[2026-05-19T15:48:52.288Z] Command completed: /bin/bash -lc "find /home/khkramer/src/riva-speech/stt-benchmark -maxdepth 5 -type f \\( -nam... (exit 0)
+[2026-05-19T15:48:52.347Z] Running command: /bin/bash -lc "find . /home/khkramer/src/riva-speech/stt-benchmark -type f \\( -name '*.wav' ...
+[2026-05-19T15:48:52.347Z] Command completed: /bin/bash -lc "find . /home/khkramer/src/riva-speech/stt-benchmark -type f \\( -name '*.wav' ... (exit 0)
+[2026-05-19T15:49:08.873Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import wav...
+[2026-05-19T15:49:08.884Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import imp...
+[2026-05-19T15:49:08.896Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import wav... (exit 0)
+[2026-05-19T15:49:08.907Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import imp... (exit 0)
+[2026-05-19T15:49:08.994Z] Running command: /bin/bash -lc "curl -sS http://127.0.0.1:18080/health && sleep 12 && printf '\\n' && curl -sS...
+[2026-05-19T15:49:17.371Z] Running command: /bin/bash -lc "stt-benchmark/.venv/bin/python - <<'PY' import importlib.util for m in ['aioht...
+[2026-05-19T15:49:17.371Z] Command completed: /bin/bash -lc "stt-benchmark/.venv/bin/python - <<'PY' import importlib.util for m in ['aioht... (exit 0)
+[2026-05-19T15:49:17.376Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import imp...
+[2026-05-19T15:49:17.376Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import imp... (exit 0)
+[2026-05-19T15:49:20.954Z] Command completed: /bin/bash -lc "curl -sS http://127.0.0.1:18080/health && sleep 12 && printf '\\n' && curl -sS... (exit 0)
+[2026-05-19T15:49:44.123Z] Assistant message captured: The server is healthy after startup. For the regression smoke, I’ll use the local `harvard_16...
+
+[2026-05-19T15:49:44.123Z] Assistant message
+The server is healthy after startup. For the regression smoke, I’ll use the local `harvard_16k.wav` fixture and a direct WebSocket client so the test can force a real 300 ms VAD gap without entering the benchmark loop.
+[2026-05-19T15:50:16.016Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy...
+[2026-05-19T15:50:18.002Z] Command failed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy... (exit 1)
+[2026-05-19T15:50:42.109Z] Assistant message captured: The first direct smoke reached the multi-gap path and showed the key server markers, but my t...
+
+[2026-05-19T15:50:42.109Z] Assistant message
+The first direct smoke reached the multi-gap path and showed the key server markers, but my temporary harness had a missing `contextlib` import after it sent the `end`. I’m rerunning the same smoke with that harness fixed so the client-side assertions and telemetry JSONL complete cleanly.
+[2026-05-19T15:51:12.654Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy...
+[2026-05-19T15:51:15.176Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy... (exit 0)
+[2026-05-19T15:51:43.101Z] Running command: /bin/bash -lc 'stt-benchmark/.venv/bin/python stt-benchmark/scripts/measure.py finalize-budge...
+[2026-05-19T15:51:43.114Z] Command completed: /bin/bash -lc 'stt-benchmark/.venv/bin/python stt-benchmark/scripts/measure.py finalize-budge... (exit 0)
+[2026-05-19T15:51:52.374Z] Assistant message captured: The smoke assertions passed, but my first JSONL wrote `final_received` at the end of the whol...
+
+[2026-05-19T15:51:52.374Z] Assistant message
+The smoke assertions passed, but my first JSONL wrote `final_received` at the end of the whole script, so `measure.py` correctly reported bogus transport latency. I’m rerunning the direct smoke once more with per-final receive timestamps in the JSONL.
+[2026-05-19T15:52:26.120Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy...
+[2026-05-19T15:52:28.737Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy... (exit 0)
+[2026-05-19T15:52:46.222Z] Assistant message captured: The continuous smoke now passes and the server logs show the mid-sample speculative markers w...
+
+[2026-05-19T15:52:46.222Z] Assistant message
+The continuous smoke now passes and the server logs show the mid-sample speculative markers with retained cache/hypothesis/ring/current/emitted state, followed by the true `end` cold reset only after the second emit. I’m stopping that server and doing one default env-unset pass next.
+[2026-05-19T15:52:48.753Z] Command failed: /bin/bash -lc 'NEMOTRON_CONTINUOUS=1 NEMOTRON_FORK_ASSERT=1 NEMOTRON_FINALIZE_SILENCE_MS=150 ... (exit 1)
+[2026-05-19T15:52:56.111Z] Running command: /bin/bash -lc 'env -u NEMOTRON_CONTINUOUS -u NEMOTRON_FORK_ASSERT -u NEMOTRON_FINALIZE_SILENC...
+[2026-05-19T15:53:19.540Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy...
+[2026-05-19T15:53:19.821Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy... (exit 0)
+[2026-05-19T15:53:24.683Z] Command failed: /bin/bash -lc 'env -u NEMOTRON_CONTINUOUS -u NEMOTRON_FORK_ASSERT -u NEMOTRON_FINALIZE_SILENC... (exit 1)
+[2026-05-19T15:53:45.403Z] Running command: /bin/bash -lc 'pgrep -af "src/nemotron_speech/server.py|nemotron_speech/server.py" || true'
+[2026-05-19T15:53:45.403Z] Command completed: /bin/bash -lc 'pgrep -af "src/nemotron_speech/server.py|nemotron_speech/server.py" || true' (exit 0)
+[2026-05-19T15:53:45.413Z] Running command: /bin/bash -lc 'find src/nemotron_speech stt-benchmark/src/stt_benchmark stt-benchmark/scripts...
+[2026-05-19T15:53:45.413Z] Command completed: /bin/bash -lc 'find src/nemotron_speech stt-benchmark/src/stt_benchmark stt-benchmark/scripts... (exit 0)
+[2026-05-19T15:53:45.423Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true"
+[2026-05-19T15:53:45.423Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true" (exit 0)
+[2026-05-19T15:53:45.454Z] Running command: /bin/bash -lc 'git status --short && git -C stt-benchmark status --short'
+[2026-05-19T15:53:45.454Z] Command completed: /bin/bash -lc 'git status --short && git -C stt-benchmark status --short' (exit 0)
+[2026-05-19T15:53:52.372Z] Running command: /bin/bash -lc 'rm -rf src/nemotron_speech/__pycache__ && find src/nemotron_speech stt-benchma...
+[2026-05-19T15:53:52.373Z] Command failed: /bin/bash -lc 'rm -rf src/nemotron_speech/__pycache__ && find src/nemotron_speech stt-benchma... (exit 1)
+[2026-05-19T15:53:59.841Z] Running command: /bin/bash -lc 'ls -la src/nemotron_speech/__pycache__'
+[2026-05-19T15:53:59.841Z] Command completed: /bin/bash -lc 'ls -la src/nemotron_speech/__pycache__' (exit 0)
+[2026-05-19T15:53:59.849Z] Running command: /bin/bash -lc 'lsattr src/nemotron_speech/__pycache__ src/nemotron_speech/__pycache__/* 2>/de...
+[2026-05-19T15:53:59.849Z] Command completed: /bin/bash -lc 'lsattr src/nemotron_speech/__pycache__ src/nemotron_speech/__pycache__/* 2>/de... (exit 0)
+[2026-05-19T15:53:59.854Z] Running command: /bin/bash -lc "id && stat -c '%U %G %a %n' src/nemotron_speech/__pycache__ src/nemotron_speec...
+[2026-05-19T15:53:59.854Z] Command completed: /bin/bash -lc "id && stat -c '%U %G %a %n' src/nemotron_speech/__pycache__ src/nemotron_speec... (exit 0)
+[2026-05-19T15:54:08.954Z] Running command: /bin/bash -lc 'sudo -n rm -rf src/nemotron_speech/__pycache__ 2>/tmp/nemotron_rm_pycache.err ...
+[2026-05-19T15:54:08.954Z] Command failed: /bin/bash -lc 'sudo -n rm -rf src/nemotron_speech/__pycache__ 2>/tmp/nemotron_rm_pycache.err ... (exit 1)
+[2026-05-19T15:54:21.648Z] Running command: /bin/bash -lc "git diff --stat -- src/nemotron_speech/server.py && git diff -- src/nemotron_s...
+[2026-05-19T15:54:21.648Z] Command completed: /bin/bash -lc "git diff --stat -- src/nemotron_speech/server.py && git diff -- src/nemotron_s... (exit 0)
+[2026-05-19T15:54:21.654Z] Running command: /bin/bash -lc "git -C stt-benchmark diff --stat -- src/stt_benchmark/nemotron_local_stt.py sc...
+[2026-05-19T15:54:21.654Z] Command completed: /bin/bash -lc "git -C stt-benchmark diff --stat -- src/stt_benchmark/nemotron_local_stt.py sc... (exit 0)
+[2026-05-19T15:54:21.670Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true"
+[2026-05-19T15:54:21.670Z] Running command: /bin/bash -lc 'pgrep -af "python .*src/nemotron_speech/server.py|python .*nemotron_speech/ser...
+[2026-05-19T15:54:21.670Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true" (exit 0)
+[2026-05-19T15:54:21.670Z] Command completed: /bin/bash -lc 'pgrep -af "python .*src/nemotron_speech/server.py|python .*nemotron_speech/ser... (exit 0)
+[2026-05-19T15:54:28.018Z] Running command: /bin/bash -lc "pgrep -af '"'^/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python src/n...
+[2026-05-19T15:54:28.018Z] Command completed: /bin/bash -lc "pgrep -af '"'^/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python src/n... (exit 0)
+[2026-05-19T15:54:48.886Z] Running command: /bin/bash -lc 'git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py s...
+[2026-05-19T15:54:48.898Z] Running command: /bin/bash -lc 'git diff --check -- src/nemotron_speech/server.py'
+[2026-05-19T15:54:48.898Z] Command completed: /bin/bash -lc 'git -C stt-benchmark diff --check -- src/stt_benchmark/nemotron_local_stt.py s... (exit 0)
+[2026-05-19T15:54:48.898Z] Command completed: /bin/bash -lc 'git diff --check -- src/nemotron_speech/server.py' (exit 0)
+[2026-05-19T15:54:48.960Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv...
+[2026-05-19T15:54:48.973Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv... (exit 0)
+[2026-05-19T15:54:48.977Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv...
+[2026-05-19T15:54:48.977Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv... (exit 0)
+[2026-05-19T15:54:57.789Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '960,1152p'"
+[2026-05-19T15:54:57.789Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '960,1152p'" (exit 0)
+[2026-05-19T15:54:57.791Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1250,1448p'"
+[2026-05-19T15:54:57.792Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1250,1448p'" (exit 0)
+[2026-05-19T15:54:57.794Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '120,170...
+[2026-05-19T15:54:57.795Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '120,170... (exit 0)
+[2026-05-19T15:54:57.799Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/scripts/measure.py | sed -n '39,62p;534,680p;1103,1125p'"
+[2026-05-19T15:54:57.799Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/scripts/measure.py | sed -n '39,62p;534,680p;1103,1125p'" (exit 0)
+[2026-05-19T15:55:01.945Z] Running command: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '466,520p'"
+[2026-05-19T15:55:01.945Z] Command completed: /bin/bash -lc "nl -ba stt-benchmark/src/stt_benchmark/nemotron_local_stt.py | sed -n '466,520p'" (exit 0)
+[2026-05-19T15:55:05.794Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '18,30p'"
+[2026-05-19T15:55:05.794Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '18,30p'" (exit 0)
+[2026-05-19T15:55:41.719Z] Assistant message captured: One detail in the speculative epilogue needed tightening against the wording: it should not d...
+
+[2026-05-19T15:55:41.719Z] Assistant message
+One detail in the speculative epilogue needed tightening against the wording: it should not discard held post-stop audio unless it has been consumed. I’m adjusting that buffer to be retained after speculative expiry and flushed into the parent context on the next `vad_start`/audio or true boundary.
+[2026-05-19T15:55:46.837Z] Applying 1 file change(s).
+[2026-05-19T15:55:46.846Z] File changes completed.
+[2026-05-19T15:55:59.296Z] Applying 1 file change(s).
+[2026-05-19T15:55:59.296Z] File changes completed.
+[2026-05-19T15:56:08.216Z] Running command: /bin/bash -lc 'git diff --check -- src/nemotron_speech/server.py && git -C stt-benchmark diff...
+[2026-05-19T15:56:08.226Z] Command completed: /bin/bash -lc 'git diff --check -- src/nemotron_speech/server.py && git -C stt-benchmark diff... (exit 0)
+[2026-05-19T15:56:08.278Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv...
+[2026-05-19T15:56:08.290Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv... (exit 0)
+[2026-05-19T15:56:08.292Z] Running command: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv...
+[2026-05-19T15:56:08.292Z] Command completed: /bin/bash -lc 'PYTHONPYCACHEPREFIX="$(mktemp -d)" /home/khkramer/src/nemotron-nano-omni/.venv... (exit 0)
+[2026-05-19T15:56:14.719Z] Assistant message captured: The syntax checks still pass after the post-stop buffer adjustment. I’m rerunning the contain...
+
+[2026-05-19T15:56:14.719Z] Assistant message
+The syntax checks still pass after the post-stop buffer adjustment. I’m rerunning the contained continuous smoke once on the final server code so the recorded smoke output matches the actual patch.
+[2026-05-19T15:56:17.482Z] Running command: /bin/bash -lc 'NEMOTRON_CONTINUOUS=1 NEMOTRON_FORK_ASSERT=1 NEMOTRON_FINALIZE_SILENCE_MS=150 ...
+[2026-05-19T15:56:32.397Z] Running command: /bin/bash -lc "curl -sS http://127.0.0.1:18080/health && sleep 12 && printf '\\n' && curl -sS...
+[2026-05-19T15:56:44.356Z] Command completed: /bin/bash -lc "curl -sS http://127.0.0.1:18080/health && sleep 12 && printf '\\n' && curl -sS... (exit 0)
+[2026-05-19T15:57:03.758Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy...
+[2026-05-19T15:57:06.383Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy... (exit 0)
+[2026-05-19T15:57:22.299Z] Command failed: /bin/bash -lc 'NEMOTRON_CONTINUOUS=1 NEMOTRON_FORK_ASSERT=1 NEMOTRON_FINALIZE_SILENCE_MS=150 ... (exit 1)
+[2026-05-19T15:58:36.214Z] Assistant message captured: I’m resuming from the implementation and verification state. I’ll first confirm the smoke ser...
+
+[2026-05-19T15:58:36.214Z] Assistant message
+I’m resuming from the implementation and verification state. I’ll first confirm the smoke server is stopped and that only the allowed files are touched, then I’ll give you the compact report with the regression-test evidence.
+[2026-05-19T15:58:44.788Z] Running command: /bin/bash -lc 'git status --short -- src/nemotron_speech/server.py stt-benchmark/src/stt_benc...
+[2026-05-19T15:58:44.789Z] Command completed: /bin/bash -lc 'git status --short -- src/nemotron_speech/server.py stt-benchmark/src/stt_benc... (exit 0)
+[2026-05-19T15:58:44.799Z] Running command: /bin/bash -lc "pgrep -af '"'^/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python src/n...
+[2026-05-19T15:58:44.799Z] Command completed: /bin/bash -lc "pgrep -af '"'^/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python src/n... (exit 0)
+[2026-05-19T15:58:44.803Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true"
+[2026-05-19T15:58:44.803Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true" (exit 0)
+[2026-05-19T15:58:58.151Z] Assistant message captured: The server session is gone and ports `18080`/`18081` are clear. I’m pulling a few final line ...
+
+[2026-05-19T15:58:58.151Z] Assistant message
+The server session is gone and ports `18080`/`18081` are clear. I’m pulling a few final line anchors now so the report can point at the actual refactor rather than describing it abstractly.
+[2026-05-19T15:58:58.187Z] Running command: /bin/bash -lc 'rg -n "_TRUE_BOUNDARY_FINALIZE_REASONS|def _continuous_force_finalize_locked|d...
+[2026-05-19T15:58:58.187Z] Command completed: /bin/bash -lc 'rg -n "_TRUE_BOUNDARY_FINALIZE_REASONS|def _continuous_force_finalize_locked|d... (exit 0)
+[2026-05-19T15:58:58.189Z] Running command: /bin/bash -lc 'rg -n "_continuous_context|early_final|_final_transcription_committed|finalize...
+[2026-05-19T15:58:58.189Z] Command completed: /bin/bash -lc 'rg -n "_continuous_context|early_final|_final_transcription_committed|finalize... (exit 0)
+[2026-05-19T15:58:58.191Z] Running command: /bin/bash -lc 'rg -n "FINALIZE_TIMING_FIELDS|flatten_finalize_events|print_finalize_budget|fi...
+[2026-05-19T15:58:58.191Z] Command completed: /bin/bash -lc 'rg -n "FINALIZE_TIMING_FIELDS|flatten_finalize_events|print_finalize_budget|fi... (exit 0)
+[2026-05-19T15:58:58.199Z] Running command: /bin/bash -lc 'git diff --name-only && git -C stt-benchmark diff --name-only'
+[2026-05-19T15:58:58.199Z] Command completed: /bin/bash -lc 'git diff --name-only && git -C stt-benchmark diff --name-only' (exit 0)
+[2026-05-19T15:59:12.738Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '930,1045p'"
+[2026-05-19T15:59:12.738Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '930,1045p'" (exit 0)
+[2026-05-19T15:59:12.747Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1075,1465p'"
+[2026-05-19T15:59:12.747Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1075,1465p'" (exit 0)
+[2026-05-19T15:59:12.750Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '785,865p'"
+[2026-05-19T15:59:12.750Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '785,865p'" (exit 0)
+[2026-05-19T15:59:16.918Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1040,1085p'"
+[2026-05-19T15:59:16.918Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1460,1498p'"
+[2026-05-19T15:59:16.918Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1040,1085p'" (exit 0)
+[2026-05-19T15:59:16.918Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '1460,1498p'" (exit 0)
+[2026-05-19T15:59:19.285Z] Running command: /bin/bash -lc 'rg -n "continuous_post_stop_audio|_continuous_handle_audio_locked" src/nemotro...
+[2026-05-19T15:59:19.285Z] Command completed: /bin/bash -lc 'rg -n "continuous_post_stop_audio|_continuous_handle_audio_locked" src/nemotro... (exit 0)
+[2026-05-19T15:59:21.572Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '860,930p'"
+[2026-05-19T15:59:21.572Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '860,930p'" (exit 0)
+[2026-05-19T15:59:33.512Z] Assistant message captured: One detail is worth tightening before I close this out: the default env-unset smoke had been ...
+
+[2026-05-19T15:59:33.512Z] Assistant message
+One detail is worth tightening before I close this out: the default env-unset smoke had been run before the last continuous-only post-stop buffering adjustment. I’m rerunning that small default smoke now so the final verification statement is current.
+[2026-05-19T15:59:35.971Z] Running command: /bin/bash -lc 'env -u NEMOTRON_CONTINUOUS -u NEMOTRON_FORK_ASSERT -u NEMOTRON_FINALIZE_SILENC...
+[2026-05-19T15:59:47.381Z] Running command: /bin/bash -lc 'rg -n "ws://|ClientSession|send_bytes|vad_start|finalize" stt-benchmark/src/st...
+[2026-05-19T15:59:47.381Z] Command completed: /bin/bash -lc 'rg -n "ws://|ClientSession|send_bytes|vad_start|finalize" stt-benchmark/src/st... (exit 0)
+[2026-05-19T15:59:49.998Z] Running command: /bin/bash -lc 'rg -n "websocket|add_get|/health|ws_response" src/nemotron_speech/server.py | ...
+[2026-05-19T15:59:49.998Z] Command completed: /bin/bash -lc 'rg -n "websocket|add_get|/health|ws_response" src/nemotron_speech/server.py | ... (exit 0)
+[2026-05-19T15:59:59.562Z] Running command: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy...
+[2026-05-19T15:59:59.845Z] Command completed: /bin/bash -lc "/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python - <<'PY' import asy... (exit 0)
+[2026-05-19T16:00:03.981Z] Command failed: /bin/bash -lc 'env -u NEMOTRON_CONTINUOUS -u NEMOTRON_FORK_ASSERT -u NEMOTRON_FINALIZE_SILENC... (exit 1)
+[2026-05-19T16:00:14.453Z] Assistant message captured: The rerun confirms the default path still uses the old hard reset flow and emits no `finalize...
+
+[2026-05-19T16:00:14.453Z] Assistant message
+The rerun confirms the default path still uses the old hard reset flow and emits no `finalize_timing`. I’ve stopped that server too; I’m doing the final process/port check now.
+[2026-05-19T16:00:14.501Z] Running command: /bin/bash -lc 'find src/nemotron_speech stt-benchmark/src/stt_benchmark stt-benchmark/scripts...
+[2026-05-19T16:00:14.501Z] Command completed: /bin/bash -lc 'find src/nemotron_speech stt-benchmark/src/stt_benchmark stt-benchmark/scripts... (exit 0)
+[2026-05-19T16:00:14.505Z] Running command: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true"
+[2026-05-19T16:00:14.505Z] Command completed: /bin/bash -lc "ss -ltnp '( sport = :18080 or sport = :18081 )' || true" (exit 0)
+[2026-05-19T16:00:14.513Z] Running command: /bin/bash -lc "pgrep -af '"'^/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python src/n...
+[2026-05-19T16:00:14.513Z] Command completed: /bin/bash -lc "pgrep -af '"'^/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python src/n... (exit 0)
+[2026-05-19T16:00:17.927Z] Running command: /bin/bash -lc 'ls -ld src/nemotron_speech/__pycache__ && ls -l src/nemotron_speech/__pycache_...
+[2026-05-19T16:00:17.927Z] Command completed: /bin/bash -lc 'ls -ld src/nemotron_speech/__pycache__ && ls -l src/nemotron_speech/__pycache_... (exit 0)
+[2026-05-19T16:00:53.517Z] Running command: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '640,775p'"
+[2026-05-19T16:00:53.517Z] Command completed: /bin/bash -lc "nl -ba src/nemotron_speech/server.py | sed -n '640,775p'" (exit 0)
+[2026-05-19T16:01:25.856Z] Assistant message captured: Implemented the 7d blocker fix. **Refactor** - In [server.py](/home/khkramer/src/nemotron-jan...
+
+[2026-05-19T16:01:25.856Z] Assistant message
+Implemented the 7d blocker fix.
+
+**Refactor**
+- In [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1296), `_continuous_finalize_emit_locked` is now the shared speculative fork/flush/emit/JSONL core.
+- In [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1396), `_continuous_finish_speculative_finalize_locked` is the debounce-expiry epilogue. It clears only `continuous_state`, `continuous_vad_stop_ts`, `continuous_debounce_expiry_ts`, `continuous_debounce_task`, and `continuous_reset_seen`.
+- In [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1418), `_continuous_cold_reset_after_finalize_locked` is the only continuous cold-reset epilogue. It is guarded by `_TRUE_BOUNDARY_FINALIZE_REASONS = {"close", "end"}`.
+- Debounce expiry now finalizes speculatively and retains context; `close` and `end` finalize and then cold-reset.
+
+Speculative expiry now retains `committed_text`, `last_emitted_text`, `continuous_stop_seq`, `overlap_buffer`, `pending_audio`, `total_audio_samples`, `cache_last_channel`, `cache_last_time`, `cache_last_channel_len`, `previous_hypotheses`, `pred_out_stream`, `raw_audio_ring`, `mel_frame_ring`, `current_text`, and `emitted_frames`. `continuous_post_stop_audio` is retained until flushed into the parent on the next `vad_start`/audio resume, or cleared on a true boundary.
+
+**Correctness Proof**
+- `_init_session(session)` for continuous finalization is now only in the true-boundary epilogue at [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1439).
+- The multi-segment smoke showed no mid-sample `true-boundary cold reset complete`; that log appeared only after explicit `end`.
+- The retained-context marker logged after speculative expiry included `cache_last_channel=set`, `cache_last_time=set`, `cache_last_channel_len=set`, `previous_hypotheses=set`, `pred_out_stream=set`, ring sizes, `current_text_chars`, and `emitted_frames`.
+
+**Emit-Once**
+- The finalize core now advances `session.committed_text = final_text` and `session.last_emitted_text = final_text` before the next speculative emit.
+- Multi-segment real-gap smoke:
+```text
+SMOKE_B real_gap_ms=300
+SMOKE_B multi_delta_1= The stale smell of old beer lingers.
+SMOKE_B multi_delta_2= It takes heat to bring out the odor. A cold dip.
+SMOKE_B concatenated= The stale smell of old beer lingers. It takes heat to bring out the odor. A cold dip.
+SMOKE_B control_full= The stale smell of old beer lingers. It takes heat to bring out the odor. A cold dip.
+SMOKE_B concat_matches_control= True
+```
+
+**Preserved**
+- 7c disposable fork/deep-clone path and `NEMOTRON_FORK_ASSERT` remain intact; smoke logged `fork alias assertion PASSED` on both speculative finals.
+- Close-drain `_send_json_locked` hardening remains.
+- `finalize_timing` JSONL fields and `measure.py finalize-budget` remain.
+- Default/phaseG paths remain env-gated; default env-unset smoke still used the old hard reset path and emitted no `finalize_timing`.
+- 6c constant-plan ring, CUDA hardening, lock order, and the 150ms default were not changed.
+
+**Verification**
+- Passed `py_compile` and `ast.parse` for all three files with `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python` and `PYTHONPYCACHEPREFIX=$(mktemp -d)`.
+- Continuous CUDA smoke, `NEMOTRON_CONTINUOUS=1 NEMOTRON_FORK_ASSERT=1 NEMOTRON_FINALIZE_SILENCE_MS=150`:
+  - single segment: exactly one non-empty final plus `finalize_timing`.
+  - multi-segment real 300ms gap: two incremental finals, context retained, no mid-sample cold reset, concatenation matched full control.
+  - close path: forced finalize ran and true-boundary cold reset ran; direct websocket close had already closed the socket, so the tolerant send path skipped delivery instead of crashing.
+- `measure.py finalize-budget` on smoke JSONL:
+```text
+median=324.2 ms p95=329.1 ms n=3 => PASS < 400.0 ms p95
+```
+- Default env-unset smoke:
+```text
+DEFAULT_SMOKE finals=1
+DEFAULT_SMOKE final=The stale smell of old beer lingers.
+DEFAULT_SMOKE finalize_timing_present=False
+```
+- No server left running; ports `18080` and `18081` are clear.
+
+**Scope**
+Code changes are limited to:
+- `src/nemotron_speech/server.py`
+- `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
+- `stt-benchmark/scripts/measure.py`
+
+No full-1000 benchmark was run. One pre-existing root-owned `src/nemotron_speech/__pycache__` remains and could not be removed without sudo; compile checks used `PYTHONPYCACHEPREFIX`.
+
+Next: Claude should re-review this fix plus aliasing/concurrency/latency, then run the measured `fork` full-1000.
+[2026-05-19T16:01:25.896Z] Turn completed.
+
+[2026-05-19T16:01:25.923Z] Final output
+Implemented the 7d blocker fix.
+
+**Refactor**
+- In [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1296), `_continuous_finalize_emit_locked` is now the shared speculative fork/flush/emit/JSONL core.
+- In [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1396), `_continuous_finish_speculative_finalize_locked` is the debounce-expiry epilogue. It clears only `continuous_state`, `continuous_vad_stop_ts`, `continuous_debounce_expiry_ts`, `continuous_debounce_task`, and `continuous_reset_seen`.
+- In [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1418), `_continuous_cold_reset_after_finalize_locked` is the only continuous cold-reset epilogue. It is guarded by `_TRUE_BOUNDARY_FINALIZE_REASONS = {"close", "end"}`.
+- Debounce expiry now finalizes speculatively and retains context; `close` and `end` finalize and then cold-reset.
+
+Speculative expiry now retains `committed_text`, `last_emitted_text`, `continuous_stop_seq`, `overlap_buffer`, `pending_audio`, `total_audio_samples`, `cache_last_channel`, `cache_last_time`, `cache_last_channel_len`, `previous_hypotheses`, `pred_out_stream`, `raw_audio_ring`, `mel_frame_ring`, `current_text`, and `emitted_frames`. `continuous_post_stop_audio` is retained until flushed into the parent on the next `vad_start`/audio resume, or cleared on a true boundary.
+
+**Correctness Proof**
+- `_init_session(session)` for continuous finalization is now only in the true-boundary epilogue at [server.py](/home/khkramer/src/nemotron-january-2026/src/nemotron_speech/server.py:1439).
+- The multi-segment smoke showed no mid-sample `true-boundary cold reset complete`; that log appeared only after explicit `end`.
+- The retained-context marker logged after speculative expiry included `cache_last_channel=set`, `cache_last_time=set`, `cache_last_channel_len=set`, `previous_hypotheses=set`, `pred_out_stream=set`, ring sizes, `current_text_chars`, and `emitted_frames`.
+
+**Emit-Once**
+- The finalize core now advances `session.committed_text = final_text` and `session.last_emitted_text = final_text` before the next speculative emit.
+- Multi-segment real-gap smoke:
+```text
+SMOKE_B real_gap_ms=300
+SMOKE_B multi_delta_1= The stale smell of old beer lingers.
+SMOKE_B multi_delta_2= It takes heat to bring out the odor. A cold dip.
+SMOKE_B concatenated= The stale smell of old beer lingers. It takes heat to bring out the odor. A cold dip.
+SMOKE_B control_full= The stale smell of old beer lingers. It takes heat to bring out the odor. A cold dip.
+SMOKE_B concat_matches_control= True
+```
+
+**Preserved**
+- 7c disposable fork/deep-clone path and `NEMOTRON_FORK_ASSERT` remain intact; smoke logged `fork alias assertion PASSED` on both speculative finals.
+- Close-drain `_send_json_locked` hardening remains.
+- `finalize_timing` JSONL fields and `measure.py finalize-budget` remain.
+- Default/phaseG paths remain env-gated; default env-unset smoke still used the old hard reset path and emitted no `finalize_timing`.
+- 6c constant-plan ring, CUDA hardening, lock order, and the 150ms default were not changed.
+
+**Verification**
+- Passed `py_compile` and `ast.parse` for all three files with `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python` and `PYTHONPYCACHEPREFIX=$(mktemp -d)`.
+- Continuous CUDA smoke, `NEMOTRON_CONTINUOUS=1 NEMOTRON_FORK_ASSERT=1 NEMOTRON_FINALIZE_SILENCE_MS=150`:
+  - single segment: exactly one non-empty final plus `finalize_timing`.
+  - multi-segment real 300ms gap: two incremental finals, context retained, no mid-sample cold reset, concatenation matched full control.
+  - close path: forced finalize ran and true-boundary cold reset ran; direct websocket close had already closed the socket, so the tolerant send path skipped delivery instead of crashing.
+- `measure.py finalize-budget` on smoke JSONL:
+```text
+median=324.2 ms p95=329.1 ms n=3 => PASS < 400.0 ms p95
+```
+- Default env-unset smoke:
+```text
+DEFAULT_SMOKE finals=1
+DEFAULT_SMOKE final=The stale smell of old beer lingers.
+DEFAULT_SMOKE finalize_timing_present=False
+```
+- No server left running; ports `18080` and `18081` are clear.
+
+**Scope**
+Code changes are limited to:
+- `src/nemotron_speech/server.py`
+- `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
+- `stt-benchmark/scripts/measure.py`
+
+No full-1000 benchmark was run. One pre-existing root-owned `src/nemotron_speech/__pycache__` remains and could not be removed without sudo; compile checks used `PYTHONPYCACHEPREFIX`.
+
+Next: Claude should re-review this fix plus aliasing/concurrency/latency, then run the measured `fork` full-1000.
