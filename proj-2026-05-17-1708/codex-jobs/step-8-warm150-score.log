@@ -1,0 +1,29 @@
+service=nemotron_local baseline='' bootstrap=2000 seed=1234
+
+tag='' rows=1000
+  slice-A: n=200/200 mean=2.7364% ci95=[2.0035%, 3.4680%] paired_n=200 delta_vs_baseline=+0.0000 pp ci95=[0.0000 pp, 0.0000 pp]
+  slice-B: n=200/200 mean=3.0091% ci95=[2.1933%, 3.8547%] paired_n=200 delta_vs_baseline=+0.0000 pp ci95=[0.0000 pp, 0.0000 pp]
+
+tag=rc1_base rows=1000
+  slice-A: n=200/200 mean=2.8362% ci95=[2.1044%, 3.6897%] paired_n=200 delta_vs_baseline=+0.0997 pp ci95=[-0.1319 pp, 0.3219 pp]
+  slice-B: n=200/200 mean=3.1642% ci95=[2.3195%, 4.0533%] paired_n=200 delta_vs_baseline=+0.1552 pp ci95=[-0.0465 pp, 0.3748 pp]
+
+tag=ringbuf rows=1000
+  slice-A: n=200/200 mean=2.9335% ci95=[2.2197%, 3.6645%] paired_n=200 delta_vs_baseline=+0.1971 pp ci95=[-0.0607 pp, 0.4522 pp]
+  slice-B: n=200/200 mean=3.1899% ci95=[2.3980%, 4.1017%] paired_n=200 delta_vs_baseline=+0.1808 pp ci95=[-0.0683 pp, 0.4639 pp]
+
+tag=cc7b rows=1000
+  slice-A: n=200/200 mean=1.4660% ci95=[0.9742%, 1.9907%] paired_n=200 delta_vs_baseline=-1.2704 pp ci95=[-1.7123 pp, -0.8557 pp]
+  slice-B: n=200/200 mean=1.7331% ci95=[1.2188%, 2.3681%] paired_n=200 delta_vs_baseline=-1.2759 pp ci95=[-1.8640 pp, -0.7909 pp]
+
+tag=cc7c rows=1000
+  slice-A: n=200/200 mean=1.4675% ci95=[0.9961%, 1.9726%] paired_n=200 delta_vs_baseline=-1.2690 pp ci95=[-1.7327 pp, -0.8451 pp]
+  slice-B: n=200/200 mean=1.7886% ci95=[1.2021%, 2.4228%] paired_n=200 delta_vs_baseline=-1.2205 pp ci95=[-1.7980 pp, -0.7665 pp]
+
+tag=fork rows=1000
+  slice-A: n=200/200 mean=1.6957% ci95=[1.1639%, 2.2626%] paired_n=200 delta_vs_baseline=-1.0408 pp ci95=[-1.4650 pp, -0.6366 pp]
+  slice-B: n=200/200 mean=1.9668% ci95=[1.3520%, 2.6551%] paired_n=200 delta_vs_baseline=-1.0422 pp ci95=[-1.4969 pp, -0.6289 pp]
+
+tag=warm150 rows=1000
+  slice-A: n=200/200 mean=1.6242% ci95=[1.0993%, 2.1867%] paired_n=200 delta_vs_baseline=-1.1122 pp ci95=[-1.5625 pp, -0.6711 pp]
+  slice-B: n=200/200 mean=1.7127% ci95=[1.1517%, 2.3256%] paired_n=200 delta_vs_baseline=-1.2963 pp ci95=[-1.8171 pp, -0.8300 pp]

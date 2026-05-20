@@ -288,6 +288,10 @@ class ASRSession:
     # finalization padding.
     total_audio_samples: int = 0
 
+    # Synthetic warm-up samples already emitted to the model. This is only a
+    # timeline cursor offset; it is not real audio and is never accumulated.
+    synthetic_prefix_samples: int = 0
+
     # STFT boundary state: trailing window_size - hop samples before pending.
     raw_audio_ring: Optional[np.ndarray] = None
 
@@ -364,6 +368,9 @@ class ASRServer:
 
         self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
         self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
+        self.session_warmup_ms = _env_int("NEMOTRON_WARMUP_MS", 0)
+        if self.session_warmup_ms < 0:
+            raise ValueError("NEMOTRON_WARMUP_MS must be >= 0")
         self.finalize_silence_ms = _DEFAULT_FINALIZE_SILENCE_MS
         if self.continuous_context:
             self.finalize_silence_ms = _env_int(
@@ -626,6 +633,82 @@ class ASRServer:
         session.previous_hypotheses = None
         session.pred_out_stream = None
         session.current_text = ""
+
+        session.synthetic_prefix_samples = 0
+        if self.session_warmup_ms > 0:
+            self._run_session_warmup(session)
+
+    def _run_session_warmup(self, session: ASRSession) -> None:
+        """Prime one fresh session with synthetic silence without seeding text."""
+        target_samples = int(round(self.sample_rate * self.session_warmup_ms / 1000))
+        warmup_frames = max(
+            self.pre_encode_cache_size,
+            int(round(target_samples / self.hop_samples)),
+        )
+        warmup_samples = warmup_frames * self.hop_samples
+        preprocess_samples = warmup_samples + self.hop_samples
+
+        warmup_audio = np.zeros(preprocess_samples, dtype=np.float32)
+        fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+            session.raw_audio_ring,
+            warmup_audio,
+        )
+
+        with torch.inference_mode():
+            mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+            warmup_mel = mel[
+                :,
+                :,
+                self.first_preprocess_mel_frame : self.first_preprocess_mel_frame + warmup_frames,
+            ]
+            chunk_len = torch.tensor([warmup_mel.shape[-1]], device='cuda')
+
+            (
+                session.pred_out_stream,
+                discarded_transcribed_texts,
+                session.cache_last_channel,
+                session.cache_last_time,
+                session.cache_last_channel_len,
+                session.previous_hypotheses,
+            ) = self.model.conformer_stream_step(
+                processed_signal=warmup_mel,
+                processed_signal_length=chunk_len,
+                cache_last_channel=session.cache_last_channel,
+                cache_last_time=session.cache_last_time,
+                cache_last_channel_len=session.cache_last_channel_len,
+                keep_all_outputs=False,
+                previous_hypotheses=None,
+                previous_pred_out=None,
+                drop_extra_pre_encoded=0,
+                return_transcription=True,
+            )
+
+        consumed_audio = warmup_audio[:warmup_samples]
+        if len(consumed_audio) >= self.raw_audio_ring_samples:
+            session.raw_audio_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+        else:
+            keep = self.raw_audio_ring_samples - len(consumed_audio)
+            session.raw_audio_ring = np.concatenate(
+                [session.raw_audio_ring[-keep:], consumed_audio]
+            ).astype(np.float32, copy=False)
+        self._update_mel_frame_ring(session, warmup_mel)
+        session.emitted_frames = warmup_frames
+        session.synthetic_prefix_samples = warmup_samples
+
+        discarded_text_present = bool(discarded_transcribed_texts and discarded_transcribed_texts[0])
+        logger.info(
+            f"Session {session.id}: per-session warm-up ran once at init "
+            f"(NEMOTRON_WARMUP_MS={self.session_warmup_ms}, "
+            f"frames={warmup_frames}, samples={warmup_samples}, "
+            f"discarded_returned_text={discarded_text_present}, "
+            f"current_text_chars={len(session.current_text)}, "
+            f"last_emitted_text_chars={len(session.last_emitted_text)}, "
+            f"mel_ring_frames={int(session.mel_frame_ring.shape[-1]) if session.mel_frame_ring is not None else 0}, "
+            f"emitted_frames={session.emitted_frames})"
+        )
+
+    def _session_timeline_samples(self, session: ASRSession) -> int:
+        return session.synthetic_prefix_samples + session.total_audio_samples
 
     def _preprocess_fixed_audio(
         self,
@@ -1211,6 +1294,7 @@ class ASRServer:
         fork.pending_audio = pending_audio
         fork.accumulated_audio = fork.pending_audio
         fork.total_audio_samples = session.total_audio_samples + padding_samples
+        fork.synthetic_prefix_samples = session.synthetic_prefix_samples
         fork.raw_audio_ring = (
             session.raw_audio_ring.copy()
             if session.raw_audio_ring is not None
@@ -1461,7 +1545,7 @@ class ASRServer:
             f"{self._continuous_context_retention_summary(session)}"
         )
 
-    def _continuous_cold_reset_after_finalize_locked(
+    async def _continuous_cold_reset_after_finalize_locked(
         self,
         session: ASRSession,
         *,
@@ -1483,7 +1567,13 @@ class ASRServer:
         session.continuous_vad_stop_ts = None
         session.continuous_debounce_expiry_ts = None
         session.continuous_stop_seq += 1
-        self._init_session(session)
+        if self.session_warmup_ms > 0:
+            async with self.inference_lock:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self._init_session, session
+                )
+        else:
+            self._init_session(session)
         session.continuous_state = STREAMING
 
         logger.info(
@@ -1499,7 +1589,7 @@ class ASRServer:
     ) -> None:
         """Finalize on the shared fork path, then cold-reset at a true boundary."""
         await self._continuous_finalize_emit_locked(session, reason=reason)
-        self._continuous_cold_reset_after_finalize_locked(session, reason=reason)
+        await self._continuous_cold_reset_after_finalize_locked(session, reason=reason)
 
     async def _handle_audio(self, session: ASRSession, audio_bytes: bytes):
         """Accumulate audio and process when enough frames available."""
@@ -1527,7 +1617,7 @@ class ASRServer:
         # We need shift_frames worth of new mel frames (after skipping edge frame)
         min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
 
-        while session.total_audio_samples >= min_audio_for_chunk:
+        while self._session_timeline_samples(session) >= min_audio_for_chunk:
             async with self.inference_lock:
                 text = await asyncio.get_event_loop().run_in_executor(
                     None, self._process_chunk, session
@@ -1767,7 +1857,13 @@ class ASRServer:
 
         session.last_emitted_text = ""
         session.overlap_buffer = None
-        self._init_session(session)
+        if self.session_warmup_ms > 0:
+            async with self.inference_lock:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self._init_session, session
+                )
+        else:
+            self._init_session(session)
 
         logger.debug(
             f"Session {session.id} hard reset complete, state fully reset for next turn"
