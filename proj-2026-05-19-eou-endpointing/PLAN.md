@@ -1,9 +1,14 @@
 # Plan: ASR-internal endpointing — feasibility toward a lower-latency finalize at non-inferior WER
 
 Project directory: `./proj-2026-05-19-eou-endpointing`
-Status: **DRAFT — dual-reviewed (Codex `bi49ruh1q` + Claude), revised, then risk-model corrected
-(greedy append-only / rc1-stability). NOT `/implement`-ready until the parent project closes and
-a final pre-flight re-review passes.**
+Status: **READY for `/implement`** — parent project closed 2026-05-19 (last commit `ef1a7a7`);
+pre-flight delta review (round 3: Codex `b510t8mq0` + Claude parallel) + three cheap probes
+(Probe A NeMo confidence-cfg placement PASS, Probe C client-acceptance gating VERIFIED, Probe B
+"~40% non-prefix" largely a server-log display-truncation artifact) folded. The recommended ship
+baseline is now **`warm200`** (Step-8, server commit `0462679`, full 2.07%, slice-A −1.29
+[−1.84,−0.74], slice-B −1.39 [−1.96,−0.87] paired Δ vs `''`, budget p95 325.8 ms, TTFS p95
+366 ms — matches/exceeds the analytical 2.5 s cc7c ceiling); `fork` (`6181310`, full 2.10%) is
+retained as an ablation control to isolate the EOU contribution from warm-up.
 
 ## Context
 Step-7d `fork` reaches a finalize budget ~325 ms p95 by waiting two stacked static endpoint
@@ -13,8 +18,12 @@ finalize the disposable fork supplies the last chunk's right-context as **synthe
 `(R+1)*shift` zeros (faster-than-wallclock)**. So **~175 ms is a *modeled-formula* floor under
 the locked additive budget, not an irreducible wall-clock floor**; the binding limit is the
 **endpoint-evidence window** of a reliable "speech ended" signal. Goal: **collapse the ~350 ms
-of stacked static waits down to that evidence window, at WER non-inferior to the ~375 ms `fork`
-baseline**, via signals the RNNT joint/decoder can expose through *supported* NeMo config.
+of stacked static waits down to that evidence window, at WER non-inferior to the now-frozen
+`warm200` ship baseline** (Step-8 commit `0462679`, full 2.07% / slice-A −1.29 / slice-B −1.39
+paired Δ vs `''`, budget p95 325.8 ms / TTFS p95 366 ms) — i.e., **lower TTFS than `warm200`
+at WER ≥ `warm200`**. (`fork`, full 2.10%, is the no-warm-up ablation control that isolates
+the EOU contribution from the per-session warm-up.) Signals come via *supported* NeMo config
+(Probe A verified both `confidence_cfg` and nested-`greedy` placements work, non-invasive).
 Candidates: (1) RNNT blank-run, (2) hypothesis stability, (3) joint entropy/confidence.
 Feasibility-first: cheap offline analysis must pass quantitative GO/NO-GO gates before any build.
 
@@ -33,39 +42,64 @@ greedy) and *local to the false boundary*, but its magnitude is the whole flushe
 must be **measured** (Step 4), not assumed to be ~one word. All are irrevocable *post-emit*
 (append-only collector + 7d always-append-only freeze);
 a *pre-emit* discard is still free. The prior "~40% non-prefix transitions ⇒ earlier text
-rewritten" is **not** evidence of beyond-rc1 rewrite on greedy — it conflates the provisional
-≤rc1 tail, interim-vs-flush tail, and detok/casing/punct churn (token-prefix-stable,
-semantic-WER-tolerant). Whether any *genuine* older-than-rc1 token edit ever occurs is an
-explicit measurement here (Step 2b), not an assumption — and its result sets how aggressive the
-trigger can safely be.
+rewritten" framing from review round 2 was, per Probe B (round-3 eyeball scan of warm200 server
+logs), **largely a server-log display-truncation artifact** — the per-chunk interim debug log
+shows a fixed-width sliding tail (leading chars chopped as the cumulative grows), which a
+naïve `startswith` check reads as "non-prefix" even when the underlying token sequence is
+monotone-extending. On greedy, the genuine rate of beyond-rc1 token-rewrite is expected ≈0 by
+the algorithm itself. Step 2b's per-token global-frame classification measures the real rate
+cleanly; the always-append-only contract is robust to whatever that rate turns out to be.
 
 ## Reference implementations
-- **Server tap points (our code — changeable):**
-  - `src/nemotron_speech/server.py:~446` builds the decoding cfg with `strategy: greedy`
+- **Server tap points (our code — changeable; line numbers current at parent commit `0462679`):**
+  - `src/nemotron_speech/server.py:~452-460` builds the decoding cfg with `strategy: greedy`
     (NeMo instantiates `GreedyRNNTInfer`; **`loop_labels` is irrelevant here — it only selects
     the batched `greedy_batch` path**) and calls `change_decoding_strategy(decoding_cfg=...)`
-    at `:~454`.
-  - **Correct config placement (verified vs NeMo source):** `preserve_alignments: true`
-    (top-level or under `greedy:`) **and** `confidence_cfg: {preserve_frame_confidence: true,
-    method_cfg: {...}}` **or** nested `greedy: {preserve_frame_confidence: true,
-    confidence_method_cfg: {...}}` — NeMo reads frame-confidence from `confidence_cfg`/`greedy`,
-    **not** flat top-level keys (`nemo/.../submodules/rnnt_decoding.py:~332`,
-    `nemo/.../utils/asr_confidence_utils.py:~341`).
+    at `:461`.
+  - **Correct config placement (Probe A VERIFIED both work, single-fixture single-clip
+    transcript-identical to baseline + Hypothesis.alignments and .frame_confidence populated):**
+    `preserve_alignments: true` (top-level or under `greedy:`) **and** `confidence_cfg:
+    {preserve_frame_confidence: true, method_cfg: {name: entropy, ...}}` **or** nested `greedy:
+    {preserve_frame_confidence: true, confidence_method_cfg: {...}}`. Recommend the nested
+    `greedy` placement (matches the existing server cfg block). NeMo reads frame-confidence
+    from `confidence_cfg`/`greedy` only — flat top-level keys are silently ignored
+    (`nemo/.../submodules/rnnt_decoding.py:~332`,
+    `nemo/.../utils/asr_confidence_utils.py:~341`). Probe-A measured `frame_confidence` is a
+    float in [0,1] for entropy mode = **normalized confidence** (HIGH = confident).
   - `conformer_stream_step` routes through
     `rnnt_decoder_predictions_tensor(..., return_hypotheses=True, partial_hypotheses=...)`
-    (`nemo/.../mixins/mixins.py:~707`), so correctly-placed flags populate
-    `Hypothesis.alignments`/`.frame_confidence` per chunk (to be VERIFIED non-invasive, Step 1).
-  - Parent-stream step `server.py:~1604`; fork-flush `server.py:~1374/1851`
-    (`_process_final_chunk(fork)` produces the emitted `final_text`); warm-up `:~571`.
-    Blank id via `model.decoding.blank_id` (or `joint.num_classes_with_blank-1`; tensor-vs-int).
-  - 7d substrate: `_continuous_handle_vad_stop_locked` /
-    `_continuous_handle_debounce_expired_locked` / `_continuous_finalize_emit_locked` (sends
-    delta + advances `continuous_emitted_text` at `server.py:~1410`) / `_continuous_append_only_delta`.
-- **Client (our code — changeable; REQUIRED for measurability):**
-  `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:~453` — the client **drops** any
-  `finalize=true` unless `_finalize_requested` was armed by a client reset, so a server-driven
-  EOU final is **not benchmark-visible** without an env-gated client change (Step 1b/5). Audio
-  is available early: `VADProcessor` forwards audio before analyzing
+    (`nemo/.../mixins/mixins.py:~707`); flags populate `Hypothesis.alignments`/`.frame_confidence`.
+  - Parent-stream `conformer_stream_step`: **`server.py:~1695`**; the speculative-fork flush
+    site (`_process_final_chunk(fork)` via the fork built by `_build_continuous_finalize_fork`
+    at `:~1167`, invoked from `_continuous_finalize_emit_locked` at `:~1418` which actually
+    runs the model step at `:~1466` and the `_process_final_chunk` at `:~1872`); the second
+    `conformer_stream_step` call site (`_process_final_chunk` internals) at **`:~1948`**.
+    Per-session warm-up (Step-8 addition) at **`:~641`** (`_run_session_warmup`); global startup
+    warmup unchanged at `:~552`. Blank id via `model.decoding.blank_id` (or
+    `joint.num_classes_with_blank-1`; tensor-vs-int).
+  - 7d substrate: `_continuous_handle_vad_stop_locked` (`:~1157`),
+    `_continuous_handle_debounce_expired_locked` (`:~1243`), `_continuous_finalize_emit_locked`
+    (`:~1418`, advances `committed_text`/`last_emitted_text` at `:~1511`),
+    `_continuous_finish_speculative_finalize_locked` (`:~1526`),
+    `_continuous_cold_reset_after_finalize_locked` (`:~1548`, the only continuous `_init_session`
+    site; resets `continuous_emitted_text=""` at `:~1563`), `_continuous_append_only_delta`
+    pure helper (`:~233`).
+  - Step-8 surface (warm-up offset interaction): `synthetic_prefix_samples: int = 0` on
+    `ASRSession` (`:~293`); set at `_run_session_warmup` (`:~696`); fork copies it (`:~1297`);
+    `_session_timeline_samples` helper (`:~710-711`) = `synthetic_prefix_samples + total_audio_samples`,
+    used at the chunk-cadence gate (`:~1812` region). `session.emitted_frames` after warm-up
+    equals `warmup_frames` (`:~695`), NOT 0 — Step 1 instrumentation must use it as the
+    starting offset for the per-token global-frame index (see Step 1).
+- **Client (our code — changeable; REQUIRED for measurability — Probe C VERIFIED):**
+  `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py:456-458` — `if not
+  self._finalize_requested: ... return` — any `finalize=true` frame received when
+  `_finalize_requested` is False is dropped with a debug log, no `TranscriptionFrame` pushed,
+  invisible to the benchmark collector. `_finalize_requested` is only armed via the client's
+  own `_send_finalize_reset()` (called on `VADUserStoppedSpeakingFrame`). The text-dedup at
+  `:453` already bypasses in `continuous_context` mode (`and not self._continuous_context`)
+  so multi-finals/sample work. So a server-driven EOU final is **not benchmark-visible**
+  without an env-gated client change (Step 1b/5). Audio is available early: `VADProcessor`
+  forwards audio before analyzing
   (`pipecat-core-code/.../audio/vad_processor.py:~112`); synthetic transport streams silence
   until transcription (`stt-benchmark/.../pipeline/synthetic_transport.py:~150`).
 - **NeMo (UNCHANGEABLE — read-only):** `nemo/.../utils/rnnt_utils.py` `Hypothesis`
@@ -121,30 +155,42 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
 
 - [ ] **1. Instrumentation: server config + token-level signal capture + client EOU-acceptance (env-gated, no behavior change when off)**
   (a) Server: under `NEMOTRON_EOU_PROBE=1`, inject the **correctly-placed**
-  `preserve_alignments` + `confidence_cfg:{preserve_frame_confidence:true,
-  method_cfg:{name:entropy,...}}` (and a max_prob variant) before `change_decoding_strategy`
-  (`server.py:~446`). After the parent-stream step (`:~1604`), from
-  `session.previous_hypotheses[0]` capture per chunk: **the cumulative token-id sequence
-  (`y_sequence`/alignment ids), not just rendered text**; the per-frame alignment
-  (blank vs non-blank via `model.decoding.blank_id`); `frame_confidence` (record the
-  entropy→normalized-confidence convention + threshold direction); `score`; and — because
-  `partial_hypotheses` does **not** carry historical timestamp/alignment forward (only
-  `last_token`/`y_sequence`/`dec_state`) — **at the moment each token position is first
-  emitted, persist its global encoder-frame index** (and chunk idx), the token string, and its
-  decoded **word-boundary state** (does this token complete/extend a word). Also record the
-  **model's rc1 right-context frame span `R`** (so a token can be aged vs its right-context
-  window) and a **token-level** `changed_positions` (which token ids differ from the previous
-  chunk), not a string bool.
+  `preserve_alignments` + nested `greedy:{preserve_frame_confidence:true,
+  confidence_method_cfg:{name:entropy,...}}` (Probe-A-recommended; flat
+  `confidence_cfg:{...}` also works per Probe A; both verified non-invasive at single-fixture
+  scale) before `change_decoding_strategy` (`server.py:~452-461`, with the call itself at
+  `:461`). After the parent-stream step (`:~1695`), from `session.previous_hypotheses[0]`
+  capture per chunk: **the cumulative token-id sequence (`y_sequence`/alignment ids), not just
+  rendered text**; the per-frame alignment (blank vs non-blank via `model.decoding.blank_id`);
+  `frame_confidence` (Probe A confirmed entropy mode returns a float in [0,1] = normalized
+  confidence, HIGH = confident); `score`; and — because `partial_hypotheses` does **not** carry
+  historical timestamp/alignment forward (only `last_token`/`y_sequence`/`dec_state`) — **at
+  the moment each token position is first emitted, persist its global encoder-frame index**
+  (and chunk idx), the token string, and its decoded **word-boundary state** (does this token
+  complete/extend a word). Also record the **model's rc1 right-context frame span `R`** (so a
+  token can be aged vs its right-context window) and a **token-level** `changed_positions`
+  (which token ids differ from the previous chunk), not a string bool.
+  **Step-8 warm-up offset (when running on top of `warm200`):** the per-session warm-up at
+  `_run_session_warmup` (`server.py:~641`) consumes `warmup_frames` of encoder frames at
+  session init and sets `session.emitted_frames = warmup_frames` (`:~695`) and
+  `session.synthetic_prefix_samples = warmup_samples` (`:~696`). Step-1 capture must use
+  `session.emitted_frames` as the starting offset for the per-token global-frame index (so
+  rc1-age in Step 2b is correct on the `warm200` baseline; otherwise every token's age is off
+  by `warmup_frames`). Persist both (i) the **model-frame index** (for rc1 aging) and (ii) the
+  **real-audio-time** (for endpoint-latency joins with `vad_stop`/`debounce_expiry`); they
+  diverge by exactly the warm-up's synthetic prefix when warm-up is on, by zero otherwise.
   → per-session probe JSONL (reuse the 7d telemetry writer; new keys; do not perturb the
   finalize-budget schema). (b) Client: under `NEMOTRON_EOU_CLIENT=1`, env-gated path in
   `nemotron_local_stt.py` to **accept server-driven `finalize=true` without a prior client
   reset** (Pipecat finalize bookkeeping, push `TranscriptionFrame`, record receipt timing).
   **Gate (TWO smokes — env-unset alone proves nothing about `preserve_*`):** (1) env-unset ⇒
   server AND client byte-identical to 7d `fork`; (2) **`NEMOTRON_EOU_PROBE=1`
-  signal-capture-only** ⇒ transcript **WER-equivalent to 7d `fork`** on a 20-sample smoke —
-  this is the real non-invasiveness test, because enabling `confidence_cfg` forces
-  `log_normalize=True` in the greedy path (argmax is invariant to monotonic normalization, so
-  the transcript *should* be identical, but it must be **verified**, not assumed). Plus: probe
+  signal-capture-only** ⇒ transcript **WER-equivalent to 7d `fork`** on a 20-sample smoke.
+  Probe A (single-fixture single-clip, both placements) already verified config acceptance +
+  `Hypothesis.alignments`/`.frame_confidence` populated + transcript byte-identical to baseline
+  (argmax invariant to the `log_normalize=True` that enabling `confidence_cfg` forces); the
+  20-sample smoke remains required only to confirm this holds across realistic chunk sequences
+  and the full 7d stream path. Plus: probe
   JSONL populated incl. per-token global-frame index + token string + word-boundary state +
   `R` + `changed_positions`, and the client accepts a synthetic server-driven final; only the
   3 files; no new deps.
@@ -218,13 +264,23 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   **dual adversarial review (Codex + Claude) pre-run.**
   Key files: `src/nemotron_speech/server.py`, `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
 
-- [ ] **6. Measured full-1000 `eou` — the only authoritative gate**
-  Full-1000 measured run (server `NEMOTRON_EOU_TRIGGER=...` `NEMOTRON_FORK_ASSERT=1`, client
-  `NEMOTRON_EOU_CLIENT=1`, rc1). Paired Δ vs `''` and vs `fork`, slice-A + slice-B + full,
-  bootstrap CIs; finalize-budget p95; emit-once; 0 fork-alias-FAILED. **Gate:** WER
-  non-inferior to `fork` (CIs overlap / Δ within noise both slices) AND finalize-budget p95
-  collapses toward the target band AND emit-once early_final ≈ 0 AND 0 fork-alias-FAILED.
-  Honest measured-vs-modeled: server endpoint elimination measured; Silero `stop_secs` modeled.
+- [ ] **6. Measured full-1000 `eou` — the only authoritative gate (dual-baseline ablation)**
+  Run **two** measured full-1000 tags so the EOU contribution is isolated from the warm-up
+  contribution (otherwise we ship a bundle of unknown attribution):
+  - **`eou`** — `NEMOTRON_EOU_TRIGGER=<chosen>` + `NEMOTRON_FORK_ASSERT=1`,
+    `NEMOTRON_CONTINUOUS=1`, client `NEMOTRON_EOU_CLIENT=1`, rc1, **no warm-up**. Compares vs
+    `fork` (the no-warm-up control) to isolate the EOU trigger's WER/latency contribution.
+  - **`eou_warm200`** — same as above PLUS `NEMOTRON_WARMUP_MS=200`. Compares vs `warm200`
+    (the now-frozen ship baseline) as the actual **ship gate**.
+  Paired Δ vs `''` AND vs `fork` AND vs `warm200`, slice-A + slice-B + full, bootstrap CIs;
+  finalize-budget p95; emit-once; 0 fork-alias-FAILED. **Ship gate (`eou_warm200`):** WER
+  non-inferior to `warm200` (paired Δ-vs-`warm200` CIs include 0 or are negative both slices;
+  no slice-Δ point estimate worse than the cc7c-vs-cc7b known-noise reference ±0.10 pp) AND
+  **finalize-budget p95 < `warm200`'s 325.8 ms** (the headline win — lower TTFS at non-inferior
+  WER) AND emit-once early_final-class behavior preserved AND 0 fork-alias-FAILED.
+  **Ablation read (`eou`):** confirms the EOU contribution alone; if `eou` ≥ `fork` accuracy
+  at lower latency, the trigger is doing real work even without warm-up. Honest measured-vs-
+  modeled: server endpoint elimination measured; framework-locked Silero `stop_secs` modeled.
   Key files: `src/nemotron_speech/server.py`, `stt-benchmark/scripts/measure.py`
 
 - [ ] **7. Consolidate: extend the canonical table + docs + recommendation**
@@ -238,13 +294,13 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Instrumentation (cfg + token-level capture + client accept) | pending | — | correct confidence_cfg placement; token-id series + R + changed_positions; preserve_* non-invasive verified; client-accept REQUIRED |
+| 1 | Instrumentation (cfg + token-level capture + client accept) | pending | — | Probe-A-verified placement (nested-`greedy`); token-id series + R + changed_positions + Step-8 warm-up offset (model-frame + real-audio-time dual cursors); Probe-A non-invasiveness validated single-fixture; client-accept Probe-C-verified REQUIRED |
 | 2 | Offline collection (subset + fork-flush replay material) | pending | — | parent-stream text alone insufficient |
 | 2b | rc1-stability measurement (rewrite question, with data) | pending | — | classify (i) ≤rc1 tail / (ii-a) benign render / (ii-b) WER-relevant render-word / (iii) genuine beyond-rc1 edit; (iii)≈0 expected; **mechanism check, NOT the F-setter** |
 | 3 | Oracle ROC vs endpoint | pending | — | **GO/NO-GO #1**: ROC curve; conservative provisional F; binding F = combined Step 3+4 (Step-4 prices per-fire cost); gt = Silero stop-event + est. acoustic±band |
 | 4 | Fork-flush oracle proxy | pending | — | **GO/NO-GO #2**, non-authoritative proxy |
 | 5 | Online prototype (env-gated) + dual review | pending | — | hard false-final gate / interim-until-confirmed |
-| 6 | Measured full-1000 `eou` | pending | — | only authoritative WER+latency gate |
+| 6 | Measured full-1000 `eou` + `eou_warm200` (dual-baseline) | pending | — | `eou` (no warm-up, vs `fork` ablation) + `eou_warm200` (vs `warm200` ship gate); ship gate = WER non-inferior to `warm200` AND budget p95 < 325.8 ms |
 | 7 | Consolidate table + docs | pending | — | measured-vs-modeled honesty; framework-VAD caveat |
 
 ## Dual-review record
@@ -265,4 +321,34 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   Step-3 keeps a conservative provisional `F`, binding `F` = combined Step 3+4 (Step-4 prices
   per-fire cost); (5) non-invasiveness needs a **probe-enabled** smoke (enabling confidence
   forces `log_normalize=True`), not just env-unset.
-- A final pre-flight re-review is required before this is handed to `/implement`.
+- **Round 3 (pre-flight delta, 2026-05-19; Codex `b510t8mq0` + Claude parallel; both
+  CONVERGED on the same fix set, verdict NEEDS-FIX-ROUND on mechanical edits):** parent
+  project closed (`ef1a7a7`); three cheap pre-review probes run before this round to ground it
+  empirically. Probe results folded:
+  - **Probe A (NeMo confidence-cfg placement) — PASS**: both `flat_confidence_cfg` and
+    `nested_greedy` placements accepted; `Hypothesis.alignments` and `.frame_confidence`
+    populated; transcript byte-identical to baseline (argmax-invariant to `log_normalize=True`);
+    `frame_confidence` is a float in [0,1] (entropy mode = normalized confidence, HIGH =
+    confident). Plan now recommends nested-`greedy` placement; Step-1 Gate (b) tightened
+    from "must verify" to "Probe A verified at single-fixture; 20-sample smoke confirms at
+    realistic scale". Script: `probe_a_decoding_cfg.py`.
+  - **Probe C (client EOU-acceptance gating) — VERIFIED** at `nemotron_local_stt.py:456-458`
+    (`if not _finalize_requested: drop`). Step-1b's "REQUIRED for measurability" upgraded
+    from presumed to empirically anchored.
+  - **Probe B (cumulative-text transitions, warm200 server-log eyeball) — clarifying nuance**:
+    the prior dual-review's "~40% non-prefix transitions" figure was largely a
+    *display-truncation artifact* of the server's interim debug log (fixed-width sliding tail),
+    not measured ASR prefix rewrite. Genuine beyond-rc1 token-rewrite rate on greedy expected
+    ≈0. Context risk-model paragraph de-escalated accordingly; Step 2b's measurement is now
+    even more decision-relevant (it cleanly settles the question).
+  - **Mechanical folds (5)**: (a) baseline pivot — ship gate now `warm200` (`0462679`, full
+    2.07 % / slice-A −1.29 / slice-B −1.39), `fork` retained as ablation control. (b) Step 6
+    becomes dual-baseline: `eou` (no warm-up, vs `fork` ablation) AND `eou_warm200`
+    (vs `warm200` ship gate) — isolates EOU contribution from warm-up. (c) Step-1 capture
+    folds the Step-8 warm-up offset (`session.emitted_frames` = `warmup_frames` after warm-up;
+    log dual model-frame-index + real-audio-time cursors). (d) Server line citations updated
+    to the now-frozen parent commit `0462679` (parent-stream at `:~1695`, fork-flush at `:~1948`,
+    per-session warm-up `_run_session_warmup` at `:~641`, etc.). (e) Status line updated to
+    "READY for `/implement`" — parent project has closed and this round's edits are folded.
+- **No fourth review round** is warranted (Codex/Claude converged on mechanical edits, no new
+  structural defects; same proportionality discipline applied throughout — 7c precedent).
