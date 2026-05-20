@@ -172,7 +172,77 @@ and detok/casing/punctuation churn (token-prefix-stable, semantic-WER-tolerant).
 <i>genuine</i> edit to a token older than its right-context window ever occurs on this path is
 an explicit measurement in the next-stage plan, not an assumption.</p>
 
-<h2>7. Honest caveats</h2>
+<h2>7. Empirical EOU result on this checkpoint (2026-05-20 follow-up)</h2>
+<p>The "speculation" table in §6 has been tested. Full project at
+<code>proj-2026-05-19-eou-endpointing/</code>; full negative-finding write-up at
+<a href="eou-asr-internal-finding.md"><code>docs/eou-asr-internal-finding.md</code></a>.
+<b>Verdict: NO-GO for the voice-agent end-of-turn use case on
+<code>nvidia/nemotron-speech-streaming-en-0.6b</code>.</b> The
+<code>warm200</code> shippable from the parent project remains the recommended production
+configuration.</p>
+<p><b>What we built and measured.</b> Env-gated probe instrumentation (<code>NEMOTRON_EOU_PROBE=1</code>
+with <code>preserve_alignments</code>, <code>preserve_frame_confidence</code>, and tsallis-entropy
+<code>confidence_method_cfg</code> installed via <code>change_decoding_strategy</code> at startup —
+the §6 "supported decode instrumentation" path is feasible: it is argmax-invariant to baseline and
+default-off byte-identical to <code>fork</code>/<code>warm200</code>). Per-chunk state snapshots
+(<code>NEMOTRON_EOU_SNAPSHOT_DIR=...</code>) so any operating point can be replayed offline. ROC
+sweep across the three signal families from §6 (hypothesis stability, blank-run, normalized
+confidence) at 28 operating points, on 100 LibriSpeech sessions (duration-representative of the
+full 1000).</p>
+<p><b>What we found.</b> The 28-point viability table (latency p95 ≤ {0, 50, 100, 150, 200} ms
+crossed with false-early-fire rate ≤ {0.5%, 1%, 2%, 5%}) had <b>zero matches</b>. Each signal has
+the same bimodal shape: at low K it fires constantly on natural in-utterance pauses (97-100%
+false-fire at K≤3), at high K it doesn't fire at all in most sessions (95% never-fired at K≥60
+encoder frames). The <code>hyp_unchanged K</code> and <code>blank_run K</code> signals fire on
+identical chunks at every K.</p>
+<p><b>Why (mechanism, not tuning).</b> Voice-agent end-of-turn detection must discriminate
+inter-sentence pauses (~280 ms in our data) from end-of-turn pauses (~2 s). The three signal
+families are all duration-thresholded on decoder-emission counters; they cannot do anything a
+calibrated pause-duration threshold cannot. The moment K is set large enough to ignore
+inter-sentence pauses, the wallclock latency equals Silero's. The §6 prediction "<i>a stability
+signal that waits until the tail has settled past the rc1 window is genuinely safe from the
+rewrite concern</i>" was confirmed (Step 2b's rc1-stability analysis: greedy RNNT is
+append-only on committed tokens; the rewrite concern was overstated in earlier analysis).
+<b>What the rc1-stability finding does NOT do, on this checkpoint:</b> give us a non-duration
+signal to discriminate end-of-turn from inter-sentence-pause.</p>
+<p><b>Architecturally, the silence-pump door is open</b>. The server has no per-chunk
+rate-limiting (<code>_handle_audio_locked</code> processes back-to-back, ~10 ms GPU per 160 ms
+chunk ≈ 16× compute-vs-realtime ceiling). The Step-7d fork-flush already feeds
+<code>(R+1) × shift_frames × hop_samples</code> = 320 ms of synthetic zeros through
+<code>conformer_stream_step</code> at faster-than-wallclock pace. Extending this to longer
+synthetic silence is feasible without any framework or decoder-mode change. It just doesn't help
+the end-of-turn problem: even an unbounded-K synthetic-silence pump cannot synthesize a
+non-duration signal that this decoder doesn't expose.</p>
+<p><b>The §6 table updated with results:</b></p>
+<table>
+<tr><th>Approach</th><th>Empirical result</th></tr>
+<tr><td><b>Speculative fork (built)</b></td>
+<td><span class="m">Shipping in <code>warm200</code></span> — bounds state damage, ~5–60 ms GPU.</td></tr>
+<tr><td><b>Hypothesis stability</b></td>
+<td><span class="r">Tested — fires identically to blank-run; not viable as a Silero replacement.</span></td></tr>
+<tr><td><b>RNNT blank-run confidence</b></td>
+<td><span class="r">Decoder instrumentation works (argmax-invariant); ROC sweep produced
+zero viable operating points.</span></td></tr>
+<tr><td><b>Joint-distribution entropy / confidence</b></td>
+<td><span class="r">Confidence values saturate near 1.0 throughout; insufficient dynamic range
+to discriminate speech from inter-sentence-pause.</span></td></tr>
+<tr><td><b>Adaptive debounce</b></td>
+<td><span class="r">Was contingent on a viable underlying signal; not buildable on top of any
+of the above.</span></td></tr>
+<tr><td><b>ASR-driven endpointing (reduce Silero <code>stop_secs</code>)</b></td>
+<td><span class="r">Not viable here on this checkpoint for voice-agent use case.</span></td></tr>
+<tr><td><b>Dedicated EOU head</b></td>
+<td><span class="m">Still the right architectural answer for a future model. Requires training; out of scope on the locked checkpoint.</span></td></tr>
+</table>
+<p><b>The binding endpoint-evidence floor is Silero's ~200 ms.</b> §3's two-floors framing was
+correct in shape, and we now have empirical confirmation that the endpoint-evidence floor —
+not the modeled-formula floor — is what's binding for this use case on this model.</p>
+<p><b>Caveats:</b> single checkpoint, single corpus (LibriSpeech), single language (English).
+Conversational speech with different pause distributions might shift the numbers but not the
+mechanism. A future checkpoint with an explicit EOU classifier head would change the picture
+entirely.</p>
+
+<h2>8. Honest caveats</h2>
 <ul>
 <li><b>Two floors, not one.</b> ~175 ms is a modeled <i>formula</i> floor; the true
 post-decision wall-clock floor is lower (synthetic rc1) and the binding limit is the

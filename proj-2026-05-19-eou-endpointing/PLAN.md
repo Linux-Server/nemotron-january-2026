@@ -1,7 +1,9 @@
 # Plan: ASR-internal endpointing — feasibility toward a lower-latency finalize at non-inferior WER
 
 Project directory: `./proj-2026-05-19-eou-endpointing`
-Status: **READY for `/implement`** — parent project closed 2026-05-19 (last commit `ef1a7a7`);
+Status: **CLOSED — NO-GO #1 (2026-05-20)**. See `docs/eou-asr-internal-finding.md` and `docs/ttfs-latency-explainer.html` §7. `warm200` (parent `ef1a7a7`) remains the recommended production configuration; this project does not change that recommendation. Original READY notes follow for historical reference.
+
+Historical: **READY for `/implement`** — parent project closed 2026-05-19 (last commit `ef1a7a7`);
 pre-flight delta review (round 3: Codex `b510t8mq0` + Claude parallel) + three cheap probes
 (Probe A NeMo confidence-cfg placement PASS, Probe C client-acceptance gating VERIFIED, Probe B
 "~40% non-prefix" largely a server-log display-truncation artifact) folded. The recommended ship
@@ -244,7 +246,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   the algorithm; it de-risks the *mechanism*, while Step 4 measures the *cost*.
   Key files: `proj-2026-05-19-eou-endpointing/rc1_stability.py` (proj scratch)
 
-- [~] **3. Offline ROC: signal vs endpoint — quantitative GO/NO-GO #1**
+- [!] **3. Offline ROC: signal vs endpoint — quantitative GO/NO-GO #1 — NO-GO**
   Join per-chunk signals with Step-1 ground truth. Report detection latency **relative to the
   Silero stop-event time** AND, separately, an **estimated acoustic stop** (state the chunk/VAD
   uncertainty band). Sweep thresholds for blank-run K / hypothesis-unchanged K chunks /
@@ -259,7 +261,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   operating point can even reach the latency target → STOP, write the negative finding.
   Key files: `proj-2026-05-19-eou-endpointing/oracle_roc.py` (proj scratch)
 
-- [ ] **4. Offline fork-flush oracle proxy — quantitative GO/NO-GO #2 (non-authoritative)**
+- [!] **4. Offline fork-flush oracle proxy — SKIPPED (Step 3 NO-GO #1)**
   For the best 1–2 operating points, replay each subset sample: at the trigger chunk produce
   the **actual fork-flushed `final_text`** (Step-2 material), reconstruct the emitted transcript
   via the exact `_continuous_append_only_delta` semantics, compute a **reference-distance proxy**
@@ -269,7 +271,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   non-inferiority margin. State the simulation≠online residue.
   Key files: `proj-2026-05-19-eou-endpointing/oracle_wer.py` (proj scratch)
 
-- [ ] **5. Minimal env-gated online prototype (only if 2b, 3 & 4 pass) + dual pre-run review**
+- [!] **5. Minimal env-gated online prototype — SKIPPED (Step 3 NO-GO #1)**
   Server `NEMOTRON_EOU_TRIGGER=...` fires the speculative finalize on the chosen signal from
   the parent stream, with the Rule's hard false-final confirmation (or
   interim-until-confirmed), replacing/gating the 150 ms debounce; fork-discard +
@@ -283,7 +285,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   **dual adversarial review (Codex + Claude) pre-run.**
   Key files: `src/nemotron_speech/server.py`, `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
 
-- [ ] **6. Measured full-1000 `eou` — the only authoritative gate (dual-baseline ablation)**
+- [!] **6. Measured full-1000 `eou` — SKIPPED (Step 3 NO-GO #1)**
   Run **two** measured full-1000 tags so the EOU contribution is isolated from the warm-up
   contribution (otherwise we ship a bundle of unknown attribution):
   - **`eou`** — `NEMOTRON_EOU_TRIGGER=<chosen>` + `NEMOTRON_FORK_ASSERT=1`,
@@ -302,7 +304,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   modeled: server endpoint elimination measured; framework-locked Silero `stop_secs` modeled.
   Key files: `src/nemotron_speech/server.py`, `stt-benchmark/scripts/measure.py`
 
-- [ ] **7. Consolidate: extend the canonical table + docs + recommendation**
+- [x] **7. Consolidate: write negative finding doc + update TTFS explainer** (2026-05-20: `docs/eou-asr-internal-finding.md` + `docs/ttfs-latency-explainer.html` §7)
   Add `eou` row(s) (full + slice-A + slice-B, paired Δ + CIs, in-budget tag, signal + operating
   point, the Step-2b rc1-stability result, the Step-3 latency↔false-fire curve), update
   `docs/ttfs-latency-explainer.html` + the canonical finding doc with measured reality and the
@@ -316,11 +318,11 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
 | 1 | Instrumentation (cfg + token-level capture + client accept) | done | 13a6846 (parent) / a53fba8 (nested) | Codex `mpdna7a0` impl + Claude diff-review ACCEPT. server.py +372 (all-additive, env-gated NEMOTRON_EOU_PROBE), nemotron_local_stt.py +4/-1 (gate at :457 `not _finalize_requested and not (_eou_client_accept and _continuous_context)`); EOU probe writes a SEPARATE `<run_tag>.eou_probe.jsonl` (finalize-budget schema untouched). Round-4 pre-call snapshot at server.py:2056 (chunk_model_frame_start + prev_y_len) BEFORE conformer_stream_step at :2063; emitted_frames increment at :2086; write at :2092 — ordering correct. Per-token derives model_frame_index from Hypothesis.alignments/timestamp + pre-call offset; model_frame_event_index = model_frame_index*1024+subindex for RNNT same-frame ties. timeline_cursor uses Step-8 helper (warm-up-aware). **Smokes:** env-unset 2/2 exact-match vs `fork`; probe-enabled smoke (EOU_PROBE+EOU_CLIENT+CONTINUOUS+SILENCE_MS=150+FORK_ASSERT) 20/20 exact-match vs `fork` + 1417 probe rows + monotone frame indices + frame_confidence ∈ [0.021,0.9999] + client bypass all 3 modes tested (default-dropped/misconfig-dropped/enabled-accepted) |
 | 2 | Offline collection (subset + per-chunk state snapshots) | done | (folds into next commit) | Codex `mpdouj1j` impl + Claude diff-review ACCEPT. server.py +145 (all-additive, env-gated NEMOTRON_EOU_SNAPSHOT_DIR + NEMOTRON_EOU_SNAPSHOT_EVERY); `snapshot_tree_cpu` mirrors `clone_tree` with `tensor_clone_cpu` base case (memo-tracked, recursive, NeMo-Hypothesis-aware); writer at server.py:1225 runs POST-call at site :2237 (immediately after Step 1 probe writer), gated on `eou_snapshot_dir is None or snapshot is None`; audio sidecar captured at `_handle_audio` (:2124) + flushed once in ws-handler `finally` (:1347); double-gated (snapshot requires EOU_PROBE=1 AND SNAPSHOT_DIR non-empty). `proj-2026-05-19-eou-endpointing/collect_signals.py` (346 LOC): loads slice-B 200 IDs, cross-refs fork.jsonl multi-segment via results.db, generates `subset.json` + `runbook.md`; CLI subsetting verdict — no `--ids`/`--sample-ids-file` flag in benchmark, runbook recommends full-1000 capture with downstream filtering. **Smokes:** snapshot smoke 3/3 transcript match vs Step 1 baseline & `fork` + 160 `.pt` files + 3 audio.bin + cache_last_channel shape (24,1,70,1024) + dec_state present in later snapshots + fork-assert PASSED; env-unset 2/2 byte-identical to `fork` (no probe, no snapshots). Disk: ~7.35 MiB/.pt, ~100 GiB for slice-B 200 (tunable via SNAPSHOT_EVERY). Caveat: PyTorch 2.11 requires `torch.load(..., weights_only=False)` (NeMo Hypothesis objects). Generated artifacts: `subset.json` (200 IDs, 134 multi-segment) + `runbook.md`. |
 | 2b | rc1-stability measurement (rewrite question, with data) | tooling-done | (next commit) | Codex `bneyfu1hs` impl + Claude diff-review ACCEPT. `rc1_stability.py` (825 LOC, project-scratch): classifier precedence iii>ii-b>ii-a>i; pure-append events go to their own `append-only` bucket (not (i)-(iii), preserving the plan's "(iii)≈0 expected" framing); shortening + unknown sanity buckets; CLI: --probe-jsonl (repeated) / --output-json / --examples-per-class / --silent; emits one-line JSON summary + readable counts/examples + optional structured JSON. **Smoke** (160 probe rows from 3 fresh fixtures, R=16 frames): 55 classified events, ALL 55 append-only; 0 (i)/(ii-a)/(ii-b)/(iii)/unknown/shortening. Matches the plan's expectation — greedy RNNT on short clean audio shows no mid-sequence id changes. **Full-subset (iii)-count is operator-driven** (runbook.md from Step 2 produces the slice-B probe JSONLs; this analyzer is ready to run against them). |
-| 3 | Oracle ROC vs endpoint | tooling-done, gate-pending | (next commit) | Codex `bkpu4ympd` impl + Claude diff-review ACCEPT. `oracle_roc.py` (981 LOC, project-scratch). Three signal families: blank-run K, hyp-unchanged K, normalized-confidence τ for T ms. Endpoint ground truth: Silero `vad_stop` from finalize JSONL + acoustic stop from .bin sidecar (20 ms RMS, last frame above max(1% max RMS, -60 dB), ±40 ms band). session_id ↔ sample_id join: temporal-order fallback (telemetry lacks session_id field; documented limitation); benchmark_batch_index → sample_id via test_results.db + results.db. **Partial-data smoke (mid-collection, 65 sessions, 4787 probe rows)** — concerning: blank_run K=3 p95=−613 ms / 98% false-fire, K=5 p95=911 ms / 83% false-fire, K=10 p95=11597 ms / 15% false-fire / 1.5% never. Confidence τ=0.90,T=320 ms p95=−443 ms / 94% false-fire. **Zero viable operating points** on partial data — signals fire constantly in natural in-speech gaps OR fire far too late. Real gate call deferred until full-1000 collection completes. **GO/NO-GO #1**: ROC curve; conservative provisional F; binding F = combined Step 3+4 (Step-4 prices per-fire cost). |
-| 4 | Fork-flush oracle proxy | pending | — | **GO/NO-GO #2**, non-authoritative proxy |
-| 5 | Online prototype (env-gated) + dual review | pending | — | hard false-final gate / interim-until-confirmed |
-| 6 | Measured full-1000 `eou` + `eou_warm200` (dual-baseline) | pending | — | `eou` (no warm-up, vs `fork` ablation) + `eou_warm200` (vs `warm200` ship gate); ship gate = WER non-inferior to `warm200` AND budget p95 < 325.8 ms |
-| 7 | Consolidate table + docs | pending | — | measured-vs-modeled honesty; framework-VAD caveat |
+| 3 | Oracle ROC vs endpoint — **NO-GO #1** | done | b191e41 (tooling) + this commit (gate call) | **GATE: NO-GO** on 100-session full ROC. 28-point viability table (latency p95 ≤ {0,50,100,150,200} ms × false-fire ≤ {0.5%,1%,2%,5%}) = ZERO matches. All three signal families (blank_run K, hyp_unchanged K, normalized_confidence τ for T) have identical bimodal failure: low K → 97-100% false-fire on natural in-utterance pauses; high K → 95% never-fired. Use-case framing (user-confirmed): voice-agent end-of-turn detection requires discriminating ~280 ms inter-sentence pauses from ~2 s end-of-turn pauses. The three signal families are all duration-thresholded counters; cannot do anything a calibrated pause-threshold (Silero) cannot, with strictly worse latency. Architecturally the silence-pump door is open (server has no rate-limiting; 7d fork-flush already feeds 320 ms synthetic zeros faster-than-wallclock) but synthetic-silence-pump does not solve the discriminative problem. Codex independent verification of the source-code claims: VERIFIED (with corrections folded). Negative finding documented at `docs/eou-asr-internal-finding.md` and `docs/ttfs-latency-explainer.html` §7. **`warm200` (parent commit ef1a7a7) remains the recommended production configuration.** Codex `bkpu4ympd` ROC impl + Codex `bm53v0kiy` diagnostic impl + Codex `019e45c7` verification. |
+| 4 | Fork-flush oracle proxy | **skipped (NO-GO #1)** | — | Not run — Step 3 NO-GO halts the gate chain |
+| 5 | Online prototype (env-gated) + dual review | **skipped (NO-GO #1)** | — | Not built — was contingent on Step 3+4 passing |
+| 6 | Measured full-1000 `eou` + `eou_warm200` (dual-baseline) | **skipped (NO-GO #1)** | — | Not run — was contingent on Step 5 prototype |
+| 7 | Consolidate table + docs | **done (negative finding)** | this commit | `docs/eou-asr-internal-finding.md` + `docs/ttfs-latency-explainer.html` §7 updated with empirical results. `warm200` (parent `ef1a7a7`) remains recommended production config. |
 
 ## Dual-review record
 - Codex `bi49ruh1q` + Claude: 5 DEFECTs folded (NeMo `confidence_cfg`/`greedy` placement +
