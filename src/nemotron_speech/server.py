@@ -31,6 +31,7 @@ PENDING_FINALIZE = "PENDING_FINALIZE"
 FINALIZED = "FINALIZED"
 _TRUE_BOUNDARY_FINALIZE_REASONS = frozenset({"close", "end"})
 _EOU_PROBE_LOCK = threading.Lock()
+_EOU_SNAPSHOT_LOCK = threading.Lock()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -75,6 +76,10 @@ def _hash_audio(audio: np.ndarray) -> str:
 
 def tensor_clone(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.detach().clone()
+
+
+def tensor_clone_cpu(tensor: torch.Tensor) -> torch.Tensor:
+    return tensor.detach().cpu().clone()
 
 
 def clone_tree(obj: Any, memo: Optional[dict[int, Any]] = None) -> Any:
@@ -136,6 +141,58 @@ def clone_hypotheses_deep(previous_hypotheses: Any) -> Any:
     if previous_hypotheses is None:
         return None
     return [clone_tree(hyp) for hyp in previous_hypotheses]
+
+
+def snapshot_tree_cpu(obj: Any, memo: Optional[dict[int, Any]] = None) -> Any:
+    """Deep-copy snapshot state with all tensors detached and moved to CPU."""
+    if memo is None:
+        memo = {}
+
+    oid = id(obj)
+    if oid in memo:
+        return memo[oid]
+
+    if torch.is_tensor(obj):
+        return tensor_clone_cpu(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.copy()
+    if obj is None or isinstance(obj, (str, bytes, int, float, bool)):
+        return obj
+    if isinstance(obj, list):
+        cloned_list: list[Any] = []
+        memo[oid] = cloned_list
+        cloned_list.extend(snapshot_tree_cpu(item, memo) for item in obj)
+        return cloned_list
+    if isinstance(obj, tuple):
+        placeholder: list[Any] = []
+        memo[oid] = placeholder
+        cloned_tuple = tuple(snapshot_tree_cpu(item, memo) for item in obj)
+        memo[oid] = cloned_tuple
+        return cloned_tuple
+    if isinstance(obj, dict):
+        cloned_dict: dict[Any, Any] = {}
+        memo[oid] = cloned_dict
+        for key, value in obj.items():
+            cloned_dict[snapshot_tree_cpu(key, memo)] = snapshot_tree_cpu(value, memo)
+        return cloned_dict
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        cloned_obj = copy.copy(obj)
+        memo[oid] = cloned_obj
+        for field in dataclasses.fields(obj):
+            setattr(cloned_obj, field.name, snapshot_tree_cpu(getattr(obj, field.name), memo))
+        return cloned_obj
+
+    if hasattr(obj, "__dict__") and obj.__class__.__module__.startswith("nemo."):
+        cloned_obj = copy.copy(obj)
+        memo[oid] = cloned_obj
+        for key, value in vars(obj).items():
+            setattr(cloned_obj, key, snapshot_tree_cpu(value, memo))
+        return cloned_obj
+
+    try:
+        return copy.deepcopy(obj, memo)
+    except Exception:
+        return obj
 
 
 def _tensor_assert_hash(tensor: torch.Tensor) -> str:
@@ -359,6 +416,7 @@ class ASRSession:
     continuous_vad_stop_ts: Optional[float] = None
     continuous_debounce_expiry_ts: Optional[float] = None
     eou_probe_chunk_index: int = 0
+    eou_snapshot_audio: bytearray = field(default_factory=bytearray)
 
     # Audio overlap buffer for mid-utterance reset continuity
     # This preserves the last N ms of audio to provide encoder left-context
@@ -403,6 +461,17 @@ class ASRServer:
             if self.eou_probe_enabled
             else None
         )
+        snapshot_dir = os.environ.get("NEMOTRON_EOU_SNAPSHOT_DIR", "")
+        self.eou_snapshot_dir = (
+            Path(snapshot_dir).expanduser()
+            if self.eou_probe_enabled and snapshot_dir
+            else None
+        )
+        self.eou_snapshot_every = 1
+        if self.eou_snapshot_dir is not None:
+            self.eou_snapshot_every = _env_int("NEMOTRON_EOU_SNAPSHOT_EVERY", 1)
+            if self.eou_snapshot_every < 1:
+                raise ValueError("NEMOTRON_EOU_SNAPSHOT_EVERY must be >= 1")
         self.session_warmup_ms = _env_int("NEMOTRON_WARMUP_MS", 0)
         if self.session_warmup_ms < 0:
             raise ValueError("NEMOTRON_WARMUP_MS must be >= 0")
@@ -1006,6 +1075,7 @@ class ASRServer:
         prev_hyp = session.previous_hypotheses[0] if session.previous_hypotheses else None
         prev_y = self._probe_int_list(getattr(prev_hyp, "y_sequence", [])) if prev_hyp is not None else []
         return {
+            "chunk_index": session.eou_probe_chunk_index,
             "chunk_model_frame_start": session.emitted_frames,
             "prev_y": prev_y,
             "prev_y_len": len(prev_y),
@@ -1132,6 +1202,77 @@ class ASRServer:
         except Exception as e:
             logger.error(f"Session {session.id} EOU probe write error: {e}")
 
+    def _eou_snapshot_file_stem(self, session: ASRSession) -> str:
+        return f"{_safe_tag_filename(self.eou_probe_tag)}_{_safe_tag_filename(session.id)}"
+
+    def _capture_eou_snapshot_audio(self, session: ASRSession, audio_bytes: bytes) -> None:
+        if self.eou_snapshot_dir is None or not audio_bytes:
+            return
+        session.eou_snapshot_audio.extend(audio_bytes)
+
+    def _flush_eou_snapshot_audio(self, session: ASRSession) -> None:
+        if self.eou_snapshot_dir is None or not session.eou_snapshot_audio:
+            return
+        try:
+            audio_path = self.eou_snapshot_dir / f"{self._eou_snapshot_file_stem(session)}_audio.bin"
+            with _EOU_SNAPSHOT_LOCK:
+                audio_path.parent.mkdir(parents=True, exist_ok=True)
+                with audio_path.open("wb") as f:
+                    f.write(session.eou_snapshot_audio)
+        except Exception as e:
+            logger.error(f"Session {session.id} EOU snapshot audio write error: {e}")
+
+    def _write_eou_snapshot_chunk(
+        self,
+        session: ASRSession,
+        snapshot: Optional[dict[str, Any]],
+    ) -> None:
+        if self.eou_snapshot_dir is None or snapshot is None:
+            return
+
+        chunk_index = int(snapshot["chunk_index"])
+        if chunk_index % self.eou_snapshot_every != 0:
+            return
+
+        try:
+            previous_hypotheses = clone_hypotheses_deep(session.previous_hypotheses)
+            payload = {
+                "cache_last_channel": snapshot_tree_cpu(session.cache_last_channel),
+                "cache_last_time": snapshot_tree_cpu(session.cache_last_time),
+                "cache_last_channel_len": snapshot_tree_cpu(session.cache_last_channel_len),
+                "previous_hypotheses": snapshot_tree_cpu(previous_hypotheses),
+                "pred_out_stream": snapshot_tree_cpu(session.pred_out_stream),
+                "pending_audio": (
+                    session.pending_audio.copy()
+                    if session.pending_audio is not None
+                    else np.array([], dtype=np.float32)
+                ),
+                "raw_audio_ring": (
+                    session.raw_audio_ring.copy()
+                    if session.raw_audio_ring is not None
+                    else np.array([], dtype=np.float32)
+                ),
+                "mel_frame_ring": snapshot_tree_cpu(session.mel_frame_ring),
+                "emitted_frames": int(session.emitted_frames),
+                "synthetic_prefix_samples": int(session.synthetic_prefix_samples),
+                "total_audio_samples": int(session.total_audio_samples),
+                "chunk_index": chunk_index,
+                "monotonic_time": time.monotonic(),
+                "run_tag": self.eou_probe_tag,
+                "session_id": session.id,
+                "real_audio_cursor_samples": int(session.total_audio_samples),
+                "timeline_cursor_samples": int(self._session_timeline_samples(session)),
+            }
+            snapshot_path = (
+                self.eou_snapshot_dir
+                / f"{self._eou_snapshot_file_stem(session)}_chunk{chunk_index:06d}.pt"
+            )
+            with _EOU_SNAPSHOT_LOCK:
+                snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(payload, snapshot_path)
+        except Exception as e:
+            logger.error(f"Session {session.id} EOU snapshot chunk write error: {e}")
+
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle a WebSocket client connection."""
         import uuid
@@ -1203,6 +1344,7 @@ class ASRServer:
         finally:
             if self.continuous_context:
                 await self._close_continuous_session(session)
+            self._flush_eou_snapshot_audio(session)
             if session_id in self.sessions:
                 del self.sessions[session_id]
 
@@ -1979,6 +2121,8 @@ class ASRServer:
             chunk_hash = hashlib.md5(audio_bytes).hexdigest()[:8]
             logger.debug(f"Session {session.id}: recv chunk {len(audio_bytes)}B hash={chunk_hash}")
 
+        self._capture_eou_snapshot_audio(session, audio_bytes)
+
         session.pending_audio = np.concatenate([session.pending_audio, audio_np])
         session.accumulated_audio = session.pending_audio
         session.total_audio_samples += len(audio_np)
@@ -2090,6 +2234,7 @@ class ASRServer:
                 self._update_mel_frame_ring(session, valid_new_mel)
                 session.emitted_frames += self.shift_frames
                 self._write_eou_probe_chunk(session, eou_probe_snapshot)
+                self._write_eou_snapshot_chunk(session, eou_probe_snapshot)
 
                 # Extract text
                 if transcribed_texts and transcribed_texts[0]:
