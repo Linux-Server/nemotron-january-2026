@@ -8,6 +8,9 @@ import dataclasses
 import hashlib
 import json
 import os
+from pathlib import Path
+import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -27,6 +30,7 @@ STREAMING = "STREAMING"
 PENDING_FINALIZE = "PENDING_FINALIZE"
 FINALIZED = "FINALIZED"
 _TRUE_BOUNDARY_FINALIZE_REASONS = frozenset({"close", "end"})
+_EOU_PROBE_LOCK = threading.Lock()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -37,6 +41,29 @@ def _env_int(name: str, default: int) -> int:
         return int(value)
     except ValueError as e:
         raise ValueError(f"{name} must be an integer, got {value!r}") from e
+
+
+def _telemetry_run_tag() -> str | None:
+    for env_name in (
+        "NEMOTRON_RUN_TAG",
+        "NEMOTRON_TELEMETRY_RUN_TAG",
+        "STT_BENCHMARK_RUN_TAG",
+    ):
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    return None
+
+
+def _safe_tag_filename(tag: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", tag).strip("._-") or "tag"
+
+
+def _telemetry_dir() -> Path:
+    configured = os.environ.get("NEMOTRON_TELEMETRY_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[2] / "stt-benchmark" / "stt_benchmark_data" / "client_telemetry"
 
 
 def _hash_audio(audio: np.ndarray) -> str:
@@ -331,6 +358,7 @@ class ASRSession:
     continuous_post_stop_audio: bytearray = field(default_factory=bytearray)
     continuous_vad_stop_ts: Optional[float] = None
     continuous_debounce_expiry_ts: Optional[float] = None
+    eou_probe_chunk_index: int = 0
 
     # Audio overlap buffer for mid-utterance reset continuity
     # This preserves the last N ms of audio to provide encoder left-context
@@ -368,6 +396,13 @@ class ASRServer:
 
         self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
         self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
+        self.eou_probe_enabled = os.environ.get("NEMOTRON_EOU_PROBE", "") == "1"
+        self.eou_probe_tag = _telemetry_run_tag() or "eou_probe"
+        self.eou_probe_path = (
+            _telemetry_dir() / f"{_safe_tag_filename(self.eou_probe_tag)}.eou_probe.jsonl"
+            if self.eou_probe_enabled
+            else None
+        )
         self.session_warmup_ms = _env_int("NEMOTRON_WARMUP_MS", 0)
         if self.session_warmup_ms < 0:
             raise ValueError("NEMOTRON_WARMUP_MS must be >= 0")
@@ -458,6 +493,15 @@ class ASRServer:
                     'use_cuda_graph_decoder': False,
                 }
             })
+            if self.eou_probe_enabled:
+                _decoding_cfg.greedy.preserve_alignments = True
+                _decoding_cfg.greedy.preserve_frame_confidence = True
+                _decoding_cfg.greedy.confidence_method_cfg = {
+                    'name': 'entropy',
+                    'entropy_type': 'tsallis',
+                    'alpha': 0.5,
+                    'entropy_norm': 'exp',
+                }
         self.model.change_decoding_strategy(decoding_cfg=_decoding_cfg)
         self.model.eval()
 
@@ -633,6 +677,7 @@ class ASRServer:
         session.previous_hypotheses = None
         session.pred_out_stream = None
         session.current_text = ""
+        session.eou_probe_chunk_index = 0
 
         session.synthetic_prefix_samples = 0
         if self.session_warmup_ms > 0:
@@ -761,6 +806,331 @@ class ASRServer:
         else:
             combined = torch.cat((session.mel_frame_ring, new_mel.detach()), dim=-1)
         session.mel_frame_ring = combined[:, :, -self.pre_encode_cache_size :].detach()
+
+    @staticmethod
+    def _probe_scalar(value: Any) -> Any:
+        if torch.is_tensor(value):
+            if value.numel() == 0:
+                return None
+            value = value.detach().cpu().reshape(-1)[0].item()
+        if isinstance(value, np.generic):
+            value = value.item()
+        return value
+
+    @classmethod
+    def _probe_int(cls, value: Any) -> Optional[int]:
+        value = cls._probe_scalar(value)
+        if value is None:
+            return None
+        return int(value)
+
+    @classmethod
+    def _probe_float(cls, value: Any) -> Optional[float]:
+        value = cls._probe_scalar(value)
+        if value is None:
+            return None
+        return float(value)
+
+    @classmethod
+    def _probe_int_list(cls, value: Any) -> list[int]:
+        if value is None:
+            return []
+        if torch.is_tensor(value):
+            return [int(item) for item in value.detach().cpu().reshape(-1).tolist()]
+        return [int(cls._probe_scalar(item)) for item in value]
+
+    def _probe_blank_id(self) -> int:
+        decoding = getattr(self.model, "decoding", None)
+        blank_id = getattr(decoding, "blank_id", None)
+        if blank_id is not None:
+            return int(self._probe_scalar(blank_id))
+        joint = getattr(self.model, "joint", None)
+        return int(getattr(joint, "num_classes_with_blank") - 1)
+
+    def _probe_token_strings(self, token_ids: list[int]) -> list[str]:
+        if not token_ids:
+            return []
+        decoding = getattr(self.model, "decoding", None)
+        if decoding is not None and hasattr(decoding, "decode_ids_to_tokens"):
+            try:
+                token_strings = [str(token) for token in decoding.decode_ids_to_tokens(token_ids)]
+                if len(token_strings) == len(token_ids):
+                    return token_strings
+            except Exception:
+                pass
+        tokenizer = getattr(self.model, "tokenizer", None)
+        if tokenizer is not None and hasattr(tokenizer, "ids_to_tokens"):
+            try:
+                token_strings = [str(token) for token in tokenizer.ids_to_tokens(token_ids)]
+                if len(token_strings) == len(token_ids):
+                    return token_strings
+            except Exception:
+                pass
+        return [str(token_id) for token_id in token_ids]
+
+    @staticmethod
+    def _probe_token_starts_word(token: str) -> bool:
+        return token.startswith(("\u2581", "\u0120")) or token[:1].isspace()
+
+    @classmethod
+    def _probe_word_boundary_state(cls, tokens: list[str], index: int) -> dict[str, Any]:
+        token = tokens[index] if index < len(tokens) else ""
+        next_token = tokens[index + 1] if index + 1 < len(tokens) else None
+        stripped = token.replace("\u2581", "").replace("\u0120", "").strip()
+        starts_word = index == 0 or cls._probe_token_starts_word(token)
+        next_starts_word = next_token is not None and cls._probe_token_starts_word(next_token)
+        punctuation_boundary = stripped in {".", ",", "?", "!", ";", ":"}
+        return {
+            "starts_word": starts_word,
+            "extends_word": not starts_word,
+            "completes_word": bool(next_starts_word or punctuation_boundary),
+            "completion_observed": next_token is not None or punctuation_boundary,
+        }
+
+    @classmethod
+    def _probe_hyp_timestamps(cls, hyp: Any) -> list[int]:
+        timestamp = getattr(hyp, "timestamp", None)
+        if isinstance(timestamp, dict):
+            timestamp = timestamp.get("timestep", [])
+        return cls._probe_int_list(timestamp)
+
+    @classmethod
+    def _probe_alignment_label(cls, item: Any) -> Optional[int]:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            item = item[-1]
+        return cls._probe_int(item)
+
+    @classmethod
+    def _probe_alignment_labels_by_frame(cls, alignments: Any) -> list[list[int]]:
+        if not alignments:
+            return []
+        labels_by_frame: list[list[int]] = []
+        for frame in alignments:
+            if frame is None or (isinstance(frame, (list, tuple)) and len(frame) == 0):
+                labels_by_frame.append([])
+                continue
+            if isinstance(frame, (list, tuple)) and len(frame) > 0 and isinstance(frame[0], (list, tuple)):
+                items = frame
+            else:
+                items = [frame]
+            labels = []
+            for item in items:
+                label = cls._probe_alignment_label(item)
+                if label is not None:
+                    labels.append(label)
+            labels_by_frame.append(labels)
+        return labels_by_frame
+
+    def _probe_frame_alignment(
+        self,
+        labels_by_frame: list[list[int]],
+        *,
+        blank_id: int,
+        chunk_model_frame_start: int,
+    ) -> list[dict[str, Any]]:
+        frame_alignment = []
+        for frame_offset, labels in enumerate(labels_by_frame):
+            frame_alignment.append(
+                {
+                    "frame_offset": frame_offset,
+                    "model_frame_index": chunk_model_frame_start + frame_offset,
+                    "labels": labels,
+                    "has_non_blank": any(label != blank_id for label in labels),
+                    "all_blank": bool(labels) and all(label == blank_id for label in labels),
+                }
+            )
+        return frame_alignment
+
+    @classmethod
+    def _probe_frame_confidence(cls, frame_confidence: Any) -> list[list[float]]:
+        if not frame_confidence:
+            return []
+        confidence_rows: list[list[float]] = []
+        for frame in frame_confidence:
+            if isinstance(frame, (list, tuple)):
+                confidence_rows.append(
+                    [
+                        confidence
+                        for confidence in (cls._probe_float(item) for item in frame)
+                        if confidence is not None
+                    ]
+                )
+            else:
+                confidence = cls._probe_float(frame)
+                confidence_rows.append([] if confidence is None else [confidence])
+        return confidence_rows
+
+    @staticmethod
+    def _probe_changed_positions(prev_y: list[int], y_sequence: list[int]) -> list[int]:
+        changed_positions = []
+        for index in range(max(len(prev_y), len(y_sequence))):
+            prev_token = prev_y[index] if index < len(prev_y) else None
+            token = y_sequence[index] if index < len(y_sequence) else None
+            if prev_token != token:
+                changed_positions.append(index)
+        return changed_positions
+
+    @staticmethod
+    def _probe_token_frame_from_alignments(
+        labels_by_frame: list[list[int]],
+        *,
+        blank_id: int,
+        token_offset: int,
+    ) -> Optional[int]:
+        non_blank_frames = []
+        for frame_offset, labels in enumerate(labels_by_frame):
+            non_blank_frames.extend(frame_offset for label in labels if label != blank_id)
+        if token_offset < len(non_blank_frames):
+            return non_blank_frames[token_offset]
+        return None
+
+    @staticmethod
+    def _probe_token_frame_events_from_alignments(
+        labels_by_frame: list[list[int]],
+        *,
+        blank_id: int,
+    ) -> list[tuple[int, int]]:
+        token_events = []
+        for frame_offset, labels in enumerate(labels_by_frame):
+            frame_token_offset = 0
+            for label in labels:
+                if label == blank_id:
+                    continue
+                token_events.append((frame_offset, frame_token_offset))
+                frame_token_offset += 1
+        return token_events
+
+    def _eou_probe_snapshot(self, session: ASRSession) -> Optional[dict[str, Any]]:
+        if not self.eou_probe_enabled:
+            return None
+        prev_hyp = session.previous_hypotheses[0] if session.previous_hypotheses else None
+        prev_y = self._probe_int_list(getattr(prev_hyp, "y_sequence", [])) if prev_hyp is not None else []
+        return {
+            "chunk_model_frame_start": session.emitted_frames,
+            "prev_y": prev_y,
+            "prev_y_len": len(prev_y),
+            "monotonic_start": time.monotonic(),
+            "wall_time_start": time.time(),
+        }
+
+    def _write_eou_probe_chunk(
+        self,
+        session: ASRSession,
+        snapshot: Optional[dict[str, Any]],
+    ) -> None:
+        if not self.eou_probe_enabled or snapshot is None or self.eou_probe_path is None:
+            return
+        try:
+            hyp = session.previous_hypotheses[0] if session.previous_hypotheses else None
+            chunk_index = session.eou_probe_chunk_index
+            session.eou_probe_chunk_index += 1
+            chunk_model_frame_start = int(snapshot["chunk_model_frame_start"])
+            prev_y = snapshot["prev_y"]
+            blank_id = self._probe_blank_id()
+            y_sequence = self._probe_int_list(getattr(hyp, "y_sequence", [])) if hyp is not None else []
+            token_strings = self._probe_token_strings(y_sequence)
+            timestamps = self._probe_hyp_timestamps(hyp) if hyp is not None else []
+            alignments = getattr(hyp, "alignments", None) if hyp is not None else None
+            labels_by_frame = self._probe_alignment_labels_by_frame(alignments)
+            token_frame_events = self._probe_token_frame_events_from_alignments(
+                labels_by_frame,
+                blank_id=blank_id,
+            )
+            frame_confidence = self._probe_frame_confidence(
+                getattr(hyp, "frame_confidence", None) if hyp is not None else None
+            )
+
+            new_tokens = []
+            prev_y_len = len(prev_y)
+            frame_subindex_counts: dict[int, int] = {}
+            for token_index in range(prev_y_len, len(y_sequence)):
+                token_offset = token_index - prev_y_len
+                alignment_frame_index = None
+                alignment_subindex = None
+                if token_offset < len(token_frame_events):
+                    alignment_frame_index, alignment_subindex = token_frame_events[token_offset]
+                chunk_frame_index = (
+                    timestamps[token_offset]
+                    if token_offset < len(timestamps)
+                    else alignment_frame_index
+                )
+                if chunk_frame_index is None:
+                    chunk_frame_index = self._probe_token_frame_from_alignments(
+                        labels_by_frame,
+                        blank_id=blank_id,
+                        token_offset=token_offset,
+                    )
+                model_frame_index = (
+                    chunk_model_frame_start + chunk_frame_index
+                    if chunk_frame_index is not None
+                    else None
+                )
+                model_frame_subindex = None
+                model_frame_event_index = None
+                if chunk_frame_index is not None:
+                    fallback_subindex = frame_subindex_counts.get(chunk_frame_index, 0)
+                    model_frame_subindex = (
+                        alignment_subindex
+                        if alignment_subindex is not None and alignment_frame_index == chunk_frame_index
+                        else fallback_subindex
+                    )
+                    frame_subindex_counts[chunk_frame_index] = max(
+                        frame_subindex_counts.get(chunk_frame_index, 0),
+                        model_frame_subindex + 1,
+                    )
+                if model_frame_index is not None and model_frame_subindex is not None:
+                    model_frame_event_index = model_frame_index * 1024 + model_frame_subindex
+                token_string = token_strings[token_index] if token_index < len(token_strings) else str(y_sequence[token_index])
+                new_tokens.append(
+                    {
+                        "token_index": token_index,
+                        "token_id": y_sequence[token_index],
+                        "token": token_string,
+                        "chunk_frame_index": chunk_frame_index,
+                        "model_frame_index": model_frame_index,
+                        "model_frame_subindex": model_frame_subindex,
+                        "model_frame_event_index": model_frame_event_index,
+                        "word_boundary": self._probe_word_boundary_state(token_strings, token_index),
+                    }
+                )
+
+            payload = {
+                "type": "eou_probe_chunk",
+                "run_tag": self.eou_probe_tag,
+                "session_id": session.id,
+                "chunk_index": chunk_index,
+                "chunk_model_frame_start": chunk_model_frame_start,
+                "prev_y_len": snapshot["prev_y_len"],
+                "emitted_frames_after": session.emitted_frames,
+                "shift_frames": self.shift_frames,
+                "right_context_chunks": self.right_context,
+                "right_context_frames": self.right_context * self.shift_frames,
+                "R": self.right_context * self.shift_frames,
+                "blank_id": blank_id,
+                "monotonic_start": snapshot["monotonic_start"],
+                "monotonic_done": time.monotonic(),
+                "wall_time_start": snapshot["wall_time_start"],
+                "wall_time_done": time.time(),
+                "real_audio_cursor_samples": session.total_audio_samples,
+                "real_audio_cursor_seconds": session.total_audio_samples / self.sample_rate,
+                "timeline_cursor_samples": self._session_timeline_samples(session),
+                "hyp_score": self._probe_float(getattr(hyp, "score", None)) if hyp is not None else None,
+                "y_sequence": y_sequence,
+                "changed_positions": self._probe_changed_positions(prev_y, y_sequence),
+                "new_tokens": new_tokens,
+                "frame_alignment": self._probe_frame_alignment(
+                    labels_by_frame,
+                    blank_id=blank_id,
+                    chunk_model_frame_start=chunk_model_frame_start,
+                ),
+                "frame_confidence": frame_confidence,
+            }
+            self.eou_probe_path.parent.mkdir(parents=True, exist_ok=True)
+            with _EOU_PROBE_LOCK:
+                with self.eou_probe_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, sort_keys=True) + "\n")
+        except Exception as e:
+            logger.error(f"Session {session.id} EOU probe write error: {e}")
 
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle a WebSocket client connection."""
@@ -1683,6 +2053,7 @@ class ASRServer:
                     drop_extra = self.drop_extra
 
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
+                eou_probe_snapshot = self._eou_probe_snapshot(session)
 
                 # Run streaming inference
                 (
@@ -1718,6 +2089,7 @@ class ASRServer:
                 session.accumulated_audio = session.pending_audio
                 self._update_mel_frame_ring(session, valid_new_mel)
                 session.emitted_frames += self.shift_frames
+                self._write_eou_probe_chunk(session, eou_probe_snapshot)
 
                 # Extract text
                 if transcribed_texts and transcribed_texts[0]:

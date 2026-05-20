@@ -154,7 +154,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
 
 ## Steps
 
-- [ ] **1. Instrumentation: server config + token-level signal capture + client EOU-acceptance (env-gated, no behavior change when off)**
+- [x] **1. Instrumentation: server config + token-level signal capture + client EOU-acceptance (env-gated, no behavior change when off)**
   (a) Server: under `NEMOTRON_EOU_PROBE=1`, inject the **correctly-placed**
   `preserve_alignments` + nested `greedy:{preserve_frame_confidence:true,
   confidence_method_cfg:{name:entropy,...}}` (Probe-A-recommended; flat
@@ -313,7 +313,7 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Instrumentation (cfg + token-level capture + client accept) | pending | — | Probe-A-verified placement (nested-`greedy`); token-id series + R + changed_positions + Step-8 warm-up offset (model-frame + real-audio-time dual cursors); Probe-A non-invasiveness validated single-fixture; client-accept Probe-C-verified REQUIRED |
+| 1 | Instrumentation (cfg + token-level capture + client accept) | done | — | Codex `mpdna7a0` impl + Claude diff-review ACCEPT. server.py +372 (all-additive, env-gated NEMOTRON_EOU_PROBE), nemotron_local_stt.py +4/-1 (gate at :457 `not _finalize_requested and not (_eou_client_accept and _continuous_context)`); EOU probe writes a SEPARATE `<run_tag>.eou_probe.jsonl` (finalize-budget schema untouched). Round-4 pre-call snapshot at server.py:2056 (chunk_model_frame_start + prev_y_len) BEFORE conformer_stream_step at :2063; emitted_frames increment at :2086; write at :2092 — ordering correct. Per-token derives model_frame_index from Hypothesis.alignments/timestamp + pre-call offset; model_frame_event_index = model_frame_index*1024+subindex for RNNT same-frame ties. timeline_cursor uses Step-8 helper (warm-up-aware). **Smokes:** env-unset 2/2 exact-match vs `fork`; probe-enabled smoke (EOU_PROBE+EOU_CLIENT+CONTINUOUS+SILENCE_MS=150+FORK_ASSERT) 20/20 exact-match vs `fork` + 1417 probe rows + monotone frame indices + frame_confidence ∈ [0.021,0.9999] + client bypass all 3 modes tested (default-dropped/misconfig-dropped/enabled-accepted) |
 | 2 | Offline collection (subset + fork-flush replay material) | pending | — | parent-stream text alone insufficient |
 | 2b | rc1-stability measurement (rewrite question, with data) | pending | — | classify (i) ≤rc1 tail / (ii-a) benign render / (ii-b) WER-relevant render-word / (iii) genuine beyond-rc1 edit; (iii)≈0 expected; **mechanism check, NOT the F-setter** |
 | 3 | Oracle ROC vs endpoint | pending | — | **GO/NO-GO #1**: ROC curve; conservative provisional F; binding F = combined Step 3+4 (Step-4 prices per-fire cost); gt = Silero stop-event + est. acoustic±band |
