@@ -71,15 +71,16 @@ cleanly; the always-append-only contract is robust to whatever that rate turns o
     (`nemo/.../mixins/mixins.py:~707`); flags populate `Hypothesis.alignments`/`.frame_confidence`.
   - Parent-stream `conformer_stream_step`: **`server.py:~1695`**; the speculative-fork flush
     site (`_process_final_chunk(fork)` via the fork built by `_build_continuous_finalize_fork`
-    at `:~1167`, invoked from `_continuous_finalize_emit_locked` at `:~1418` which actually
-    runs the model step at `:~1466` and the `_process_final_chunk` at `:~1872`); the second
-    `conformer_stream_step` call site (`_process_final_chunk` internals) at **`:~1948`**.
+    at `:~1280`, invoked from `_continuous_finalize_emit_locked` at `:~1418` which
+    **dispatches `_process_final_chunk` at `:1465-1467`** (inside `async with inference_lock`
+    + `run_in_executor`); `_process_final_chunk` def at `:~1872`; **the actual final
+    `conformer_stream_step` call is at `:~1948`** (inside `_process_final_chunk`).
     Per-session warm-up (Step-8 addition) at **`:~641`** (`_run_session_warmup`); global startup
     warmup unchanged at `:~552`. Blank id via `model.decoding.blank_id` (or
     `joint.num_classes_with_blank-1`; tensor-vs-int).
   - 7d substrate: `_continuous_handle_vad_stop_locked` (`:~1157`),
     `_continuous_handle_debounce_expired_locked` (`:~1243`), `_continuous_finalize_emit_locked`
-    (`:~1418`, advances `committed_text`/`last_emitted_text` at `:~1511`),
+    (`:~1418`, advances `committed_text`/`last_emitted_text` at `:~1491`),
     `_continuous_finish_speculative_finalize_locked` (`:~1526`),
     `_continuous_cold_reset_after_finalize_locked` (`:~1548`, the only continuous `_init_session`
     site; resets `continuous_emitted_text=""` at `:~1563`), `_continuous_append_only_delta`
@@ -87,7 +88,7 @@ cleanly; the always-append-only contract is robust to whatever that rate turns o
   - Step-8 surface (warm-up offset interaction): `synthetic_prefix_samples: int = 0` on
     `ASRSession` (`:~293`); set at `_run_session_warmup` (`:~696`); fork copies it (`:~1297`);
     `_session_timeline_samples` helper (`:~710-711`) = `synthetic_prefix_samples + total_audio_samples`,
-    used at the chunk-cadence gate (`:~1812` region). `session.emitted_frames` after warm-up
+    used at the chunk-cadence gate (`:~1620`). `session.emitted_frames` after warm-up
     equals `warmup_frames` (`:~695`), NOT 0 — Step 1 instrumentation must use it as the
     starting offset for the per-token global-frame index (see Step 1).
 - **Client (our code — changeable; REQUIRED for measurability — Probe C VERIFIED):**
@@ -173,16 +174,26 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   **Step-8 warm-up offset (when running on top of `warm200`):** the per-session warm-up at
   `_run_session_warmup` (`server.py:~641`) consumes `warmup_frames` of encoder frames at
   session init and sets `session.emitted_frames = warmup_frames` (`:~695`) and
-  `session.synthetic_prefix_samples = warmup_samples` (`:~696`). Step-1 capture must use
-  `session.emitted_frames` as the starting offset for the per-token global-frame index (so
-  rc1-age in Step 2b is correct on the `warm200` baseline; otherwise every token's age is off
-  by `warmup_frames`). Persist both (i) the **model-frame index** (for rc1 aging) and (ii) the
-  **real-audio-time** (for endpoint-latency joins with `vad_stop`/`debounce_expiry`); they
-  diverge by exactly the warm-up's synthetic prefix when warm-up is on, by zero otherwise.
+  `session.synthetic_prefix_samples = warmup_samples` (`:~696`). **CRITICAL implementation
+  detail (Codex round-4 catch):** `session.emitted_frames` is *incremented at server.py:~1720
+  AFTER* the parent-stream `conformer_stream_step` call inside `_process_chunk` — so reading
+  it *after* the step gives the post-increment value, off by one chunk for every token. The
+  instrumentation MUST snapshot **before the step**: `chunk_model_frame_start =
+  session.emitted_frames` and `prev_y_len = len(session.previous_hypotheses[0].y_sequence)
+  if session.previous_hypotheses else 0`. After the step, for each newly-emitted token (index
+  ≥ `prev_y_len` in `y_sequence`), derive its model-frame index from
+  `Hypothesis.alignments`/`Hypothesis.timestamp` (whichever the model populates, both gated by
+  `preserve_alignments=True` per Probe A) **plus** the pre-call `chunk_model_frame_start`.
+  Persist two cursors: (i) **model-frame index** = the value above (used by Step 2b for rc1
+  aging); (ii) **real-audio-time** = the chunk's monotonic wall-clock timestamp (used by
+  Step 3 for endpoint-latency joins with `vad_stop`/`debounce_expiry`). The two diverge by
+  exactly the warm-up's synthetic prefix when warm-up is on, by zero otherwise.
   → per-session probe JSONL (reuse the 7d telemetry writer; new keys; do not perturb the
-  finalize-budget schema). (b) Client: under `NEMOTRON_EOU_CLIENT=1`, env-gated path in
-  `nemotron_local_stt.py` to **accept server-driven `finalize=true` without a prior client
-  reset** (Pipecat finalize bookkeeping, push `TranscriptionFrame`, record receipt timing).
+  finalize-budget schema). (b) Client: under **`NEMOTRON_EOU_CLIENT=1` AND
+  `continuous_context`** (both required — preserves default-client behavior under any
+  misconfig), env-gated path in `nemotron_local_stt.py` (modify the unarmed-drop gate at
+  `:456-458`) to **accept server-driven `finalize=true` without a prior client reset**
+  (Pipecat finalize bookkeeping, push `TranscriptionFrame`, record receipt timing).
   **Gate (TWO smokes — env-unset alone proves nothing about `preserve_*`):** (1) env-unset ⇒
   server AND client byte-identical to 7d `fork`; (2) **`NEMOTRON_EOU_PROBE=1`
   signal-capture-only** ⇒ transcript **WER-equivalent to 7d `fork`** on a 20-sample smoke.
@@ -197,15 +208,20 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   Key files: `src/nemotron_speech/server.py`,
   `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`, `stt-benchmark/scripts/measure.py`
 
-- [ ] **2. Offline collection over the Step-1 subset (signals + replayable fork-flush material)**
+- [ ] **2. Offline collection over the Step-1 subset (per-chunk signals only)**
   Run instrumented (`NEMOTRON_EOU_PROBE=1`, rc1, continuous) over a documented subset (Step-1
   multi-segment ids + duration-stratified slice-B ids; persist the id list). Persist the
-  per-chunk token/signal series **and** enough state to reproduce the **fork-flushed**
-  `final_text` at any candidate trigger chunk (log the would-be fork-flush output per chunk
-  boundary, or snapshot minimal fork inputs so `oracle_*` can call the real
-  `_process_final_chunk`-equivalent). Parent-stream text alone is insufficient (online emits
-  fork-flushed text). **Gate:** for ≥5 hand-checked samples the logged fork-flush-at-chunk
-  reproduces the actual online `fork` emission at the true endpoint.
+  per-chunk token/signal series only — **no fork-flush replay material captured here**.
+  Fork-flush reconstruction is **deferred to Step 4**, which only does the 1–2 selected
+  operating points (much cheaper than per-chunk-boundary flushing across the entire subset:
+  Codex round-4 recommendation). For Step 4's per-operating-point reconstruction, Step 2 must
+  persist enough parent state to *resume the live session at the candidate trigger chunk* and
+  call the real `_process_final_chunk` on the fork built there — minimally:
+  `cache_last_channel/time/len`, `previous_hypotheses` (deep-cloned per Step-3 recipe),
+  `pred_out_stream`, `pending_audio`, `total_audio_samples`, `synthetic_prefix_samples`,
+  `emitted_frames`, raw/mel ring snapshots, and the audio bytes up to that chunk. **Gate:**
+  for ≥5 hand-checked samples, replaying via Step-4's reconstruction at the true endpoint
+  chunk reproduces the actual online `fork` emission byte-for-byte.
   Key files: `proj-2026-05-19-eou-endpointing/collect_signals.py` (proj scratch)
 
 - [ ] **2b. rc1-stability measurement — does prior settled text get rewritten? (mechanism check; NOT the F-setter)**
@@ -260,7 +276,10 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
   always-append-only + FORK_ASSERT + close-drain unchanged. Client `NEMOTRON_EOU_CLIENT=1`
   acceptance path. Contained smoke (7d-style): fires on real end, holds through real
   intra-utterance pauses, no crash, JSONL shows endpoint_wait collapsed, client surfaces the
-  server-driven final. **Gate:** smoke passes; default/`fork` byte-unchanged with envs unset;
+  server-driven final. **Gate:** smoke passes (including: a server-driven final emitted via
+  the EOU trigger, followed later by the client's own VAD-stop reset for the same utterance,
+  produces **exactly one** scored `TranscriptionFrame` — no duplicate from the post-trigger
+  client reset path; Codex round-4 catch); default/`fork` byte-unchanged with envs unset;
   **dual adversarial review (Codex + Claude) pre-run.**
   Key files: `src/nemotron_speech/server.py`, `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`
 
@@ -350,5 +369,25 @@ Measurement validity: paired same-ID Δ vs `''` + duration-stratified slice + 95
     to the now-frozen parent commit `0462679` (parent-stream at `:~1695`, fork-flush at `:~1948`,
     per-session warm-up `_run_session_warmup` at `:~641`, etc.). (e) Status line updated to
     "READY for `/implement`" — parent project has closed and this round's edits are folded.
-- **No fourth review round** is warranted (Codex/Claude converged on mechanical edits, no new
-  structural defects; same proportionality discipline applied throughout — 7c precedent).
+- **Round 4 (post-fold verification, 2026-05-19; Codex `blca94vy2` + Claude parallel; both
+  CONVERGED on the same fix set):** focused verification pass on round-3's mechanical edits +
+  red-team for blind spots. Both reviewers independently found the same 3 line-number drifts
+  from round 3 (`:~1167` → `:1280` `_build_continuous_finalize_fork`; `:~1511` → `:1491`
+  `committed_text=final_text` advance; `:~1812` → `:1620` chunk-cadence gate). **Codex
+  additionally caught one substantive new defect Claude missed: `session.emitted_frames` is
+  *incremented at server.py:~1720 AFTER* the parent-stream `conformer_stream_step` call**
+  — so reading it *after* the step (the round-3 wording) gives the post-increment value, off
+  by one chunk for every token's frame index in Step-2b classification. Step-1 instrumentation
+  now requires a *pre-call snapshot* of `chunk_model_frame_start = session.emitted_frames`
+  and `prev_y_len = len(previous_hypotheses[0].y_sequence)`, with per-token model-frame
+  derived from `Hypothesis.alignments`/`timestamp` + the pre-call offset. Also folded:
+  Step-1b's bypass made explicitly `EOU_CLIENT=1 AND continuous_context`; Step 2 captures
+  per-chunk signals only (fork-flush replay deferred to Step 4, where it's per-operating-point
+  not per-chunk — Codex's cost-saving recommendation); Step 5's smoke must assert
+  no-duplicate-final after a post-trigger client VAD-stop reset; the round-3 ":~1466 runs
+  the model step" wording corrected to "dispatches `_process_final_chunk` at `:1465-1467`;
+  actual final `conformer_stream_step` at `:1948`". Step-6 dual-baseline confirmed SOUND
+  (extra compute justified for attribution; reject the sequencing-optimization suggestion).
+- **Plan is now READY for `/implement`** at the post-round-4 commit. The round-4 catches
+  (especially the emitted_frames pre-call snapshot) prevent real implementation bugs at
+  Step 1 — exactly what round 4 was for.
