@@ -355,6 +355,7 @@ RIGHT_CONTEXT_OPTIONS = {
 
 PROMPTED_FALLBACK_ATT_CONTEXT_SIZES = [[56, 0], [56, 3], [56, 6], [56, 13]]
 PROMPTED_DEFAULT_RIGHT_CONTEXT = 3
+PROMPTED_DEFAULT_TARGET_LANG = "auto"
 LANG_TAG_RE = re.compile(r"\s*<[a-z]{2}-[A-Z]{2}>")
 PARTIAL_LANG_TAG_RE = re.compile(r"\s*<[a-z]{0,2}(?:-[A-Z]{0,2})?$")
 
@@ -446,6 +447,7 @@ class ASRServer:
         self.right_context = right_context
         self.model = None
         self.prompted_model = False
+        self.prompt_dictionary: dict[str, Any] = {}
         self.target_lang = os.environ.get("NEMOTRON_TARGET_LANG", "en-US").strip() or "en-US"
         self.sample_rate = 16000
         # ASR benchmark server REQUIRES CUDA — fail fast, never silently fall
@@ -522,6 +524,13 @@ class ASRServer:
 
     @staticmethod
     def _to_plain(value: Any) -> Any:
+        if value.__class__.__module__.startswith("omegaconf."):
+            try:
+                from omegaconf import OmegaConf
+
+                return OmegaConf.to_container(value, resolve=True)
+            except Exception:
+                pass
         if hasattr(value, "to_container"):
             try:
                 return value.to_container(resolve=True)
@@ -628,6 +637,91 @@ class ASRServer:
         if self.prompted_model:
             self.model.set_inference_prompt(self._ensure_session_target_lang(session))
 
+    def _read_prompt_dictionary(self) -> dict[str, Any]:
+        prompt_dictionary_paths = (
+            ("model_defaults", "prompt_dictionary"),
+            ("train_ds", "prompt_dictionary"),
+            ("validation_ds", "prompt_dictionary"),
+            ("test_ds", "prompt_dictionary"),
+        )
+        for cfg in (getattr(self.model, "cfg", None), getattr(self.model, "_cfg", None)):
+            for path in prompt_dictionary_paths:
+                prompt_dict = self._to_plain(self._cfg_get(cfg, *path))
+                if isinstance(prompt_dict, dict):
+                    return {str(key): value for key, value in prompt_dict.items()}
+        return {}
+
+    @staticmethod
+    def _format_supported_languages(prompt_dictionary: dict[str, Any]) -> str:
+        return ", ".join(sorted(prompt_dictionary))
+
+    def _model_identity_aliases(self) -> set[str]:
+        aliases: set[str] = set()
+        configured = os.environ.get("NEMOTRON_MODEL_NAME", "").strip()
+        if configured:
+            aliases.add(configured)
+
+        if self.model_name_or_path:
+            aliases.add(self.model_name_or_path)
+            model_path = Path(self.model_name_or_path)
+            aliases.add(model_path.name)
+            aliases.add(model_path.stem)
+
+        if self.prompted_model:
+            aliases.update({"multilingual", "ml"})
+        else:
+            aliases.update({"english", "en"})
+
+        return {alias for alias in aliases if alias}
+
+    def _validate_model_query_param(self, requested_model: Optional[str]) -> None:
+        if not requested_model:
+            return
+
+        aliases = self._model_identity_aliases()
+        if not aliases:
+            logger.info(
+                "Client requested model={} but no server model identity is configured; accepting",
+                requested_model,
+            )
+            return
+
+        normalized_aliases = {alias.lower() for alias in aliases}
+        if requested_model.lower() not in normalized_aliases:
+            raise ValueError(
+                "model mismatch: requested "
+                f"{requested_model}; server accepts: {', '.join(sorted(aliases))}"
+            )
+
+    def _validate_session_target_lang(self, requested_language: Optional[str]) -> str:
+        if requested_language:
+            if not self.prompted_model:
+                raise ValueError("this model does not accept a language argument")
+
+            if requested_language not in self.prompt_dictionary:
+                raise ValueError(
+                    f"unsupported language {requested_language}; supported: "
+                    f"{self._format_supported_languages(self.prompt_dictionary)}"
+                )
+            return requested_language
+
+        if self.prompted_model:
+            if PROMPTED_DEFAULT_TARGET_LANG not in self.prompt_dictionary:
+                raise ValueError(
+                    f"unsupported language {PROMPTED_DEFAULT_TARGET_LANG}; supported: "
+                    f"{self._format_supported_languages(self.prompt_dictionary)}"
+                )
+            return PROMPTED_DEFAULT_TARGET_LANG
+
+        return self.target_lang
+
+    def _validate_connection_query(self, query: Any) -> str:
+        requested_language = (query.get("language") or "").strip()
+        requested_model = (query.get("model") or "").strip()
+
+        self._validate_model_query_param(requested_model or None)
+        return self._validate_session_target_lang(requested_language or None)
+
     def _strip_lang_tags(self, text: Any) -> str:
         stripped = LANG_TAG_RE.sub(" ", str(text))
         # A cumulative streaming hypothesis may end with the beginning of the
@@ -672,6 +766,9 @@ class ASRServer:
         self.model = self.model.cuda()
         logger.info("ASR model loaded on CUDA")
         self.prompted_model = hasattr(self.model, "set_inference_prompt")
+        self.prompt_dictionary = (
+            self._read_prompt_dictionary() if self.prompted_model else {}
+        )
 
         # Configure attention context for streaming
         self.att_context_size = self._select_att_context_size()
@@ -1439,11 +1536,19 @@ class ASRServer:
         ws = web.WebSocketResponse(max_msg_size=10 * 1024 * 1024)
         await ws.prepare(request)
 
+        try:
+            session_target_lang = self._validate_connection_query(request.query)
+        except ValueError as e:
+            logger.warning(f"Rejecting WebSocket connection: {e}")
+            await ws.send_str(json.dumps({"type": "error", "message": str(e)}))
+            await ws.close()
+            return ws
+
         session_id = str(uuid.uuid4())[:8]
         session = ASRSession(
             id=session_id,
             websocket=ws,
-            target_lang=self.target_lang,
+            target_lang=session_target_lang,
         )
         self.sessions[session_id] = session
 

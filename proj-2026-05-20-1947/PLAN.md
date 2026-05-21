@@ -1,7 +1,7 @@
 # Plan: Multilingual checkpoint support — process-per-model + uniform client protocol
 
 Project directory: `./proj-2026-05-20-1947`
-Status: **IN /implement** (v3, process-per-model). Steps 1, 2, 2b, 3 done; Step 4 next.
+Status: **IN /implement** (v3, process-per-model). Steps 1, 2, 2b, 3, 4 done; Step 5 next.
 
 ## Context
 The English `silence0_warm200` shipped (full-1000 semantic WER 1.95%, TTFB p95 247 ms @ conc-12;
@@ -135,7 +135,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
   clean; English path unchanged.
   Key files: `src/nemotron_speech/server.py`
 
-- [ ] **4. Uniform client protocol: handshake + endpoint routing + validation**
+- [x] **4. Uniform client protocol: handshake (query-params) + endpoint routing + validation**
   Client sends, immediately after connect, an explicit `{"type":"init","model_name":<required>,
   "language":<optional>}`; the server validates **before** `_init_session`/continuous-worker/`ready`,
   and the client requires `ready` / raises on `error`. Validation: English server + `language`
@@ -179,7 +179,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
 | 2 | server.py dual-runtime-clean + model-aware config (rc0/rc3) | done | (this commit) | Codex `byf72tsi5` + Claude review ACCEPT. server.py +154/-22 (only file). `prompted_model = hasattr(model,'set_inference_prompt')`; `_select_att_context_size` keeps English `[70,{0,1,6,13}]` (rc1 default) byte-identical, multilingual reads cfg `[56,{0,3,6,13}]` default rc3; geometry (`final_padding=(rc+1)*shift`, FFT-ring) unchanged, auto-adapts via self.right_context. Prompt set-under-lock (`_apply_inference_prompt`) at all 4 inference sites, guarded; lang-tag strip (`_extract_hypothesis_text`, regex `\s*<[a-z]{2}-[A-Z]{2}>`) prompted-only. **English byte-identical 2/2 + FORK_ASSERT 2/2** (omni venv); multilingual rc3+rc0 → exact English, no tag leak (EA venv); dual-venv py_compile OK. |
 | 2b | English byte-identity checkpoint | done | (this commit) | satisfied by Step 2's English smoke: 2/2 byte-identical + FORK_ASSERT 2/2 under omni venv; guards provably skip multilingual code for English |
 | 3 | Prompt (scalar/per-call) + strip_lang_tags before delta | done | (this commit) | Codex `b288n84bb` + Claude review ACCEPT. server.py +39/-9. `ASRSession.target_lang` (defaults to server target_lang); `_apply_inference_prompt(session)` set-under-lock from SESSION lang at all 4 sites; fork copies scalar (FORK_ASSERT clean). `_strip_lang_tags`: complete-tag (`\s*<[a-z]{2}-[A-Z]{2}>`→space) + partial-trailing-fragment (`\s*<[a-z]{0,2}(?:-[A-Z]{0,2})?$`) + ws-collapse, BEFORE current_text/committed_text/delta, prompted-only. **English byte-identical + FORK_ASSERT 2/2** (target_lang field unused for English; prompt+strip guarded off). Multilingual rc3 → exact, no tag leak; multi-segment deltas clean; mixed-lang sanity en-US→0/es-ES→2/en-US→0. dual-venv py_compile OK. |
-| 4 | Uniform protocol: init handshake + endpoint routing + validation | pending | — | English+language=error; ml-default=auto; services.py + client |
+| 4 | Uniform protocol: query-param handshake + endpoint routing + validation | done | (this commit) + nested 83f01ea | Codex `b9enxlgb7` + Claude review ACCEPT. MECHANISM: query-params (?language&model) read at connect, validated BEFORE _init_session (no message-flow change, backward-compat). server.py +106 (`_validate_connection_query`/`_validate_session_target_lang`/`_validate_model_query_param`/`_read_prompt_dictionary`); nested nemotron_local_stt.py (`_connect_url` appends param only when language set; raise on error-frame) + services.py (`resolve_nemotron_local_route` model_name→endpoint). **6 cases pass**: English+language→error; English no-param→ready; ML es-ES→idx2; ML zz-ZZ→error+supported-list; ML no-param→auto(101); ML en-US→exact no-leak. English byte-identical (server returns self.target_lang for English-no-param; client URL unchanged; factory english default). py_compile 3 files both venvs. |
 | 5 | Transcription correctness (subset) | pending | — | en-US sensible; optional 2nd-lang |
 | 6 | Full-1000 conc-12 + semantic WER (en-US) | pending | — | harness needs init handshake; rc3 latency caveat |
 | 7 | Consolidate docs + final English re-validation | pending | — | sign-off + caveats |
