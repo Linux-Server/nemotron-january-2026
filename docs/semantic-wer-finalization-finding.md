@@ -418,6 +418,24 @@ benchmark observer latency; under concurrent production load
 `inference_lock` contention adds to it (separate measurement, out of scope
 here).
 
+**R4 caveat CLOSED (2026-05-20)** — measured directly. A realtime concurrent
+sweep (`proj-2026-05-19-eou-endpointing/concurrency_test.py`, commit `737a1fd`)
+opened N ∈ {1,4,8,12,16,20,24} concurrent realtime sessions against the
+production config (`NEMOTRON_FINALIZE_SILENCE_MS=0` + `NEMOTRON_WARMUP_MS=200`
++ continuous). Findings: (a) **byte-exact correctness at every N** — 24/24
+transcripts identical to the single-session baseline at N=24, max edit-distance
+0, `FORK_ASSERT=1` clean throughout (no cross-session state leakage, no races;
+the serialized-inference + per-session-cache design degrades gracefully —
+latency only, never correctness). (b) **Server-side finalize latency
+(`vad_stop→final`, the lock-contended term) is flat ~15 ms p95 through N=12**,
+rises to 33 ms at N=16, then collapses (664 ms at N=20, 2.1 s at N=24) as the
+single `inference_lock` saturates. End-to-end TTFS = ~200 ms Silero + this, so
+**~12 concurrent live sessions per RTX 5090 are comfortably in the 400 ms
+budget, ~16 at the edge.** Scales horizontally (capacity = per-GPU-ceiling ×
+instances). No request batching exists (batch_size=1 by design); vLLM-style
+continuous batching on the cache-aware streaming path is the unexplored lever
+if the ~16/GPU ceiling is insufficient.
+
 ### Step 4 / Step 5 scope reductions
 - **Step 4 (rc-and-VAD sweep) triaged**: rc0 dropped (crashes); vad-stop>0.2 s
   out-of-budget by construction; vad020 confirmed ≈ baseline (no WER lever);

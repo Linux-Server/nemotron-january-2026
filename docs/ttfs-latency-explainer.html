@@ -63,8 +63,8 @@ post-decision wall-clock cost — see §3.</td></tr>
 <td>real wall-clock, before <code>vad_stop</code>; excluded from the budget <code>endpoint_wait</code> term</td>
 <td><b>Yes</b> — biggest single lever; framework-locked in this benchmark (production-side).</td></tr>
 <tr><td>2</td><td>Server finalize debounce (<code>NEMOTRON_FINALIZE_SILENCE_MS</code>)</td>
-<td><span class="m">~151 ms</span></td><td>real wall-clock (the budget <code>endpoint_wait</code>)</td>
-<td><b>Yes</b> — the directly server-controllable lever; currently a static timer.</td></tr>
+<td><span class="m">~151 ms → 0</span></td><td>real wall-clock (the budget <code>endpoint_wait</code>); a VAD-cancellation safety window, NOT model-settle time</td>
+<td><b>Yes — reducible to 0</b> for a definitive trigger; measured −152 ms TTFS at no WER cost (see §8).</td></tr>
 <tr><td>3</td><td>Finalize fork flush — fork build + synthetic-pad processing + delta prep,
 <i>up to send start</i> (<code>fork_flush_start→final_sent</code>)</td>
 <td><span class="m">~13–14 ms</span></td>
@@ -76,8 +76,8 @@ post-decision wall-clock cost — see §3.</td></tr>
 <td>real (network RTT in production)</td><td>Deployment-dependent.</td></tr>
 <tr><td>5</td><td>Chunk / frame quantization (fixed shift)</td><td>tens of ms (bounded by shift)</td>
 <td>real, overlaps streaming</td><td>Minor; structural.</td></tr>
-<tr><td>6</td><td><code>inference_lock</code> contention</td><td><span class="m">~0 ms (sequential)</span></td>
-<td>real under concurrency</td><td>Grows with concurrent sessions (the R4 caveat).</td></tr>
+<tr><td>6</td><td><code>inference_lock</code> contention</td><td><span class="m">+0 ms to N=12; +18 ms@16; +649 ms@20</span> (incremental vs the ~15 ms single-session finalize)</td>
+<td>real under concurrency (now measured)</td><td>Flat to ~12 concurrent sessions/GPU, knee at ~16–18 (see §9).</td></tr>
 </table>
 
 <h2>3. Floors: modeled-formula vs post-decision wall-clock</h2>
@@ -115,7 +115,11 @@ revoked (see §6).</li>
 (400 − rc1 160 − flush ~14 − margin ≈ ~150). 150 ms is the <b>largest value that fits the
 budget</b> and sits just <i>below</i> the minimum observed real intra-utterance gap (154 ms),
 so a true resume almost never lands inside the window — and when it does (pre-emit), the
-fork-discard absorbs it. It is a budget-bounded, data-informed <b>static</b> choice.</p>
+fork-discard absorbs it. It is a budget-bounded, data-informed <b>static</b> choice.
+<b>Update (§8):</b> we later established the 150&nbsp;ms is purely a VAD-cancellation safety
+window (audio is held aside, not fed to the ASR), so for a <i>definitive</i> end-of-turn trigger
+it can be set to <b>0</b> with no WER change (99/100 byte-identical) — a measured −152&nbsp;ms
+TTFS win.</p>
 
 <h2>6. Can we do better than a static wait? (the real opportunity)</h2>
 <p>The debounce only proxies "<i>did the speaker actually stop, or is this a mid-utterance
@@ -242,7 +246,64 @@ Conversational speech with different pause distributions might shift the numbers
 mechanism. A future checkpoint with an explicit EOU classifier head would change the picture
 entirely.</p>
 
-<h2>8. Honest caveats</h2>
+<h2>8. Finalize debounce can go to ZERO (2026-05-20, measured)</h2>
+<p>The §5 framing of the 150&nbsp;ms debounce as a budget-bounded settle margin was
+<b>incomplete</b>. Tracing the actual server code (Codex-verified): during the debounce window
+the incoming audio is <b>held aside in <code>continuous_post_stop_audio</code> and NOT fed to the
+ASR</b>; the fork-flush runs from the parent state <i>as of <code>vad_stop</code></i> regardless
+of the debounce value. So the 150&nbsp;ms is purely a <b>VAD-cancellation safety window</b>
+("wait briefly to see if the speaker resumes before committing the finalize"), not time the
+model needs to settle.</p>
+<p><b>Offline replay</b> (<code>silence_pad_replay.py</code>) over 100 sessions confirmed the
+fork's existing <code>(R+1)*shift = 320&nbsp;ms</code> synthetic pad already converges. On the
+<b>33 single-<code>vad_stop</code> baseline-comparable sessions</b> (where the production
+transcript is a clean single-segment reference), replaying from the <code>vad_stop</code> snapshot
+reproduced production at <span class="m">median edit-distance&nbsp;0, p95&nbsp;3.4 chars</span>
+(CUDA/cuFFT nondeterminism); longer pads (480/640/800&nbsp;ms) did not improve this, while
+1200&nbsp;ms actively degraded (out-of-distribution synthetic input). (The remaining 67 sessions
+are multi-<code>vad_stop</code> continuous-mode runs whose DB baseline is the concatenated
+multi-segment aggregate, so the single-fork replay's larger edit-distance there is expected, not a
+defect.) <b>Measured</b> 100-sample A/B (<code>silence_0</code> vs <code>silence_150</code>):
+normalized word-error-rate vs ground truth <span class="m">identical (4.286% both,
+Δ&nbsp;0.0000&nbsp;pp; computed directly against ground truth — the Gemini/Claude semantic judge
+is even more tolerant)</span>, transcripts <span class="m">99/100 byte-identical</span> (the one
+diff a single inserted period), at <span class="m">TTFB&nbsp;215&nbsp;ms vs 367&nbsp;ms — a
+152&nbsp;ms reduction</span>.</p>
+<p class="key"><b>Result.</b> For a use case with a <i>definitive</i> end-of-turn trigger (e.g.
+Smart Turn) — or where the segmentation cost of an occasional early finalize is acceptable —
+<code>NEMOTRON_FINALIZE_SILENCE_MS=0</code> drops TTFS p95 from ~366&nbsp;ms to
+<b>~215&nbsp;ms</b> with no transcript change. The fork's unfork-safe state preservation (deep
+clone; <code>FORK_ASSERT</code>-verified) means a false-early fire is recoverable: emit the
+finalize now, keep processing the retained context, continue on the next utterance. The 150&nbsp;ms
+remains the right setting only when the trigger itself is unreliable (Silero pause vs end-of-turn
+ambiguity) and the safety window is doing real cancellation work. (A full-1000 measured
+<code>silence0_warm200</code> run is the ship-gate confirmation of this 100-sample result.)</p>
+
+<h2>9. Concurrency / capacity (2026-05-20, measured — R4 caveat closed)</h2>
+<p>The server does <b>no request batching</b> — every <code>conformer_stream_step</code> is
+serialized through one global <code>inference_lock</code>, model <code>batch_size=1</code> by
+design (the batch API corrupts the cache-aware streaming state). A realtime concurrent sweep
+(<code>concurrency_test.py</code>, N&nbsp;∈&nbsp;{1,4,8,12,16,20,24} live sessions, production
+<code>silence_0&nbsp;+&nbsp;warm200</code> config) found:</p>
+<table>
+<tr><th>N concurrent</th><th>byte-accuracy</th><th>server finalize p95 (<code>vad_stop→final</code>)</th><th>end-to-end TTFS ≈ +200 ms Silero</th></tr>
+<tr><td>1–12</td><td class="m">100% exact</td><td class="m">~15 ms (flat)</td><td>~215 ms — in budget, comfortable</td></tr>
+<tr><td>16</td><td class="m">100% exact</td><td class="m">33 ms</td><td>~233 ms — in budget, edge</td></tr>
+<tr><td>20</td><td class="m">100% exact</td><td class="m">664 ms</td><td>~864 ms — OUT of budget</td></tr>
+<tr><td>24</td><td class="m">100% exact</td><td class="m">2082 ms</td><td>~2280 ms — server behind realtime</td></tr>
+</table>
+<p><b>Correctness is perfect at every N</b> (max edit-distance 0 vs single-session baseline,
+<code>FORK_ASSERT</code> clean) — the serialized-inference + per-session-cache design degrades
+<i>gracefully</i>: latency only, never correctness, even when overwhelmed. <b>Capacity: ~12
+concurrent live sessions per RTX&nbsp;5090 comfortably in-budget, ~16 at the edge</b>; the single
+<code>inference_lock</code> saturates at ~N=16–18. Scales horizontally (capacity = per-GPU-ceiling
+× instances). Warm-up (<code>warm200</code>) connect contention is negligible (ready p95 ≤ 52&nbsp;ms
+at N=24). The unexplored lever for higher per-GPU throughput is vLLM-style continuous batching on
+the cache-aware streaming path — significant work, not yet attempted. <small>(Scope: measured on
+one RTX&nbsp;5090, this checkpoint, a 24-audio realtime sweep with tightly-grouped randomized
+starts; production hardware/traffic could shift the knee.)</small></p>
+
+<h2>10. Honest caveats</h2>
 <ul>
 <li><b>Two floors, not one.</b> ~175 ms is a modeled <i>formula</i> floor; the true
 post-decision wall-clock floor is lower (synthetic rc1) and the binding limit is the
@@ -257,8 +318,8 @@ older-than-rc1 edit (expected ≈0) rather than assume it — that result sets h
 the endpoint trigger can safely be.</li>
 <li><b>Preliminary.</b> Budget p95 ~326 ms is from ~499/1000 samples; per-term distributions
 are tight, so it is unlikely to move materially.</li>
-<li><b>Concurrency (R4).</b> Single-session / sequential-benchmark scope;
-<code>inference_lock</code> contention under concurrent production load is not captured.</li>
+<li><b>Concurrency (R4) — now measured (§9).</b> Correctness is byte-exact to N=24; latency is
+flat to ~12 concurrent sessions/GPU, knee at ~16–18. The earlier "not captured" caveat is closed.</li>
 <li><b>WER is decided separately.</b> Low latency only counts if the always-append-only
 <code>fork</code> WER lands in the Phase-G/oracle region — that gate is pending the
 judge/score at run completion.</li>
