@@ -1,0 +1,95 @@
+<task>
+Implement Step 5 of proj-2026-05-21-0410/PLAN.md: "Batch state primitives — stack/unstack + the BLOCKING
+Probe B2 full state-equality re-validation". Read the plan's Context, the "Round-4 review fixes" Rules, and
+Step 5 (incl. its Round-4 ADDITIONS) first. Scope: HARDEN `src/nemotron_speech/batch_primitives.py`, EXTEND
+`proj-2026-05-21-0410/test_batch_primitives.py`, and CREATE the blocking `proj-2026-05-21-0410/test_batch_state.py`
+(Probe B2). Do NOT modify server.py in this step (the in-server scheduler wiring is Steps 6-7). No git commits.
+
+WHY THIS STEP MATTERS: round-4 review found the existing Probe B (`probe_batched_step.py`) only compared
+TEXT at B=2 — it never compared the scattered cache tensors / previous_hypotheses / pred_out_stream /
+emitted_frames, and never ran the exception tests. The whole batching effort's dominant risk is silent
+cache-aware-state cross-talk, so we MUST prove batched==separate at the STATE level over a FULL multi-chunk
+stream before building the scheduler (Steps 6-8 depend on this).
+
+PART A — harden batch_primitives.py:
+  1. `scatter_cache_row`: return OWNED B=1 storage — `.clone()` (after `.detach()` if needed) the dim1/dim0
+     slice for clc/clt/clcl — NOT a view into the full [layers,B,...] batch (C9: views retain whole-batch
+     storage, keep stale rows alive after a stream leaves, and feed view-strided caches into the compiled
+     B=1 fallback). Keep the dim-1 (channel/time) / dim-0 (len) axes exactly.
+  2. `stack_processed`: assert each row tensor `shape[0]==1`, identical dtype and device across rows (in
+     addition to the existing F/T ragged check).
+  3. Add a uniform-None guard: a helper (or assertions in stack_hypotheses/stack_pred_out) that within a
+     group, `previous_pred_out` AND `previous_hypotheses` are uniformly None-or-not — a fresh row (pred_out
+     None) must NEVER be stacked with an established row (would make stack_pred_out return None for the whole
+     batch and silently restart the established rows' decode). Fail closed (assert/raise).
+  4. (If not already present as pure fns) keep `batch_group_key` and add a pure `ready_predicate(...)`
+     helper encoding the exact two-guard readiness (see the plan Rules: synthetic_prefix+total_audio >=
+     (emitted+shift+1)*hop AND len(pending) >= preprocess_new_audio_samples) — pure, unit-testable.
+
+PART B — extend test_batch_primitives.py (pure unit, no model):
+  - clone-independent-storage: after scatter, mutating a scattered row's tensor in place does NOT change the
+    source batch tensor or any other row (proves C9).
+  - the uniform-None assertion fires (fresh+established mix raises).
+  - the shape[0]==1 / dtype / device assertions fire on violation.
+  Run it: `proj-2026-05-21-0410/.venv... ` or `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python -m
+  pytest proj-2026-05-21-0410/test_batch_primitives.py` (or plain run). Must PASS.
+
+PART C — Probe B2 = test_batch_state.py (BLOCKING; needs the model + GPU, now free):
+  Build on probe_batched_step.py. Load the ENGLISH model under
+  `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`, model `$(cat /tmp/en-nemo-path)`,
+  att_context [70,1] (rc1), greedy / loop_labels=False / use_cuda_graph_decoder=False (the CURRENT config —
+  NOT greedy_batch; greedy_batch is Step 7's separate probe). Use ≥3 DISTINCT clips (different audio per row).
+  - Run each clip SEPARATELY at B=1 for the FULL stream (many chunks), recording PER STEP: the cumulative
+    text, cache_last_channel / cache_last_time / cache_last_channel_len, previous_hypotheses (token sequence
+    `.y_sequence` or text + decoder state), pred_out_stream, emitted_frames.
+  - Then run the SAME clips STACKED at B=2 AND B=4 (one conformer_stream_step(B) per tick via the hardened
+    batch_primitives; scatter per row each step). For EACH row at EACH step compare to its B=1 capture:
+      * TEXT: EXACT byte equality (Python ==) — HARD gate, must hold for the whole multi-chunk stream.
+      * STATE (caches, pred_out, hyp decoder state): report BOTH `torch.equal` (bit-identical?) AND
+        `torch.allclose` + max-abs-diff. EXPECT bit-equality to possibly FAIL by ~1e-6 — batched-matmul vs
+        single-matmul reduction order legitimately differs on CUDA (cf. the cufft-nondeterminism note). The
+        GATE is: TEXT byte-identical for the full stream AND state stays allclose within a TIGHT tol
+        (atol≈1e-4) that does NOT GROW unboundedly over the stream (track the max drift across chunks — if
+        drift compounds toward divergence or text ever flips, that is a NO-GO and a real cross-talk bug).
+      * emitted_frames: exactly equal.
+  - Row-order permutation: permute the rows in the batch; per-row output must be unchanged.
+  - EXCEPTION tests (C10 + the drop_extra rule): (a) wrap the batched call so it raises AFTER NeMo sets
+    `model.encoder.streaming_cfg.drop_extra_pre_encoded` (encoder phase); verify a try/finally restored
+    drop_extra to its original value AND a subsequent normal B=1 chunk decodes correctly. (b) inject a
+    DECODER exception mid-decode; verify the chosen policy holds (either cloned-hyps-assigned-only-on-success,
+    or the affected rows are reset/closed — never silently continue with half-mutated hypotheses).
+  GATE (BLOCKING for Step 7): B=2 AND B=4 text byte-identical to B=1 over the full streams; state allclose +
+  bounded drift; row-permute invariant; both exception cases recover correctly. Report max state drift seen.
+
+CLEANUP: free the GPU (kill any process you start, by PID); report GPU free; remove temp files / __pycache__
+you create. Do not disturb port 8088 or other processes.
+
+REPORT: 1) batch_primitives changes (clone-on-scatter + asserts); 2) unit-test results; 3) Probe B2:
+text byte-identity B=2/B=4 over full streams (n clips, n chunks), max state drift (torch.equal? allclose
+tol?), row-permute, both exception outcomes; 4) cleanup; 5) GO/NO-GO for the state-batching foundation
+(Step 7 unblock). If text ever flips or state drift grows, NO-GO with the diagnosis.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Context, Round-4 Rules, Step 5), batch_primitives.py, test_batch_primitives.py,
+and probe_batched_step.py (the partial Probe B to extend). conformer_stream_step =
+/home/khkramer/src/nemotron-nano-omni/NeMo/.../mixins/mixins.py:592. Cache axes: cache_last_channel
+[layers,B,cache_T,d_model] + cache_last_time [layers,B,d_model,time_T] stack on dim 1; cache_last_channel_len
+[B] on dim 0. The en model byte-exact baseline is the reference for the whole plan.
+</context>
+
+<verification_loop>
+Run the unit tests + Probe B2 to completion. The crux is the FULL-STREAM state comparison: confirm text stays
+byte-identical across ALL chunks (not just step 1) and state drift stays bounded. If you see drift growing or
+a text flip, stop and diagnose (axis error? alias? pred_out None-mix?) before reporting.
+</verification_loop>
+
+<action_safety>
+Edit ONLY batch_primitives.py + the two test files. No server.py changes, no NeMo edits, no commits. Kill any
+model process you start; free the GPU.
+</action_safety>
+
+<compact_output_contract>
+Report the 5 items: primitives changes, unit tests, Probe B2 (text byte-identity + state drift + permute +
+exceptions), cleanup, GO/NO-GO.
+</compact_output_contract>

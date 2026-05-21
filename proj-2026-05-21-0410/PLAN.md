@@ -231,7 +231,7 @@ silent transcript corruption from cache-aware batched state**; the plan is probe
   shows idle-gaps are 46-68% of span on cloud vs 35% local → this B=1 lever is worth MORE on the slow-CPU target
   (solo/fallback/finalize/first-chunk paths) than Probe A's local 1.54× implies (N1).**
 
-- [ ] **5. Batch state primitives — stack/unstack (correct axes), grouping key, exact ready predicate**
+- [x] **5. Batch state primitives — stack/unstack (correct axes), grouping key, exact ready predicate**
   Helpers: concat caches (dim1/dim0), flat unique-object hyp/pred_out lists, `processed_signal[B,F,T]`+`length[B]`,
   set the single drop_extra/prompt, inverse scatter (one-element lists). Grouping key + the exact two-guard ready
   predicate (above). Assertions for shapes + alias-freedom. `try/finally` drop_extra restore wrapper.
@@ -276,6 +276,14 @@ silent transcript corruption from cache-aware batched state**; the plan is probe
   a `BATCH_MAX_WAIT_MS=5` coalescing timer on first-ready, dispatch the largest safe same-group batch when
   `MAX_SIZE` hits OR timer expires (don't rely on the unobservable "all ready gathered"; don't let "immediate at
   low load" silently collapse N=2/4 to B=1). Track effective-batch-size histogram + queue-wait p95.
+  (iii) **TF32-off for state-faithful batching (Step-5/Probe-B2 FINDING):** batched-matmul reduction-order
+  noise under TF32 drifts the encoder cache ~0.03 (text still byte-identical, but state allclose fails);
+  fp32 (TF32-off) drifts only ~1e-4 (allclose passes, state-faithful). So when `NEMOTRON_BATCH_SCHED=1`, set
+  `torch.backends.cuda.matmul.allow_tf32=False` + `cudnn.allow_tf32=False` (global flag — affects B=1 too).
+  Step 9 must RE-BASELINE the single-stream English reference under fp32 (the committed baseline was TF32-on)
+  and MEASURE the matmul perf cost (expected small — workload is launch-bound, not compute-bound). If the
+  perf cost is unacceptable, fall back to TF32-on + a WER-within-CI gate (text byte-identical on the fixed set
+  was observed under TF32 too) — surface that tradeoff to the user at Step 9.
   - [ ] **7a. Batch the preprocessor (C6/S1 — the co-equal server-layer term).** Stack same-ready-group fixed
     audio → `[B,K]` → ONE `preprocessor` call, slice per-row mel, then the batched model. **GATE:** batched-B
     preprocessor byte-equal to per-row B=1 (its own probe — batched cuFFT plan risk); if NOT byte-exact, keep
@@ -327,8 +335,8 @@ silent transcript corruption from cache-aware batched state**; the plan is probe
 | 1 | Probe A: encoder compile (GO/NO-GO Step 4) | **done — CONDITIONAL GO (R4 C5)** | (uncommitted) | `probe_encoder_compile.py`: torch.compile on encoder.cache_aware_stream_step + correct (Δ=2e-6) + **1.54× faster** (7.9→5.1ms) — but ONE shape (drop_extra=0). Real-shape coverage (warmup/first/steady/final) + invocation design moved to Step 4. Worth MORE on cloud (gaps 46-68% of span). |
 | 2 | Probe B: batched-step STATE + drop_extra exception | **partial — TEXT-GO (R4 C2)** | (uncommitted) | `probe_batched_step.py`: batched(B=2)==separate(B=1) BYTE-IDENTICAL text, incl. row-permute AND mid-stream dim-1 stack. BUT text-only — caches/hyps/pred_out/emitted_frames NOT compared, exception test unrun → **full STATE-equality + enc&dec exception = Probe B2 (Step 5), BLOCKING Step 7**. |
 | 3 | Probe C: decoder strategy + encode/decode split | **done — GO @B=1 ONLY (R4 C3)** | (uncommitted) | `probe_decoder_strategy.py`: `greedy_batch`==`greedy` BYTE-IDENTICAL at **B=1**, all clips. NOT proven at B≥2 multi-chunk (the shipped path) → **`greedy_batch` B≥2 multichunk probe BLOCKING Step 7**. encode/decode split timing still TODO. |
-| 4 | Phase 1: encoder compile B=1 (flag) | **done** | _pending_ | Approach (b): compiled handle swapped into `encoder.cache_aware_stream_step` for static buckets {(20,0),(16,0),(25,2)} via `_conformer_stream_step`, restored in finally; **CUDA-graph cache outputs (idx 2,3,4) cloned** out of the static pool; final/fork uncompiled; prompted_model disables compile; dedicated 1-thread executor for graph consistency. GATE: flag-off 8/8 + flag-on 8/8 byte-exact, **1.45× step** (10.01→6.89ms), 0 recapture, FORK_ASSERT clean. (.venv-asr/torch2.11; bundles pre-existing NEMOTRON_PROFILE_CHUNK instrumentation.) |
-| 5 | Batch state primitives (axes, ready predicate, try/finally) | **partial** | (uncommitted) | `src/nemotron_speech/batch_primitives.py` (pure stack/scatter/group-key/hyp-flatten) + `test_batch_primitives.py` PASS (dim1/dim0 round-trip, alias guard, ragged reject). In-server wiring + ready-predicate + try/finally = with scheduler (Steps 6-7). **R4: + Probe B2 state-equality (BLOCKING), clone-on-scatter (C9), B=1/dtype/uniform-None asserts (C-S4/S2).** |
+| 4 | Phase 1: encoder compile B=1 (flag) | **done** | e22630d | Approach (b): compiled handle swapped into `encoder.cache_aware_stream_step` for static buckets {(20,0),(16,0),(25,2)} via `_conformer_stream_step`, restored in finally; **CUDA-graph cache outputs (idx 2,3,4) cloned** out of the static pool; final/fork uncompiled; prompted_model disables compile; dedicated 1-thread executor for graph consistency. GATE: flag-off 8/8 + flag-on 8/8 byte-exact, **1.45× step** (10.01→6.89ms), 0 recapture, FORK_ASSERT clean. (.venv-asr/torch2.11; bundles pre-existing NEMOTRON_PROFILE_CHUNK instrumentation.) |
+| 5 | Batch state primitives (axes, ready predicate, try/finally) | **done** | _pending_ | `batch_primitives.py` hardened (clone-on-scatter C9, [1,F,T]/dtype/device + uniform-None + RNNT asserts, `ready_predicate`, `conformer_stream_step_restoring_drop_extra`). `test_batch_primitives.py` extended (clone-independent storage etc.) PASS. **Probe B2 (`test_batch_state.py`) PASS**: B=2/B=4 full-stream (4 clips×30 chunks) **text byte-identical + emitted_exact + row-permute invariant + exceptions recover (enc drop_extra restore, dec clone-in/assign-on-success)**; state `allclose(1e-4)` under **fp32 (TF32-off)** — drift ~1e-4 vs ~0.03 under TF32. **FINDING: state-faithful batching needs TF32-off (global flag) → Step 7 sets it + Step 9 re-baselines B=1 under fp32 & measures matmul perf.** |
 | 6 | 5a: scheduler infra B=1 (+ fork lane) | pending | — | **R4: rollback flag (C7) + reset/close barriers + generation-token scatter (C8).** |
 | 7 | 5b: steady-state batching (flag, decoder per Probe C) | pending | — | core. **R4: explicit global-decoder design (C4) + greedy_batch B≥2 multichunk probe (BLOCKING, C3) + precise dispatch (C-S2).** |
 | 7a | Batch the preprocessor (byte-gated) | pending | — | **R4 (C6/S1): co-equal server-layer term — stack `[B,K]`→1 preprocessor call; own cuFFT byte-equality probe or cap MAX_SIZE.** |
