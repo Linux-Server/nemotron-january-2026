@@ -1,0 +1,28 @@
+<task>
+REVIEW round 3 of 3 (final, do not implement) of proj-2026-05-21-0410/PLAN.md. It has folded rounds 1
+and 2 (codex-review-round1.md, codex-review-round2.md, claude-review-round1.md, claude-review-round2.md
+in this dir). This is the LAST pass before implementation via /implement.
+
+READ: PLAN.md (current v3) + the four prior review files. Verify the round-2 fixes landed: Probe A NO-GO
+now skips Step 4 (not 6); compile×batch semantics (compile B=1-only, B>1 uncompiled unless bucketed);
+exact two-guard ready predicate written out; drop_extra_pre_encoded try/finally; encode/decode split in
+Probe C + the fallback ≥1.5× gate; greedy_batch gated by Probe C before Step 7 uses it; concrete defaults
+(MAX_WAIT=5ms, MAX_SIZE=4, deduped ready set, no frame drop); memory gates; fork-lane ownership; Step-0
+git-dirty identity; quantified GO thresholds; Step 9 merged into validation.
+
+Then a FINAL implementation-readiness check — be terse, only flag REAL blockers or last concrete fixes:
+1. Any remaining technical error that could silently corrupt transcripts or mislead a gate?
+2. Is each step truly scoped for ONE Codex delegation, or is any still too big (esp. Steps 6/7/8 — the scheduler)?
+3. Are the probe GO/NO-GO gates now concrete enough to execute autonomously without a human?
+4. Is the dependency DAG correct (0→{1,2,3}; 1→4; 2→5; 3→7; 5→6→7→8→9→10→11)? Any cycle or missing edge?
+5. Anything in the asyncio scheduler refactor (Step 6) that is likely to break the existing per-session
+   worker / state_lock / event-queue model and isn't called out?
+If v3 is implementation-ready, say so explicitly. WRITE to proj-2026-05-21-0410/codex-review-round3.md
+(--write THIS FILE ONLY). No PLAN.md/code edits, no commits.
+</task>
+
+<compact_output_contract>
+proj-2026-05-21-0410/codex-review-round3.md: (1) round-2-fold verification, (2) any REAL remaining
+blockers (or "none"), (3) step-sizing/DAG check, (4) explicit implementation-ready YES/NO + the few
+must-fix edits if NO. 5-line summary.
+</compact_output_contract>

@@ -1,0 +1,84 @@
+<task>
+Implement Step 0 (sub-step 0b) of the plan at proj-2026-05-21-0410/PLAN.md: "Baseline artifact — MULTILINGUAL
+prompted baseline". 0a (English) is DONE (`proj-2026-05-21-0410/baseline/english_baseline.json`). This step
+captures the byte-exact MULTILINGUAL prompted baseline on the EA-venv server, which gates Steps 7 & 8.
+
+CAPTURE/VALIDATION ONLY — do NOT modify server.py, NeMo, services.py, nemotron_local_stt.py, or any harness.
+You may ONLY create the new capture script + write the baseline JSON. No git commits (the orchestrator commits).
+
+GOAL: stream a fixed clip set through the CURRENT multilingual server (B=1, greedy, silence0_warm200, rc3)
+under three prompt settings — `en-US`, `es-ES` (the supported non-English lang), and `auto` (no query param) —
+and record, per (clip, language): the FULL interim transcript sequence + final text + final delta + the
+effective target_lang, and assert NO language-tag leakage. Save with git identity (the tree is dirty).
+
+SETUP (EA venv, multilingual checkpoint, rc3 = multilingual default):
+1) Read the existing `proj-2026-05-21-0410/baseline_capture.py` — mirror its realtime-pacing + handshake
+   (vad_start → 20ms PCM chunks at wall-clock pace → 10 trailing silence chunks → vad_stop → reset finalize →
+   await final) and its git-identity metadata block exactly.
+2) Confirm port 8081 is free (port 8088 is in use by another process — DO NOT touch it). Check `nvidia-smi`
+   for free GPU memory before starting (kill only a stale OUR ml server if one is holding the GPU, by its PID;
+   never `pkill -f` — it self-matches).
+3) Start the multilingual server from the repo root /home/khkramer/src/nemotron-january-2026:
+   NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1 \
+   /home/khkramer/src/nemotron-ea-nemo/.venv-ea/bin/python src/nemotron_speech/server.py \
+     --model $(cat /tmp/ml-nemo-path) --host 127.0.0.1 --port 8081 --right-context 3
+   Wait for the 'listening' / startup-complete log line (cold load can take 1-2 min). CONFIRM from the log:
+   (a) it IS a prompted model — expect a "Prompted model detected" / "Inference prompt set" line (the
+   multilingual checkpoint has set_inference_prompt → prompted_model=True); (b) att_context_size resolves to
+   [56, 3]; (c) shift 160ms; (d) clean load, no traceback.
+
+CAPTURE:
+4) Create `proj-2026-05-21-0410/multilingual_baseline_capture.py` (modeled on baseline_capture.py). Use the
+   SAME fixed 8-clip PICKS logic (same results.db query + indexing, so the clip set is identical to 0a). For
+   EACH of the three settings, connect to the matching URL and stream all 8 clips:
+     - en-US : ws://127.0.0.1:8081?language=en-US   (first server msg must be 'ready', NOT error)
+     - es-ES : ws://127.0.0.1:8081?language=es-ES    (es-ES is a confirmed-supported lang, idx2)
+     - auto  : ws://127.0.0.1:8081                   (no query param → multilingual auto)
+   Record per (clip, language): {sample_id, language, target_lang_effective, interims:[...], final,
+   final_delta, error}. ALSO assert no tag leak: the literal lang-tag regex `\s*<[a-z]{2}-[A-Z]{2}>` must NOT
+   appear in any interim or the final (the server strips tags before delta) — record a `tag_leak` bool per row.
+   Short clips may yield an empty final (a known case: the server suppresses empty deltas → no finalize msg);
+   the existing 20s done-timeout handles it — record final="" rather than hanging.
+5) Write `proj-2026-05-21-0410/baseline/multilingual_baseline.json`:
+   {captured_at, url_base, config:"multilingual rc3 prompted greedy loop_labels=False silence0_warm200",
+    git_head, git_status_short, server_py_diff_sha (sha256 of `git diff -- src/nemotron_speech/server.py`,
+    first 16 hex), languages:["en-US","es-ES","auto"], records:[...]}.
+
+CLEANUP: kill the ml server by the PID you started (not pkill -f); confirm port 8081 free + report GPU free;
+remove any __pycache__ you created; leave port 8088 + any English server + the EA venv/NeMo untouched.
+
+REPORT (compact):
+1. startup confirmation: prompted_model=True (quote the prompt log line), att_context=[56,3], shift 160ms, clean.
+2. capture summary: for each of en-US/es-ES/auto — how many of 8 clips produced a final; sample of 2 finals;
+   tag_leak count (MUST be 0 across all 24 rows); any errors/empties.
+3. output path + record count (expect 24 = 8 clips × 3 settings).
+4. cleanup: server killed, port 8081 free, GPU free.
+5. VERDICT: is the multilingual baseline captured cleanly (24 records, 0 tag leak, prompted_model confirmed)?
+   GO/NO-GO for Step 0b sign-off. If es-ES turns out unsupported, query the supported list (connect
+   ?language=zz-ZZ → error returns the supported set) and substitute a supported non-English lang, noting it.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Context, Rules, Step 0) + proj-2026-05-20-1947/PLAN.md (the SHIPPED
+multilingual plan — its Progress rows document the EA server: prompted_model = hasattr(model,
+'set_inference_prompt'); _select_att_context_size gives multilingual [56,{0,3,6,13}] default rc3; query-param
+handshake ?language=… validated at connect; lang tags are literal `<xx-XX>` stripped before the delta;
+es-ES→idx2, en-US, auto all proven). The English 0a baseline used 8 clips spanning duration from results.db.
+This 0b baseline is the byte-exact reference the batching steps (7,8) will diff prompted-path output against.
+</context>
+
+<verification_loop>
+After capture, re-open the JSON and confirm 24 records, 0 tag_leak, and that en-US/es-ES/auto each produced
+sensible (deterministic) output. If the server log shows any FORK_ASSERT failure or traceback during capture,
+report it. Fix capture-script bugs and re-run before reporting GO.
+</verification_loop>
+
+<action_safety>
+CAPTURE ONLY. No edits to server.py / NeMo / services / client / harness. No commits. Kill the ml server when
+done. Do not disturb port 8088 or any other running process.
+</action_safety>
+
+<compact_output_contract>
+Report the 5 items: startup confirmation, capture summary (per-language + tag-leak), output path + count,
+cleanup, GO/NO-GO verdict.
+</compact_output_contract>

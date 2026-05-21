@@ -1,0 +1,46 @@
+<task>
+Critically REVIEW (do not implement) the plan at proj-2026-05-21-0410/PLAN.md — a streaming-ASR GPU
+throughput optimization (single-stream encoder graph/compile + continuous-batching scheduler) for
+src/nemotron_speech/server.py. This is review round 1 of 3.
+
+READ FIRST: proj-2026-05-21-0410/PLAN.md; proj-2026-05-20-modal-cost/batching-design-notes.md;
+proj-2026-05-20-modal-cost/RESULTS.md. Then read the real code: src/nemotron_speech/server.py
+(ASRSession dataclass ~line 364; _process_chunk ~2429 incl. the conformer_stream_step call ~2484;
+_build_continuous_finalize_fork ~2068; _handle_audio_locked ~2390; the decoding config ~793; the
+prompt path _apply_inference_prompt/_ensure_session_target_lang ~639); and conformer_stream_step in
+/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/mixins/mixins.py:592 (encoder
+cache_aware_stream_step then decoding.rnnt_decoder_predictions_tensor — both batch-capable).
+
+ASSESS rigorously and concretely:
+1. CORRECTNESS of the batching design — the cache-aware-state hazard. Will stacking N independent
+   sessions' cache_last_channel/time/len (dim 0) + per-stream previous_hypotheses through ONE
+   conformer_stream_step(B) give byte-identical PER-STREAM output vs B=1? Identify any cross-talk,
+   padding, masking, drop_extra_pre_encoded, or hypothesis-aliasing pitfalls the plan misses. Is the
+   "uniform tick" assumption (all streams advance one shift per tick) sound, and how should ragged
+   audio arrival + streams with <shift pending be handled mid-batch?
+2. The two front-loaded PROBES (Step 1 encoder compile, Step 2 batched-step correctness) — are their
+   GO/NO-GO gates the RIGHT decisive de-riskers? What would you add/change?
+3. COMPLETENESS — missing steps, risks, or edge cases: the silence0_warm200 finalize/fork path under
+   batching; the multilingual prompt being MODEL-GLOBAL (must batch only same target_lang — is that
+   handled?); per-session differing emitted_frames/drop_extra; the asyncio scheduler design (ready-queue
+   + single drain task) vs the current per-handler inference_lock; latency-vs-throughput tradeoff of
+   tick batching (does waiting to batch hurt TTFS/the <400ms budget?); loop_labels=True correctness vs
+   the current loop_labels=False greedy output (could change transcripts!).
+4. FLAG-GATING + byte-exact gates — are they sufficient to keep rc1 English byte-identical and the
+   multilingual path intact? Is defaulting everything off until proven the right safety posture?
+5. SEQUENCING — is the step order right (probes → Phase1 → state primitives → scheduler → variable-B/
+   decode/finalize → local validate → Modal re-sweep → consolidate)? Any step too big for one Codex
+   delegation, or any missing dependency?
+
+Be specific and critical — cite file:line and propose concrete plan edits (new/changed/split steps,
+added gates, corrected technical details). Flag anything that could silently corrupt transcripts.
+
+WRITE your full review to proj-2026-05-21-0410/codex-review-round1.md (use --write for THIS FILE ONLY).
+Do NOT modify PLAN.md, server.py, or any other file. No commits.
+</task>
+
+<compact_output_contract>
+Write the review to proj-2026-05-21-0410/codex-review-round1.md with sections: (1) batching-correctness
+risks, (2) probe adequacy, (3) completeness gaps, (4) flag/byte-exact adequacy, (5) sequencing, (6) a
+prioritized list of concrete PLAN.md edits. Then print a 5-line summary.
+</compact_output_contract>
