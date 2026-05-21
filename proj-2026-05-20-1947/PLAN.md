@@ -69,9 +69,15 @@ apples-to-apples vs English — **with the English server byte-identical**.
   NeMo/venv. ("per-model venv" = a real process+venv boundary, not an in-process fallback.)
 - **Opt-in:** multilingual prompts/tag-stripping activate only on the multilingual server. Default
   English path is byte-identical.
-- **Prompt = immutable per-session scalar** (`prompt_id` from `prompt_dictionary`), built into a
-  per-call prompt vector at each `conformer_stream_step`; copied (not tensor-cloned) into the fork;
-  never set as mutable model-global state (avoids cross-session language races under concurrency).
+- **Prompt = immutable per-session scalar** (`prompt_id` from `prompt_dictionary`), copied (not
+  tensor-cloned) into the fork. **Step-1 finding (the EA model uses MODEL-GLOBAL prompt state):**
+  the EA class applies the prompt via `set_inference_prompt(lang)` → `self._inference_prompt_index`,
+  read inside `conformer_stream_step` (`_apply_prompt_to_encoded`). So the concurrency-safe pattern
+  is: **set the model's `_inference_prompt_index` from the session's `prompt_id` UNDER the
+  `inference_lock`, immediately before each `conformer_stream_step` call** (the lock already
+  serializes all inference, so per-call-under-lock is race-free for mixed-language sessions). Do
+  NOT set it once at session start (would race). Re-validate byte-exact-under-concurrency for
+  mixed languages in Step 6's spirit.
 - **`strip_lang_tags` BEFORE state:** strip complete language-tag tokens from raw hypothesis text
   **before** updating `current_text`/`last_emitted_text`/`committed_text`/`continuous_emitted_text`
   or computing append-only deltas, or tags poison multi-segment delta state.
@@ -91,7 +97,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
 
 ## Steps
 
-- [ ] **1. Probe (GO/NO-GO #1): EA-NeMo venv + decisive prompted-STREAMING proof**
+- [x] **1. Probe (GO/NO-GO #1): EA-NeMo venv + decisive prompted-STREAMING proof — GO**
   (1a) Install the EA branch in a dedicated venv (isolated from omni). Confirm
   `restore_from(ml.nemo)` instantiates `EncDecRNNTBPEModelWithPrompt` (state-dict loads; `aux_ctc`
   harmless for RNNT decoding). (1b) **Critical gate:** run the EA branch's
@@ -171,7 +177,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Probe: EA-NeMo venv + prompted-STREAMING proof | pending | — | **GO/NO-GO #1**; 1b (prompt-in-streaming) decisive; no English-on-EA needed |
+| 1 | Probe: EA-NeMo venv + prompted-STREAMING proof | done — **GO** | (this commit) | Codex `b4b7s2t9y` GO. EA branch `kingformatty/NeMo@prompt_unitifed_architecture_hf_EA` (commit 2d8fcad82) cloned to `/home/khkramer/src/nemotron-ea-nemo` (6.3G, OUTSIDE repo) + dedicated `.venv-ea` (torch 2.12.0+cu130); omni NeMo/venv untouched. `restore_from` instantiated `EncDecRNNTBPEModelWithPrompt` (aux_ctc present but RNNT-only, has_ctc_decoder=False). **Decisive gate PASSED:** EA streaming-infer script (`target_lang=en-US`, `att_context_size=[56,3]`, `strip_lang_tags=true`) on English fixture → "How do I drain and refill my hot tub?" WER 0.0, no tag leak → **prompt IS applied in cache-aware streaming**. Prompt API = MODEL-GLOBAL (`set_inference_prompt`→`_inference_prompt_index`, read in `conformer_stream_step`) → Step 3 must set-under-lock per call. Lang tags = literal `<xx-XX>` (regex `\s*<[a-z]{2}-[A-Z]{2}>`). rc3 runs (exact); rc0 also runs (no rel-pos crash, WER 11.11 missing "?"). |
 | 2 | server.py dual-runtime-clean + model-aware config (rc0/rc3) | pending | — | hidden per-model state: FFT-plan ring, drop_extra, warmup, padding |
 | 2b | English byte-identity checkpoint | pending | — | omni venv, after server.py edits |
 | 3 | Prompt (scalar/per-call) + strip_lang_tags before delta | pending | — | concurrency-safe; no model-global lang state |
