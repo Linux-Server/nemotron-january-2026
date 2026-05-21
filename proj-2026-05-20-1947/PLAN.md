@@ -1,7 +1,7 @@
 # Plan: Multilingual checkpoint support — process-per-model + uniform client protocol
 
 Project directory: `./proj-2026-05-20-1947`
-Status: **IN /implement** (v3, process-per-model). Steps 1, 2, 2b, 3, 4 done; Step 5 next.
+Status: **IN /implement** (v3, process-per-model). Steps 1-5 done; Step 6 next (fix harness empty-final, then full-1000).
 
 ## Context
 The English `silence0_warm200` shipped (full-1000 semantic WER 1.95%, TTFB p95 247 ms @ conc-12;
@@ -147,7 +147,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
   Key files: `stt-benchmark/src/stt_benchmark/nemotron_local_stt.py`,
   `stt-benchmark/src/stt_benchmark/services.py`, `src/nemotron_speech/server.py`
 
-- [ ] **5. Transcription correctness (subset, no full-1000)**
+- [x] **5. Transcription correctness (subset, no full-1000)**
   ~20-50 English benchmark samples through the multilingual server (`language=en-US`,
   `silence0_warm200`, chosen rc); semantic-compare vs the English checkpoint. Spot-check one
   non-English fixture if obtainable. **GATE:** sensible transcripts (no garbage/looping/tag leakage);
@@ -180,6 +180,6 @@ apples-to-apples vs English — **with the English server byte-identical**.
 | 2b | English byte-identity checkpoint | done | (this commit) | satisfied by Step 2's English smoke: 2/2 byte-identical + FORK_ASSERT 2/2 under omni venv; guards provably skip multilingual code for English |
 | 3 | Prompt (scalar/per-call) + strip_lang_tags before delta | done | (this commit) | Codex `b288n84bb` + Claude review ACCEPT. server.py +39/-9. `ASRSession.target_lang` (defaults to server target_lang); `_apply_inference_prompt(session)` set-under-lock from SESSION lang at all 4 sites; fork copies scalar (FORK_ASSERT clean). `_strip_lang_tags`: complete-tag (`\s*<[a-z]{2}-[A-Z]{2}>`→space) + partial-trailing-fragment (`\s*<[a-z]{0,2}(?:-[A-Z]{0,2})?$`) + ws-collapse, BEFORE current_text/committed_text/delta, prompted-only. **English byte-identical + FORK_ASSERT 2/2** (target_lang field unused for English; prompt+strip guarded off). Multilingual rc3 → exact, no tag leak; multi-segment deltas clean; mixed-lang sanity en-US→0/es-ES→2/en-US→0. dual-venv py_compile OK. |
 | 4 | Uniform protocol: query-param handshake + endpoint routing + validation | done | (this commit) + nested 83f01ea | Codex `b9enxlgb7` + Claude review ACCEPT. MECHANISM: query-params (?language&model) read at connect, validated BEFORE _init_session (no message-flow change, backward-compat). server.py +106 (`_validate_connection_query`/`_validate_session_target_lang`/`_validate_model_query_param`/`_read_prompt_dictionary`); nested nemotron_local_stt.py (`_connect_url` appends param only when language set; raise on error-frame) + services.py (`resolve_nemotron_local_route` model_name→endpoint). **6 cases pass**: English+language→error; English no-param→ready; ML es-ES→idx2; ML zz-ZZ→error+supported-list; ML no-param→auto(101); ML en-US→exact no-leak. English byte-identical (server returns self.target_lang for English-no-param; client URL unchanged; factory english default). py_compile 3 files both venvs. |
-| 5 | Transcription correctness (subset) | pending | — | en-US sensible; optional 2nd-lang |
+| 5 | Transcription correctness (subset) | done | (this commit) | Codex `bn3vafyrb` + Claude review ACCEPT. loguru installed in .venv-ea (EA NeMo still imports). Harness `build_connect_url` + `--language`/`--model` (default-unset URL unchanged). 30-sample ML run (rc3, en-US): 29 ok / 1 timeout, **normalized WER 6.81%** (29 ok; 7.08% counting the empty), **0 tag leak**, 0 looping/garbage, TTFB p95 231 ms. vs English on same 30: English WER 2.89% (ML higher = expected for multilingual-on-English); char-ratio 0.975 / word-Jaccard 0.893. **FINDING: short clip 'Send it.' (ab216e4a) → empty final → 60s harness timeout** (server suppresses empty delta → no finalize sent; reproducible at conc-1, not concurrency). Fix harness empty-final handling in Step 6 before the full run. |
 | 6 | Full-1000 conc-12 + semantic WER (en-US) | pending | — | harness needs init handshake; rc3 latency caveat |
 | 7 | Consolidate docs + final English re-validation | pending | — | sign-off + caveats |

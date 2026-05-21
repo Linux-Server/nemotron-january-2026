@@ -38,6 +38,7 @@ import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import websockets
 
@@ -48,6 +49,31 @@ CHUNK_BYTES = int(SAMPLE_RATE * CHUNK_MS / 1000) * 2
 TRAILING_SILENCE_MS = 200
 DEFAULT_URL = "ws://127.0.0.1:8080"
 MAIN_DB = REPO_ROOT / "stt-benchmark" / "stt_benchmark_data" / "results.db"
+
+
+def build_connect_url(base_url: str, language: str | None = None, model: str | None = None) -> str:
+    if not language and not model:
+        return base_url
+
+    split = urlsplit(base_url)
+    query = [
+        item
+        for item in parse_qsl(split.query, keep_blank_values=True)
+        if item[0] not in {"language", "model"}
+    ]
+    if language:
+        query.append(("language", language))
+    if model:
+        query.append(("model", model))
+    return urlunsplit(
+        (
+            split.scheme,
+            split.netloc,
+            split.path,
+            urlencode(query),
+            split.fragment,
+        )
+    )
 
 
 def load_samples(db_path: Path) -> list[dict]:
@@ -194,13 +220,14 @@ async def main_async(args):
     samples = load_samples(MAIN_DB)
     if args.limit:
         samples = samples[: args.limit]
+    connect_url = build_connect_url(args.url, args.language, args.model)
     print(f"Running {len(samples)} samples at concurrency {args.concurrency} "
           f"(model_tag={args.model_tag})\n", flush=True)
 
     sem = asyncio.Semaphore(args.concurrency)
     progress = {"done": 0, "total": len(samples)}
     t_start = time.monotonic()
-    results = await asyncio.gather(*[bounded(sem, args.url, s, progress) for s in samples])
+    results = await asyncio.gather(*[bounded(sem, connect_url, s, progress) for s in samples])
     elapsed = time.monotonic() - t_start
 
     errs = [r for r in results if r["error"]]
@@ -230,7 +257,8 @@ async def main_async(args):
     out = REPO_ROOT / "proj-2026-05-19-eou-endpointing" / f"full1000_{args.model_tag}_results.json"
     out.write_text(json.dumps(
         {"config": {"model_tag": args.model_tag, "concurrency": args.concurrency,
-                    "n": len(samples), "elapsed_s": elapsed},
+                    "n": len(samples), "elapsed_s": elapsed, "language": args.language,
+                    "model": args.model},
          "results": results}, indent=2))
     print(f"Wrote {out}")
 
@@ -240,6 +268,8 @@ def main():
     ap.add_argument("--url", default=DEFAULT_URL)
     ap.add_argument("--service", default="nemotron_local")
     ap.add_argument("--model-tag", default="silence0_warm200_c12")
+    ap.add_argument("--language", default=None)
+    ap.add_argument("--model", default=None)
     ap.add_argument("--concurrency", type=int, default=12)
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
