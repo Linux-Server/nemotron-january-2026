@@ -1,0 +1,72 @@
+<task>
+Implement Step 9 of proj-2026-05-21-0410/PLAN.md: "Local validation — byte-exact + latency + knee
+(compile×batch matrix)" + the Round-4 ADDITIONS (same-machine flag-off baseline, TF32-off re-baseline, matmul
+perf cost, strict cross-talk gate + 1000-sample canary, high-N harness). This is the last LOCAL step before
+the (billable, separate) Modal re-sweep. Write results to `proj-2026-05-21-0410/local-validation.md`. You MAY
+commit a reusable high-N harness extension; otherwise measurement-only. No other commits.
+
+Do these in priority order (split/report if too big, but 1-3 are the decision-critical deliverables):
+
+1. HIGH-N HARNESS (committed, reusable): extend `proj-2026-05-19-eou-endpointing/concurrency_test.py` (or add a
+   committed sibling) to sweep N>24 by selecting up to max(sweep) DISTINCT DB samples (the committed one
+   hardcodes 24). Keep the existing behavior for N≤24 byte-identical. This is needed here AND for Step 10 Modal.
+
+2. TF32-OFF RE-BASELINE + MATMUL PERF COST (the pending decision):
+   - The committed baseline/english_baseline.json was captured under greedy + TF32-ON. The batched production
+     config is greedy_batch + TF32-OFF. Capture a single-stream English reference under the BATCHED config
+     (NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1, B=1 dispatch) on the 8 baseline clips →
+     `baseline/english_baseline_fp32.json`. Compare to the committed (TF32-on) baseline: report how many of 8
+     are text byte-identical and any diffs verbatim (expect ~identical; quantify any TF32/greedy_batch delta).
+   - Matmul perf cost: per-chunk step ms with TF32 ON vs OFF at B=1 (use NEMOTRON_PROFILE_CHUNK=1; same clip,
+     same warmup). Report the % slowdown — expected small (launch-bound), but MEASURE it.
+
+3. COMPILE×BATCH MATRIX knee (high-N, using the extended harness, sweep e.g. 16/24/40/48/60):
+   - {A: B=1 scheduler}, {B: batch-only}, {C: compile-only B=1, NEMOTRON_ENCODER_COMPILE=1}, {D: compile+batch
+     (compile serves B=1 dispatches, B>1 uncompiled)}. For each: keep-up knee + N=1 TTFS/interim/final
+     p50/p95/p99 (the latency rule: N=1 p95 <= baseline + BATCH_MAX_WAIT_MS + 10ms; final p95 <400ms) + batch
+     histogram. Confirm compile+batch coexist (B=1 dispatches compiled, B>1 uncompiled — check the compile
+     telemetry). Report the knee table + which config wins.
+
+4. 1000-SAMPLE BYTE-EXACT CANARY (the strong cross-talk gate at scale): stream the 1000-sample set through the
+   batched server (batching on) at concurrency that forms batches (e.g. the extended harness at moderate-high
+   N), and compare each stream's final text to its single-stream re-baseline (config-matched: greedy_batch +
+   TF32-off, B=1). Report N byte-identical / 1000 and any diffs (a token flip here = a real cross-talk or
+   numeric issue). If full 1000 is too slow, do a 200-sample canary and say so.
+
+GATE: byte-exact (vs the config-matched re-baseline) everywhere; knee strictly up vs the B=1 scheduler;
+latency within the rule; no OOM. CLEANUP: kill servers by PID; free 8080 + GPU; remove temp files/__pycache__;
+don't touch 8088.
+
+REPORT (`local-validation.md`): (1) harness extension; (2) TF32 re-baseline byte-diff vs committed + matmul
+perf cost %; (3) the compile×batch knee + latency table; (4) 1000(or 200)-sample byte-exact count; (5) the
+recommended production config (decoder/TF32/compile/batch defaults) + the local knee/$ story to carry into
+Modal; (6) cleanup.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 9 + Round-4 Rules: same-machine flag-off, TF32 re-baseline, cross-talk
+gate), highN-validation.md (the N=16→80 batching result + the /tmp harness approach to commit properly),
+baseline/english_baseline.json (the committed TF32-on greedy reference), and the server flags
+(NEMOTRON_SCHEDULER_B1 / NEMOTRON_BATCH_SCHED / NEMOTRON_ENCODER_COMPILE / NEMOTRON_PROFILE_CHUNK). en server:
+.venv-asr, $(cat /tmp/en-nemo-path), rc1, port 8080, NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0
+NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1. Batching forces TF32-off + greedy_batch; the B=1 scheduler is
+the proper batching-OFF baseline (not the old ~14 per-handler path). The 2.5× knee (16→40, 48 with 7a) is
+already established; this step nails the matrix + the re-baseline + perf + scale byte-exactness.
+</context>
+
+<verification_loop>
+Confirm each config came up correctly (startup_flags). The decision-critical numbers are #2 (does the batched
+config match the committed baseline + what's the TF32-off cost) and #4 (byte-exact at scale). If the 1000/200
+canary shows token flips, diagnose (cross-talk vs TF32 numeric) before reporting.
+</verification_loop>
+
+<action_safety>
+Measurement + an optional committed harness extension only. Capture re-baseline to a NEW file
+(english_baseline_fp32.json) — do NOT overwrite the committed baseline. No server.py edits. Kill servers; free
+GPU; don't touch 8088.
+</action_safety>
+
+<compact_output_contract>
+Report the 6 items: harness extension, TF32 re-baseline diff + perf cost %, compile×batch knee+latency table,
+scale byte-exact count, recommended production config + local knee story, cleanup.
+</compact_output_contract>
