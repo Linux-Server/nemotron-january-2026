@@ -1,0 +1,67 @@
+<task>
+MEASUREMENT + a small default-tuning recommendation: find the GPU's TRUE batched-parallelism ceiling and the
+OPTIMAL NEMOTRON_BATCH_MAX_SIZE for the local box. This answers "how big can our inference parallelism be and
+still keep up with realtime" + "what should MAX_SIZE be" (we previously only tested the conservative default
+MAX_SIZE=4, which CAPS capacity). Write results to `proj-2026-05-21-0410/max-parallelism-sweep.md`. Do NOT
+change the production default unilaterally — RECOMMEND it; the orchestrator will review/commit. The Step-8
+memory gate already cleared B<=16 (device_cap=46), so larger batches are memory-safe.
+
+PART A — FORCED-BATCH MICROBENCH (clean GPU ceiling, client-independent). Replicate the server's batched
+per-tick path (`_process_ready_batch`: batched preprocess [B,K] + conformer_stream_step(B) + scatter) at FORCED
+batch sizes B in {1,2,4,8,16,32} on the en model (.venv-asr, $(cat /tmp/en-nemo-path), rc1, greedy_batch,
+TF32-OFF, NEMOTRON_WARMUP_MS=200 geometry). Feed steady-state chunks continuously (>=200 steps/B, discard
+warmup), synced CUDA timing. Report per-B: full per-tick wall T(B) ms, and **realtime-stream-equivalents =
+160 * B / T(B)** (how many independent realtime streams the GPU could serve if every batch were full at B).
+Identify the B that maximizes stream-equivalents and where T(B) starts growing ~linearly (saturation). This is
+the theoretical ceiling, decoupled from dispatch + client.
+
+PART B — REALTIME MAX_SIZE x N SWEEP (achievable, full server). en server, batching on
+(NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1, TF32-off, greedy_batch), short fixed wait
+NEMOTRON_BATCH_MAX_WAIT_MS=8. Use the high-N harness (the Step-9 committed extension, or the prior temp
+multi-sample wrapper) — drive DISTINCT realtime streams. For NEMOTRON_BATCH_MAX_SIZE in {4, 8, 16} (add 32 only
+if 16 is still climbing), sweep N upward (e.g. 40/60/100/150) to find each config's realtime keep-up knee.
+Per (MAX_SIZE, N) report: keep-up yes/no (proc-lag/TTFS p95 < ~500ms; final p95 < 400ms), N=1 + low-N TTFS p95
+(latency budget!), avg effective batch size, per-batch model+preproc+scatter ms, and the batch histogram.
+
+CRITICAL — client-bound check (this is the trap at high N): one Python client driving 100-150 realtime streams
+ON THE SAME BOX as the server may itself saturate. Report client send-overrun p95/max + pacing violations per
+(config,N). If the client saturates, the server knee is >= that N but UNMEASURABLE this way — say so explicitly
+and lean on Part A (the microbench) for the true ceiling. (The N<=80 high-N run was NOT client-bound:
+send-overrun <5ms.)
+
+ANALYSIS / RECOMMENDATION (max-parallelism-sweep.md):
+- Part A table: B vs T(B) vs realtime-stream-equivalents; the ceiling B + stream-equiv.
+- Part B table: MAX_SIZE x N keep-up + knee per MAX_SIZE + N=1 latency + avg_B; client-bound flags.
+- The GAP: achievable realtime knee (Part B) vs theoretical ceiling (Part A) = dispatch efficiency.
+- RECOMMENDED NEMOTRON_BATCH_MAX_SIZE (+ MAX_WAIT) for the local box = the value that maximizes the realtime
+  knee while keeping N=1 latency within the <400ms budget; note whether to raise the default from 4, and what
+  N to push the Modal sweep (Step 10) to.
+CLEANUP: kill servers/microbench by PID; free 8080 + GPU; remove temp files/__pycache__; don't touch 8088.
+No commits.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 7/8/9 + Round-4 dispatch C-S2 + latency rule), highN-validation.md (the
+prior N<=80 sweep at MAX_SIZE=4/8 — the knee was 40-48, capped by MAX_SIZE=4; config C conflated MAX_SIZE=8 with
+MAX_WAIT=20ms which hurt the knee — so use a SHORT wait here to isolate MAX_SIZE), and the server batched path
+(`_process_ready_batch`, `_prepare_scheduler_batch_row`, `_preprocess_scheduler_fixed_audio_batch`, the
+batch_max_size/wait flags). Memory: B<=16 safe (device_cap=46). Single-stream T(1)~9-10ms locally;
+realtime-stream-equiv at B=1 should land near the measured B=1 scheduler knee (~16) as a sanity check.
+</context>
+
+<verification_loop>
+Sanity-check Part A: B=1 stream-equiv (160/T(1)) should be ~16-17, matching the measured B=1 scheduler knee.
+If Part B shows the realtime knee rising with MAX_SIZE (4->8->16), report how far it goes and whether it's
+client-bound at the top. If client-bound, the microbench (Part A) is the authoritative ceiling.
+</verification_loop>
+
+<action_safety>
+Measurement only (a microbench script + reusing the server/harness). No production-default code change — only
+RECOMMEND in the .md. Kill everything you start; free the GPU; don't touch 8088. No commits.
+</action_safety>
+
+<compact_output_contract>
+Report: (A) forced-batch B vs T(B) vs realtime-stream-equiv + ceiling B; (B) MAX_SIZE x N knee table + N=1
+latency + avg_B + client-bound flags; the achievable-vs-ceiling gap; the RECOMMENDED MAX_SIZE/MAX_WAIT for
+local + the N to push Modal to; cleanup.
+</compact_output_contract>

@@ -548,8 +548,12 @@ class ASRServer:
         self.scheduler_queue_maxsize = _env_int("NEMOTRON_SCHEDULER_QUEUE_MAXSIZE", 256)
         if self.scheduler_queue_maxsize <= 0:
             raise ValueError("NEMOTRON_SCHEDULER_QUEUE_MAXSIZE must be > 0")
-        self.batch_max_wait_ms = _env_int("NEMOTRON_BATCH_MAX_WAIT_MS", 5)
-        self.batch_max_size = _env_int("NEMOTRON_BATCH_MAX_SIZE", 4)
+        # Defaults from the max-parallelism sweep (proj-2026-05-21-0410/max-parallelism-sweep.md):
+        # MAX_SIZE=32 + MAX_WAIT=8ms raised the local realtime knee 40->56 with N=1 latency unchanged
+        # (~17ms p95). The Step-8 device-aware startup cap clamps MAX_SIZE down on smaller GPUs, so 32 is
+        # safe as a ceiling. Only active when NEMOTRON_BATCH_SCHED=1 (batching is off by default).
+        self.batch_max_wait_ms = _env_int("NEMOTRON_BATCH_MAX_WAIT_MS", 8)
+        self.batch_max_size = _env_int("NEMOTRON_BATCH_MAX_SIZE", 32)
         if self.batch_max_wait_ms < 0:
             raise ValueError("NEMOTRON_BATCH_MAX_WAIT_MS must be >= 0")
         if self.batch_max_size <= 0:
