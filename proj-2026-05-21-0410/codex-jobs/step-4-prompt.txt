@@ -1,0 +1,87 @@
+<task>
+Implement Step 4 of proj-2026-05-21-0410/PLAN.md: "Phase 1 — encoder graph/compile in server.py"
+(flag NEMOTRON_ENCODER_COMPILE, B=1 only, default OFF). Probe A is GO (torch.compile(reduce-overhead) on
+encoder.cache_aware_stream_step → 1.54× faster, transcript byte-identical, Δ=2e-6 tensors). Edit ONLY
+src/nemotron_speech/server.py. No git commits (the orchestrator commits after review).
+
+GOAL: behind NEMOTRON_ENCODER_COMPILE=1, run the conformer encoder via torch.compile for the STATIC B=1
+shapes only, raising the single-stream speed, while keeping per-stream TRANSCRIPTS byte-identical to the
+committed baseline. Default off = today's EXACT behavior (unchanged).
+
+ROUND-4 (C5) — the as-run Probe A compiled ONE shape (drop_extra=0, one random input). The live server has
+≥4 distinct B=1 encoder shapes; you MUST handle them correctly:
+  - warmup chunk: T = warmup_frames (server.py ~1017-1040)
+  - first chunk:  T = shift_frames, drop_extra_pre_encoded=0 (server.py ~2476-2479)
+  - steady chunk: T = pre_encode_cache_size + shift_frames, drop_extra = self.drop_extra (~2480-2485)
+  - final/fork chunk: VARIABLE length, keep_all_outputs=True (_process_final_chunk ~2686-2775)
+
+REQUIREMENTS:
+1) EXACT invocation. `_process_chunk` (~2501) calls `self.model.conformer_stream_step(...)`, which INTERNALLY
+   calls `self.encoder.cache_aware_stream_step(...)` then the RNNT decode (NeMo mixins.py:592). Compiling must
+   actually route the encoder through the compiled callable. Choose the least-invasive CORRECT approach:
+     (a) hold a compiled handle = torch.compile(self.model.encoder.cache_aware_stream_step,
+         mode="reduce-overhead"), and split the conformer_stream_step call in _process_chunk into
+         {encoder.cache_aware_stream_step (compiled for static buckets / original otherwise)} +
+         {the existing RNNT decode}, replicating conformer_stream_step EXACTLY (read mixins.py:592 — match
+         return_transcription, previous_hypotheses/previous_pred_out threading, keep_all_outputs); OR
+     (b) swap self.model.encoder.cache_aware_stream_step to the compiled callable ONLY around the static-bucket
+         calls and restore the original around the final/fork call.
+   Either way: the final/fork chunk (variable length, keep_all_outputs=True) MUST use the UNcompiled encoder.
+2) Warm/capture in `_warmup`: when the flag is on, trigger each STATIC B=1 bucket (warmup, first, steady) once
+   so the compile/CUDA-graph capture cost is paid off the hot path. Do NOT capture the variable final shape.
+3) `try/finally` restore `self.model.encoder.streaming_cfg.drop_extra_pre_encoded` around EVERY model call
+   (NeMo restores it without finally — an exception poisons the next call). Apply to the existing path too.
+4) Telemetry: log a one-time "encoder_compile_enabled=…" at startup and a recompile/recapture counter (warn if
+   it recaptures after warmup — that erases the benefit).
+5) Do NOT change the multilingual prompted path's behavior with the flag OFF. With the flag ON, the en path is
+   what we validate here; ml uses different shapes (320ms shift) and is out of scope for this step's gate —
+   keep it conservative (don't crash ml if the flag is on, but don't claim ml byte-safety).
+
+GATE (hard — run all; this is byte-exact-gated work):
+  Start the EN server (omni venv) from /home/khkramer/src/nemotron-january-2026:
+    NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1 \
+    [NEMOTRON_ENCODER_COMPILE=1] /home/khkramer/src/nemotron-nano-omni/.venv/bin/python \
+      src/nemotron_speech/server.py --model $(cat /tmp/en-nemo-path) --host 127.0.0.1 --port 8080 --right-context 1
+  Use a COPY of baseline_capture.py (or pass an output path) so you do NOT overwrite the committed
+  baseline/english_baseline.json. Capture the same 8 clips with the flag OFF then ON; compare each clip's
+  interim sequence + final + final_delta against baseline/english_baseline.json by EXACT Python == (no
+  normalization).
+  (G1) flag OFF → 8/8 transcripts byte-identical to the committed baseline (proves the plumbing didn't regress).
+  (G2) flag ON  → 8/8 transcripts byte-identical to the committed baseline. The compiled encoder yields ~2e-6
+       tensor diffs; the GATE is TRANSCRIPT byte-equality. If ANY clip diverges (a token flips, or cache drift
+       over the stream changes output), that is a NO-GO — REPORT the exact diff per clip; do NOT relax the gate.
+  (G3) flag ON is FASTER: measure per-chunk step ms (or single-stream proc-lag) flag-off vs flag-on; expect a
+       meaningful speedup (Probe A: encoder 7.9→5.1ms). Report the numbers.
+  (G4) No recapture after warmup (quote the counter); reserved-mem growth < ~10% (or <80% device). FORK_ASSERT
+       clean during both runs (grep the server log).
+  CLEANUP: kill the server by PID (never pkill -f); free port 8080; report GPU free; remove temp capture JSONs
+  + any __pycache__. Leave baseline/english_baseline.json and port 8088 untouched.
+
+If G2 fails (not byte-identical), Step 4 is NO-GO: report which clips/tokens diverged and STOP (do not ship a
+non-byte-exact compile); the batching lever (Steps 5+) does not depend on Step 4.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Context, the "Compile × batch (static-shape) semantics" + "Round-4 review
+fixes" Rules, Current state, Step 4) and probe_encoder_compile.py (the GO probe). conformer_stream_step is at
+/home/khkramer/src/nemotron-nano-omni/NeMo/nemo/collections/asr/parts/mixins/mixins.py:592. The baseline is
+proj-2026-05-21-0410/baseline/english_baseline.json (8 clips, current B=1 greedy). use_cuda_graph_decoder
+stays False (Blackwell) — that is the DECODER; this step compiles the ENCODER only, which is independent.
+</context>
+
+<verification_loop>
+Run G1-G4. If G2 shows any divergence, print the per-clip diff and report NO-GO with the cause. Fix
+implementation bugs and re-run before reporting. Confirm the flag-off path is byte-identical FIRST (proves no
+regression) before trusting the flag-on comparison.
+</verification_loop>
+
+<action_safety>
+Edit ONLY src/nemotron_speech/server.py. No commits. Do not overwrite the committed baseline JSON. Kill the
+server when done; don't touch port 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: 1) invocation approach chosen + why; 2) files changed (server.py regions); 3) G1 flag-off byte-identity
+(8/8?); 4) G2 flag-on byte-identity (8/8 or per-clip diffs); 5) G3 speedup numbers; 6) G4 recapture/mem/FORK;
+7) cleanup; 8) GO / NO-GO verdict for Step 4.
+</compact_output_contract>

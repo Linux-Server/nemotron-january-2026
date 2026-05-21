@@ -2,6 +2,7 @@
 
 import asyncio
 import argparse
+import concurrent.futures
 import copy
 import contextlib
 import dataclasses
@@ -465,6 +466,25 @@ class ASRServer:
         self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
         self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
         self.eou_probe_enabled = os.environ.get("NEMOTRON_EOU_PROBE", "") == "1"
+        # Per-chunk profiling (additive, flag-gated): time preprocess vs conformer_stream_step
+        # to locate the single-thread bottleneck. Adds cuda.synchronize() so it perturbs
+        # timing slightly — only enabled under NEMOTRON_PROFILE_CHUNK=1.
+        self.profile_chunk = os.environ.get("NEMOTRON_PROFILE_CHUNK", "") == "1"
+        self._prof_n = 0
+        self._prof_pre_ms = 0.0
+        self._prof_step_ms = 0.0
+        self._prof_enc_ms = 0.0
+        self.encoder_compile_requested = os.environ.get("NEMOTRON_ENCODER_COMPILE", "") == "1"
+        self.encoder_compile_enabled = False
+        self._encoder_compile_startup_logged = False
+        self._encoder_compiled_cache_aware_stream_step: Any = None
+        self._encoder_compile_warmup_done = False
+        self._encoder_compile_warmed_buckets: set[tuple[int, int]] = set()
+        self._encoder_compile_calls = 0
+        self._encoder_compile_recapture_events = 0
+        self._encoder_compile_last_graph_count = 0
+        self._encoder_compile_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._encoder_compile_thread_id: Optional[int] = None
         self.eou_probe_tag = _telemetry_run_tag() or "eou_probe"
         self.eou_probe_path = (
             _telemetry_dir() / f"{_safe_tag_filename(self.eou_probe_tag)}.eou_probe.jsonl"
@@ -905,9 +925,305 @@ class ASRServer:
         logger.info(f"Final chunk padding: {padding_ms:.0f}ms ({self.final_padding_frames} frames)")
         logger.info(f"Audio overlap for resets: {overlap_ms:.0f}ms ({self.overlap_samples} samples)")
 
+        self._configure_encoder_compile()
+
         # Warmup inference to ensure model is fully loaded on GPU
         # This prevents GPU memory issues when LLM starts later
         self._warmup()
+
+    def _configure_encoder_compile(self) -> None:
+        """Configure optional B=1 static-shape encoder compilation."""
+        if self._encoder_compile_startup_logged:
+            return
+
+        if not self.encoder_compile_requested:
+            logger.info("encoder_compile_enabled=False requested=False")
+            self._encoder_compile_startup_logged = True
+            return
+
+        if self.prompted_model:
+            logger.warning(
+                "encoder_compile_enabled=False requested=True "
+                "reason=prompted_model_static_shapes_unvalidated"
+            )
+            self._encoder_compile_startup_logged = True
+            return
+
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("NEMOTRON_ENCODER_COMPILE=1 requires torch.compile")
+
+        self._encoder_compiled_cache_aware_stream_step = torch.compile(
+            self.model.encoder.cache_aware_stream_step,
+            mode="reduce-overhead",
+        )
+        self._encoder_compile_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="nemotron-encoder-compile",
+        )
+        self.encoder_compile_enabled = True
+        self._encoder_compile_last_graph_count = self._encoder_compile_counter_snapshot()
+        logger.info(
+            "encoder_compile_enabled=True requested=True mode=reduce-overhead "
+            "scope=B1_static_buckets warmup=enabled first=enabled steady=enabled "
+            "final_uncompiled=True"
+        )
+        self._encoder_compile_startup_logged = True
+
+    def _session_warmup_frames(self) -> Optional[int]:
+        if self.session_warmup_ms <= 0:
+            return None
+        target_samples = int(round(self.sample_rate * self.session_warmup_ms / 1000))
+        return max(
+            self.pre_encode_cache_size,
+            int(round(target_samples / self.hop_samples)),
+        )
+
+    @staticmethod
+    def _encoder_compile_counter_snapshot() -> int:
+        try:
+            from torch._dynamo.utils import counters
+        except Exception:
+            return 0
+        try:
+            return int(counters.get("stats", {}).get("unique_graphs", 0))
+        except Exception:
+            return 0
+
+    def _encoder_compile_bucket_for_call(self, kwargs: dict[str, Any]) -> Optional[tuple[int, int]]:
+        if not self.encoder_compile_enabled:
+            return None
+        if kwargs.get("keep_all_outputs", True):
+            return None
+        if kwargs.get("bypass_pre_encode", False):
+            return None
+
+        processed_signal = kwargs.get("processed_signal")
+        if not torch.is_tensor(processed_signal) or processed_signal.ndim != 3:
+            return None
+        if int(processed_signal.shape[0]) != 1:
+            return None
+
+        try:
+            chunk_frames = int(processed_signal.shape[-1])
+            drop_extra = int(kwargs.get("drop_extra_pre_encoded"))
+        except Exception:
+            return None
+
+        static_buckets: set[tuple[int, int]] = {
+            (int(self.shift_frames), 0),
+            (int(self.pre_encode_cache_size + self.shift_frames), int(self.drop_extra)),
+        }
+        warmup_frames = self._session_warmup_frames()
+        if warmup_frames is not None:
+            static_buckets.add((int(warmup_frames), 0))
+
+        bucket = (chunk_frames, drop_extra)
+        if bucket in static_buckets:
+            return bucket
+        return None
+
+    @contextlib.contextmanager
+    def _compiled_encoder_cache_step_installed(self):
+        encoder = self.model.encoder
+        attr_name = "cache_aware_stream_step"
+        had_instance_attr = attr_name in vars(encoder)
+        original_instance_attr = vars(encoder).get(attr_name)
+        object.__setattr__(
+            encoder,
+            attr_name,
+            self._encoder_compiled_cache_aware_stream_step,
+        )
+        try:
+            yield
+        finally:
+            if had_instance_attr:
+                object.__setattr__(encoder, attr_name, original_instance_attr)
+            else:
+                object.__delattr__(encoder, attr_name)
+
+    def _conformer_stream_step(self, **kwargs):
+        """Call NeMo's stream step with drop-extra restoration and optional compiled encoder."""
+        streaming_cfg = self.model.encoder.streaming_cfg
+        original_drop_extra = streaming_cfg.drop_extra_pre_encoded
+        bucket = self._encoder_compile_bucket_for_call(kwargs)
+        saw_unwarmed_bucket = False
+
+        try:
+            if bucket is None:
+                return self.model.conformer_stream_step(**kwargs)
+
+            self._encoder_compile_calls += 1
+            if (
+                self._encoder_compile_thread_id is not None
+                and threading.get_ident() != self._encoder_compile_thread_id
+            ):
+                logger.warning(
+                    "encoder_compile_call_on_different_thread "
+                    f"warm_thread={self._encoder_compile_thread_id} "
+                    f"call_thread={threading.get_ident()}"
+                )
+            saw_unwarmed_bucket = (
+                self._encoder_compile_warmup_done
+                and bucket not in self._encoder_compile_warmed_buckets
+            )
+            if saw_unwarmed_bucket:
+                logger.warning(
+                    "encoder_compile_unwarmed_static_bucket_after_warmup "
+                    f"bucket_T={bucket[0]} drop_extra={bucket[1]}"
+                )
+
+            mark_step_begin = getattr(
+                getattr(torch, "compiler", None),
+                "cudagraph_mark_step_begin",
+                None,
+            )
+            if mark_step_begin is not None:
+                mark_step_begin()
+            with self._compiled_encoder_cache_step_installed():
+                result = self.model.conformer_stream_step(**kwargs)
+            result_list = list(result)
+            for result_index in (2, 3, 4):
+                if result_index < len(result_list) and torch.is_tensor(result_list[result_index]):
+                    result_list[result_index] = result_list[result_index].detach().clone()
+            return tuple(result_list)
+        finally:
+            streaming_cfg.drop_extra_pre_encoded = original_drop_extra
+
+            if bucket is not None:
+                graph_count = self._encoder_compile_counter_snapshot()
+                if self._encoder_compile_warmup_done:
+                    if graph_count > self._encoder_compile_last_graph_count:
+                        delta = graph_count - self._encoder_compile_last_graph_count
+                        self._encoder_compile_recapture_events += delta
+                        logger.warning(
+                            "encoder_compile_recapture_after_warmup "
+                            f"delta={delta} total={self._encoder_compile_recapture_events} "
+                            f"bucket_T={bucket[0]} drop_extra={bucket[1]}"
+                        )
+                    elif saw_unwarmed_bucket:
+                        self._encoder_compile_recapture_events += 1
+                        logger.warning(
+                            "encoder_compile_recapture_after_warmup "
+                            f"delta=unknown total={self._encoder_compile_recapture_events} "
+                            f"bucket_T={bucket[0]} drop_extra={bucket[1]}"
+                        )
+                self._encoder_compile_last_graph_count = max(
+                    self._encoder_compile_last_graph_count,
+                    graph_count,
+                )
+                if self._encoder_compile_calls % 50 == 0:
+                    logger.info(
+                        "encoder_compile_status "
+                        f"compiled_calls={self._encoder_compile_calls} "
+                        f"recapture_counter={self._encoder_compile_recapture_events} "
+                        f"warmed_buckets={sorted(self._encoder_compile_warmed_buckets)}"
+                    )
+
+    async def _run_inference_call(self, fn, *args):
+        executor = self._encoder_compile_executor if self.encoder_compile_enabled else None
+        return await asyncio.get_event_loop().run_in_executor(executor, fn, *args)
+
+    def _warm_encoder_compile_static_buckets(
+        self,
+        _base_mel: torch.Tensor,
+        on_compile_executor: bool = False,
+    ) -> None:
+        if not self.encoder_compile_enabled:
+            return
+        if self._encoder_compile_executor is not None and not on_compile_executor:
+            self._encoder_compile_executor.submit(
+                self._warm_encoder_compile_static_buckets,
+                _base_mel,
+                True,
+            ).result()
+            return
+
+        self._encoder_compile_thread_id = threading.get_ident()
+
+        warmup_frames = self._session_warmup_frames()
+        first_bucket = (int(self.shift_frames), 0)
+        steady_bucket = (
+            int(self.pre_encode_cache_size + self.shift_frames),
+            int(self.drop_extra),
+        )
+        warm_repeats = 2
+        profile_chunk = self.profile_chunk
+        self.profile_chunk = False
+        try:
+            for repeat in range(warm_repeats):
+                first_session = ASRSession(
+                    id=f"encoder_compile_first_{repeat}",
+                    websocket=None,
+                    target_lang=self.target_lang,
+                )
+                self._init_session_without_synthetic_warmup(first_session)
+                self._queue_silent_compile_chunk(first_session)
+                if self._process_chunk(first_session) is None:
+                    raise RuntimeError("encoder compile first-bucket warmup failed")
+
+                steady_session = ASRSession(
+                    id=f"encoder_compile_steady_{repeat}",
+                    websocket=None,
+                    target_lang=self.target_lang,
+                )
+                if warmup_frames is not None:
+                    self._init_session(steady_session)
+                else:
+                    self._init_session_without_synthetic_warmup(steady_session)
+                    self._queue_silent_compile_chunk(steady_session)
+                    if self._process_chunk(steady_session) is None:
+                        raise RuntimeError("encoder compile pre-steady warmup failed")
+                self._queue_silent_compile_chunk(steady_session)
+                if self._process_chunk(steady_session) is None:
+                    raise RuntimeError("encoder compile steady-bucket warmup failed")
+        finally:
+            self.profile_chunk = profile_chunk
+
+        warmed_labels = [
+            f"first:T={first_bucket[0]}:drop={first_bucket[1]}:repeats={warm_repeats}",
+            f"steady:T={steady_bucket[0]}:drop={steady_bucket[1]}:repeats={warm_repeats}",
+        ]
+        self._encoder_compile_warmed_buckets.add(first_bucket)
+        self._encoder_compile_warmed_buckets.add(steady_bucket)
+        if warmup_frames is not None:
+            warmup_bucket = (int(warmup_frames), 0)
+            self._encoder_compile_warmed_buckets.add(warmup_bucket)
+            warmed_labels.insert(
+                0,
+                f"warmup:T={warmup_bucket[0]}:drop={warmup_bucket[1]}:repeats={warm_repeats}",
+            )
+
+        self._encoder_compile_warmup_done = True
+        self._encoder_compile_last_graph_count = self._encoder_compile_counter_snapshot()
+        logger.info(
+            "encoder_compile_warmup_complete "
+            f"buckets={warmed_labels} "
+            f"unique_graphs={self._encoder_compile_last_graph_count} "
+            f"recapture_counter={self._encoder_compile_recapture_events}"
+        )
+
+    def _init_session_without_synthetic_warmup(self, session: ASRSession) -> None:
+        self._ensure_session_target_lang(session)
+        cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+        session.cache_last_channel = cache[0]
+        session.cache_last_time = cache[1]
+        session.cache_last_channel_len = cache[2]
+        session.pending_audio = np.array([], dtype=np.float32)
+        session.accumulated_audio = session.pending_audio
+        session.total_audio_samples = 0
+        session.raw_audio_ring = np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
+        session.mel_frame_ring = None
+        session.emitted_frames = 0
+        session.previous_hypotheses = None
+        session.pred_out_stream = None
+        session.current_text = ""
+        session.eou_probe_chunk_index = 0
+        session.synthetic_prefix_samples = 0
+
+    def _queue_silent_compile_chunk(self, session: ASRSession) -> None:
+        session.pending_audio = np.zeros(self.preprocess_new_audio_samples, dtype=np.float32)
+        session.accumulated_audio = session.pending_audio
+        session.total_audio_samples += len(session.pending_audio)
 
     def _warmup(self):
         """Run warmup inference using streaming API to claim GPU memory.
@@ -940,7 +1256,7 @@ class ASRServer:
             # Run streaming step (processes entire mel as one chunk)
             if self.prompted_model:
                 self._apply_inference_prompt(warmup_session)
-            _ = self.model.conformer_stream_step(
+            _ = self._conformer_stream_step(
                 processed_signal=mel,
                 processed_signal_length=mel_len,
                 cache_last_channel=cache[0],
@@ -952,6 +1268,7 @@ class ASRServer:
                 drop_extra_pre_encoded=0,
                 return_transcription=True,
             )
+            self._warm_encoder_compile_static_buckets(mel)
 
         elapsed = (time.perf_counter() - start) * 1000
         logger.info(f"Warmup complete in {elapsed:.0f}ms - GPU memory claimed")
@@ -1008,11 +1325,9 @@ class ASRServer:
 
     def _run_session_warmup(self, session: ASRSession) -> None:
         """Prime one fresh session with synthetic silence without seeding text."""
-        target_samples = int(round(self.sample_rate * self.session_warmup_ms / 1000))
-        warmup_frames = max(
-            self.pre_encode_cache_size,
-            int(round(target_samples / self.hop_samples)),
-        )
+        warmup_frames = self._session_warmup_frames()
+        if warmup_frames is None:
+            return
         warmup_samples = warmup_frames * self.hop_samples
         preprocess_samples = warmup_samples + self.hop_samples
 
@@ -1040,7 +1355,7 @@ class ASRServer:
                 session.cache_last_time,
                 session.cache_last_channel_len,
                 session.previous_hypotheses,
-            ) = self.model.conformer_stream_step(
+            ) = self._conformer_stream_step(
                 processed_signal=warmup_mel,
                 processed_signal_length=chunk_len,
                 cache_last_channel=session.cache_last_channel,
@@ -1556,9 +1871,7 @@ class ASRServer:
 
         try:
             async with self.inference_lock:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self._init_session, session
-                )
+                await self._run_inference_call(self._init_session, session)
 
             if self.continuous_context:
                 self._start_continuous_session(session)
@@ -2246,9 +2559,7 @@ class ASRServer:
                     timing["inference_lock_acquire_wait_ms"] = (
                         time.perf_counter() - lock_wait_start
                     ) * 1000
-                    text = await asyncio.get_event_loop().run_in_executor(
-                        None, self._process_final_chunk, fork
-                    )
+                    text = await self._run_inference_call(self._process_final_chunk, fork)
                     if text is not None:
                         final_text = text
             if parent_snapshot is not None:
@@ -2353,9 +2664,7 @@ class ASRServer:
         session.continuous_stop_seq += 1
         if self.session_warmup_ms > 0:
             async with self.inference_lock:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self._init_session, session
-                )
+                await self._run_inference_call(self._init_session, session)
         else:
             self._init_session(session)
         session.continuous_state = STREAMING
@@ -2405,9 +2714,7 @@ class ASRServer:
 
         while self._session_timeline_samples(session) >= min_audio_for_chunk:
             async with self.inference_lock:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, self._process_chunk, session
-                )
+                text = await self._run_inference_call(self._process_chunk, session)
 
             if text is not None and text != session.current_text:
                 session.current_text = text
@@ -2446,7 +2753,13 @@ class ASRServer:
             )
 
             with torch.inference_mode():
+                if self.profile_chunk:
+                    torch.cuda.synchronize()
+                    _prof_t0 = time.perf_counter()
                 mel, mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+                if self.profile_chunk:
+                    torch.cuda.synchronize()
+                    self._prof_pre_ms += (time.perf_counter() - _prof_t0) * 1000.0
 
                 if DEBUG_ASR:
                     mel_hash = hashlib.md5(mel.cpu().numpy().tobytes()).hexdigest()[:8]
@@ -2474,6 +2787,9 @@ class ASRServer:
                 # Run streaming inference
                 if self.prompted_model:
                     self._apply_inference_prompt(session)
+                if self.profile_chunk:
+                    torch.cuda.synchronize()
+                    _prof_t1 = time.perf_counter()
                 (
                     session.pred_out_stream,
                     transcribed_texts,
@@ -2481,7 +2797,7 @@ class ASRServer:
                     session.cache_last_time,
                     session.cache_last_channel_len,
                     session.previous_hypotheses,
-                ) = self.model.conformer_stream_step(
+                ) = self._conformer_stream_step(
                     processed_signal=chunk_mel,
                     processed_signal_length=chunk_len,
                     cache_last_channel=session.cache_last_channel,
@@ -2493,6 +2809,18 @@ class ASRServer:
                     drop_extra_pre_encoded=drop_extra,
                     return_transcription=True,
                 )
+                if self.profile_chunk:
+                    torch.cuda.synchronize()
+                    self._prof_step_ms += (time.perf_counter() - _prof_t1) * 1000.0
+                    self._prof_n += 1
+                    if self._prof_n % 25 == 0:
+                        n = self._prof_n
+                        logger.info(
+                            f"[PROFILE] chunks={n} "
+                            f"preprocess={self._prof_pre_ms / n:.2f}ms/chunk "
+                            f"step(enc+dec)={self._prof_step_ms / n:.2f}ms/chunk "
+                            f"total={(self._prof_pre_ms + self._prof_step_ms) / n:.2f}ms/chunk"
+                        )
 
                 # Update emitted frame count
                 consumed_audio = session.pending_audio[: self.shift_frames * self.hop_samples]
@@ -2592,9 +2920,7 @@ class ASRServer:
         if session.pending_audio is not None and len(session.pending_audio) > 0:
             start_time = time.perf_counter()
             async with self.inference_lock:
-                text = await asyncio.get_event_loop().run_in_executor(
-                    None, self._process_final_chunk, session
-                )
+                text = await self._run_inference_call(self._process_final_chunk, session)
                 if text is not None:
                     final_text = text
                     session.current_text = text  # Update current_text for next soft reset
@@ -2644,9 +2970,7 @@ class ASRServer:
         session.overlap_buffer = None
         if self.session_warmup_ms > 0:
             async with self.inference_lock:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self._init_session, session
-                )
+                await self._run_inference_call(self._init_session, session)
         else:
             self._init_session(session)
 
@@ -2732,7 +3056,7 @@ class ASRServer:
                     session.cache_last_time,
                     session.cache_last_channel_len,
                     session.previous_hypotheses,
-                ) = self.model.conformer_stream_step(
+                ) = self._conformer_stream_step(
                     processed_signal=chunk_mel,
                     processed_signal_length=chunk_len,
                     cache_last_channel=session.cache_last_channel,
