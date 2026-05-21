@@ -100,6 +100,7 @@ async def run_session(url: str, audio: dict) -> dict:
         "ttfb_seconds": None,       # final - real-speech-end (benchmark-comparable)
         "server_ttfs_ms": None,     # final - vad_stop (server-side finalize latency)
         "error": None,
+        "timed_out": False,         # no finalize within timeout (likely empty/suppressed)
     }
     try:
         pcm = load_pcm(audio["audio_path"])
@@ -171,9 +172,17 @@ async def run_session(url: str, audio: dict) -> dict:
             await ws.send(json.dumps({"type": "reset", "finalize": True}))
 
             try:
-                await asyncio.wait_for(final_event.wait(), timeout=60.0)
+                await asyncio.wait_for(final_event.wait(), timeout=20.0)
             except asyncio.TimeoutError:
-                res["error"] = "timeout"
+                # The server suppresses empty/duplicate finalize deltas
+                # (the append-only emission contract), so a clip the model
+                # transcribes as empty produces NO finalize message and the
+                # wait times out. Record an empty transcript (the WER judge
+                # scores it as deletions) rather than a hard error — and use a
+                # tighter 20s bound (a real finalize arrives in ~1-2s even
+                # under concurrency-12) so empties don't cost 60s each on the
+                # full run. Flag it for visibility.
+                res["timed_out"] = True
 
             recv_task.cancel()
             try:
@@ -235,7 +244,9 @@ async def main_async(args):
     ttfbs = [r["ttfb_seconds"] * 1000 for r in ok if r["ttfb_seconds"] is not None]
     stts = [r["server_ttfs_ms"] for r in ok if r["server_ttfs_ms"] is not None]
 
-    print(f"\nCompleted in {elapsed:.0f}s. ok={len(ok)} errors={len(errs)}")
+    timed_out = [r for r in results if r.get("timed_out")]
+    print(f"\nCompleted in {elapsed:.0f}s. ok={len(ok)} errors={len(errs)} "
+          f"timed_out/empty={len(timed_out)}")
     if errs:
         for r in errs[:10]:
             print(f"  ERROR [{r['sample_id'][:8]}]: {r['error']}")
