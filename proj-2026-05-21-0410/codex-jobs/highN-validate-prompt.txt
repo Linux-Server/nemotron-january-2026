@@ -1,0 +1,61 @@
+<task>
+MEASUREMENT ONLY (no code edits, no commits): a local high-N knee sweep to validate whether the Step-7
+continuous batching actually extends the realtime keep-up knee, and quantify it. This pulls Step 9's local
+knee measurement forward for the batching-engagement question (Step-7 gate only reached N=24, mostly B=1).
+Write findings to `proj-2026-05-21-0410/highN-validation.md`. Edit nothing else.
+
+CONTEXT: NEMOTRON_BATCH_SCHED batches the encoder + greedy_batch decode, but realtime streams produce a ready
+chunk only ~every 160ms, so within the 5ms coalesce window only ~N/32 stream chunks are simultaneously ready
+→ batches are mostly B=1 until N is large. We need to know: at high N, do batches form, does keep-up extend
+past the B=1 scheduler, and what's the tradeoff with a longer MAX_WAIT.
+
+SETUP: en server, `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`, model `$(cat /tmp/en-nemo-path)`,
+`--right-context 1 --host 127.0.0.1 --port 8080`, env NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0
+NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1. Driver: `stt-benchmark/.venv/bin/python
+proj-2026-05-19-eou-endpointing/concurrency_test.py --url ws://127.0.0.1:8080 --sweep 16 24 40 60 80`
+(use a distinct --output per config). Kill+restart the server between configs (by PID; never pkill -f).
+
+RUN THREE CONFIGS (same sweep each):
+  A) BASELINE scheduler B=1 (NO batching): NEMOTRON_SCHEDULER_B1=1
+  B) BATCHING default: NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1   (greedy_batch, TF32-off, MAX_WAIT=5, MAX_SIZE=4)
+  C) BATCHING longer-wait: + NEMOTRON_BATCH_MAX_WAIT_MS=20 NEMOTRON_BATCH_MAX_SIZE=8
+For each config × each N record from the concurrency_test output: keep-up (does it stay realtime — proc-lag /
+TTFS p95 within bound, or does it blow up), and the per-N **effective batch-size histogram** + queue-wait from
+the server log (grep `scheduler_batch_telemetry` / `effective_batch_hist` / `model_lane_wait`). Note the knee
+(largest N that keeps up) for each config.
+
+CRITICAL CAVEAT to report: client+server share this one box, and one Python client driving 80 realtime
+streams may itself bottleneck (the harness measures client send-overrun / pacing). If the client saturates,
+the knee is CLIENT-bound, not server-bound — flag it explicitly (report send-overrun / pacing-violation
+indicators per N) so we don't misread a client limit as the server knee.
+
+REPORT (`highN-validation.md`): a table N × {A keep-up, B keep-up + batch-hist, C keep-up + batch-hist}; the
+knee for each config; the N at which batches reach B≥3 (B and C); the batching delta (does B/C extend the knee
+vs A, and by how much); client-bound flags; and a verdict: DOES batching extend the local knee at high N, and
+what N / MAX_WAIT is needed to engage it. CLEANUP: kill servers by PID, free port 8080 + GPU, remove temp
+outputs/__pycache__. Don't touch port 8088.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 7 progress note has the N=24 finding + histogram), and
+proj-2026-05-19-eou-endpointing/concurrency_test.py (the harness: --sweep, jitter, the keep-up/proc-lag
+metrics, send-overrun). Server logs `scheduler_batch_telemetry effective_batch_hist=...`. The ~14 figure is
+the OLD per-handler path; config A (B=1 scheduler) is the proper batching-OFF baseline to compare against.
+</context>
+
+<verification_loop>
+Confirm each server actually came up in the right mode (grep startup_flags: scheduler_enabled / batch_enabled /
+decoder_strategy / tf32). For config A vs B/C, the ONLY difference should be batching. If keep-up doesn't
+improve with batching, check whether batches actually formed (histogram) and whether the client was the
+bottleneck (send-overrun) before concluding.
+</verification_loop>
+
+<action_safety>
+Measurement only — no code edits, no commits (just write highN-validation.md). Kill servers when done; free
+the GPU; don't touch port 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: the N×config keep-up/batch-hist table, per-config knee, B≥3 onset N, batching delta vs baseline,
+client-bound flags, and the verdict (does batching extend the local knee at high N + what's needed to engage).
+</compact_output_contract>
