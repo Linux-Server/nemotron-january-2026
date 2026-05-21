@@ -276,8 +276,16 @@ Smart Turn) — or where the segmentation cost of an occasional early finalize i
 clone; <code>FORK_ASSERT</code>-verified) means a false-early fire is recoverable: emit the
 finalize now, keep processing the retained context, continue on the next utterance. The 150&nbsp;ms
 remains the right setting only when the trigger itself is unreliable (Silero pause vs end-of-turn
-ambiguity) and the safety window is doing real cancellation work. (A full-1000 measured
-<code>silence0_warm200</code> run is the ship-gate confirmation of this 100-sample result.)</p>
+ambiguity) and the safety window is doing real cancellation work.</p>
+<p class="floor"><b>Ship-gate confirmation (full 1000, measured 2026-05-20).</b> A full-1000 run of
+<code>silence0_warm200</code> at concurrency&nbsp;12, scored by the Claude semantic-WER judge:
+<span class="m">pooled semantic WER 1.95%</span> vs warm200's 2.07% / fork's 2.08% — <b>non-inferior</b>
+(the ~0.1&nbsp;pp delta is within judge + sampling noise; the baselines were scored in a separate
+judge run, so this is not a paired comparison). <span class="m">TTFB p95 247&nbsp;ms</span> under
+12-way concurrency vs warm200's 366&nbsp;ms single-session — a <b>~119&nbsp;ms reduction</b>. Both
+ship-gate criteria met: WER non-inferior to <code>warm200</code> AND latency well inside the
+400&nbsp;ms budget. <b><code>silence0_warm200</code> is the recommended production configuration</b>
+for a definitive-trigger use case, superseding bare <code>warm200</code>.</p>
 
 <h2>9. Concurrency / capacity (2026-05-20, measured — R4 caveat closed)</h2>
 <p>The server does <b>no request batching</b> — every <code>conformer_stream_step</code> is
