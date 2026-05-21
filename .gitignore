@@ -75,5 +75,10 @@ tests/fixtures/sample.flac
 .DS_Store
 Thumbs.db
 
+# Large data / cache / vendored dirs (intentionally untracked, kept locally)
+.cache/
+eou-collect/
+pipecat-core-code/
+
 # GGUF files (large model format)
 *.gguf
