@@ -353,6 +353,10 @@ RIGHT_CONTEXT_OPTIONS = {
     13: "~1.12s highest accuracy",
 }
 
+PROMPTED_FALLBACK_ATT_CONTEXT_SIZES = [[56, 0], [56, 3], [56, 6], [56, 13]]
+PROMPTED_DEFAULT_RIGHT_CONTEXT = 3
+LANG_TAG_RE = re.compile(r"\s*<[a-z]{2}-[A-Z]{2}>")
+
 
 @dataclass
 class ASRSession:
@@ -432,13 +436,15 @@ class ASRServer:
         model: str,
         host: str = "0.0.0.0",
         port: int = 8080,
-        right_context: int = 1,
+        right_context: Optional[int] = None,
     ):
         self.model_name_or_path = model
         self.host = host
         self.port = port
         self.right_context = right_context
         self.model = None
+        self.prompted_model = False
+        self.target_lang = os.environ.get("NEMOTRON_TARGET_LANG", "en-US").strip() or "en-US"
         self.sample_rate = 16000
         # ASR benchmark server REQUIRES CUDA — fail fast, never silently fall
         # back to CPU (a CPU/wrong-device run yields invalid benchmark numbers
@@ -505,9 +511,127 @@ class ASRServer:
         self.constant_preprocess_samples = None
         self.stream_preprocess_valid_samples = None
         self.first_preprocess_mel_frame = None
+        self.att_context_size = None
+        self.drop_extra = None
+        self.final_padding_frames = None
 
         # Audio overlap for mid-utterance reset continuity (calculated in load_model)
         self.overlap_samples = None
+
+    @staticmethod
+    def _to_plain(value: Any) -> Any:
+        if hasattr(value, "to_container"):
+            try:
+                return value.to_container(resolve=True)
+            except TypeError:
+                return value.to_container()
+        if isinstance(value, dict):
+            return {key: ASRServer._to_plain(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [ASRServer._to_plain(item) for item in value]
+        return value
+
+    @staticmethod
+    def _cfg_get(container: Any, *keys: str) -> Any:
+        current = container
+        for key in keys:
+            if current is None:
+                return None
+            try:
+                if hasattr(current, "get"):
+                    current = current.get(key)
+                else:
+                    current = getattr(current, key)
+            except Exception:
+                return None
+        return current
+
+    @staticmethod
+    def _is_int_like(value: Any) -> bool:
+        if isinstance(value, (bool, np.bool_)):
+            return False
+        return isinstance(value, (int, np.integer))
+
+    @classmethod
+    def _normalize_att_context_sizes(cls, value: Any) -> list[list[int]]:
+        value = cls._to_plain(value)
+        if value is None:
+            return []
+        if isinstance(value, tuple):
+            value = list(value)
+        if not isinstance(value, list) or not value:
+            return []
+        if all(cls._is_int_like(item) for item in value):
+            return [[int(item) for item in value]]
+
+        sizes: list[list[int]] = []
+        for item in value:
+            normalized = cls._normalize_att_context_sizes(item)
+            sizes.extend(normalized)
+        return sizes
+
+    def _supported_att_context_sizes(self) -> list[list[int]]:
+        cfg_contexts = self._normalize_att_context_sizes(
+            self._cfg_get(getattr(self.model, "cfg", None), "encoder", "att_context_size")
+        )
+        if cfg_contexts:
+            return cfg_contexts
+
+        encoder_contexts = self._normalize_att_context_sizes(
+            getattr(getattr(self.model, "encoder", None), "att_context_size_all", None)
+        )
+        if encoder_contexts:
+            return encoder_contexts
+
+        if self.prompted_model:
+            return [context.copy() for context in PROMPTED_FALLBACK_ATT_CONTEXT_SIZES]
+        return [[70, right_context] for right_context in RIGHT_CONTEXT_OPTIONS]
+
+    def _select_att_context_size(self) -> list[int]:
+        if not self.prompted_model:
+            if self.right_context is None:
+                self.right_context = 1
+            if self.right_context not in RIGHT_CONTEXT_OPTIONS:
+                raise ValueError(
+                    "English model right context must be one of "
+                    f"{sorted(RIGHT_CONTEXT_OPTIONS)}, got {self.right_context}"
+                )
+            return [70, self.right_context]
+
+        supported_contexts = self._supported_att_context_sizes()
+        requested_right_context = (
+            PROMPTED_DEFAULT_RIGHT_CONTEXT
+            if self.right_context is None
+            else self.right_context
+        )
+        for context in supported_contexts:
+            if len(context) >= 2 and context[-1] == requested_right_context:
+                self.right_context = requested_right_context
+                return context.copy()
+
+        supported_right_contexts = sorted(
+            {context[-1] for context in supported_contexts if len(context) >= 2}
+        )
+        raise ValueError(
+            "Prompted model right context must be one of "
+            f"{supported_right_contexts}, got {requested_right_context}"
+        )
+
+    def _apply_inference_prompt(self) -> None:
+        if self.prompted_model:
+            self.model.set_inference_prompt(self.target_lang)
+
+    def _extract_hypothesis_text(self, hyp: Any) -> str:
+        if hasattr(hyp, 'text'):
+            text = hyp.text
+        elif isinstance(hyp, str):
+            text = hyp
+        else:
+            text = str(hyp)
+
+        if self.prompted_model:
+            text = LANG_TAG_RE.sub("", str(text)).strip()
+        return text
 
     def load_model(self):
         """Load the NeMo ASR model with streaming configuration."""
@@ -532,10 +656,19 @@ class ASRServer:
             )
         self.model = self.model.cuda()
         logger.info("ASR model loaded on CUDA")
+        self.prompted_model = hasattr(self.model, "set_inference_prompt")
 
         # Configure attention context for streaming
-        logger.info(f"Setting att_context_size=[70, {self.right_context}] ({RIGHT_CONTEXT_OPTIONS.get(self.right_context, 'custom')})")
-        self.model.encoder.set_default_att_context_size([70, self.right_context])
+        self.att_context_size = self._select_att_context_size()
+        if self.prompted_model:
+            logger.info(
+                "Prompted model detected; setting "
+                f"att_context_size={self.att_context_size} "
+                f"(NEMOTRON_TARGET_LANG={self.target_lang!r})"
+            )
+        else:
+            logger.info(f"Setting att_context_size=[70, {self.right_context}] ({RIGHT_CONTEXT_OPTIONS.get(self.right_context, 'custom')})")
+        self.model.encoder.set_default_att_context_size(self.att_context_size)
 
         # Decoding strategy: greedy (default, Blackwell-safe) or beam via
         # NEMOTRON_DECODING=beam (experimental; may be slower / unsupported on
@@ -688,6 +821,8 @@ class ASRServer:
             cache = self.model.encoder.get_initial_cache_state(batch_size=1)
 
             # Run streaming step (processes entire mel as one chunk)
+            if self.prompted_model:
+                self._apply_inference_prompt()
             _ = self.model.conformer_stream_step(
                 processed_signal=mel,
                 processed_signal_length=mel_len,
@@ -777,6 +912,8 @@ class ASRServer:
             ]
             chunk_len = torch.tensor([warmup_mel.shape[-1]], device='cuda')
 
+            if self.prompted_model:
+                self._apply_inference_prompt()
             (
                 session.pred_out_stream,
                 discarded_transcribed_texts,
@@ -2200,6 +2337,8 @@ class ASRServer:
                 eou_probe_snapshot = self._eou_probe_snapshot(session)
 
                 # Run streaming inference
+                if self.prompted_model:
+                    self._apply_inference_prompt()
                 (
                     session.pred_out_stream,
                     transcribed_texts,
@@ -2238,13 +2377,7 @@ class ASRServer:
 
                 # Extract text
                 if transcribed_texts and transcribed_texts[0]:
-                    hyp = transcribed_texts[0]
-                    if hasattr(hyp, 'text'):
-                        return hyp.text
-                    elif isinstance(hyp, str):
-                        return hyp
-                    else:
-                        return str(hyp)
+                    return self._extract_hypothesis_text(transcribed_texts[0])
 
                 return session.current_text
 
@@ -2455,6 +2588,8 @@ class ASRServer:
 
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
 
+                if self.prompted_model:
+                    self._apply_inference_prompt()
                 (
                     session.pred_out_stream,
                     transcribed_texts,
@@ -2476,13 +2611,7 @@ class ASRServer:
                 )
 
                 if transcribed_texts and transcribed_texts[0]:
-                    hyp = transcribed_texts[0]
-                    if hasattr(hyp, 'text'):
-                        final_text = hyp.text
-                    elif isinstance(hyp, str):
-                        final_text = hyp
-                    else:
-                        final_text = str(hyp)
+                    final_text = self._extract_hypothesis_text(transcribed_texts[0])
                     logger.debug(
                         f"Session {session.id} final chunk output: '{final_text[-50:] if len(final_text) > 50 else final_text}' "
                         f"(was: '{session.current_text[-30:] if len(session.current_text) > 30 else session.current_text}')"
@@ -2538,9 +2667,12 @@ def main():
     parser.add_argument(
         "--right-context",
         type=int,
-        default=1,
-        choices=[0, 1, 6, 13],
-        help="Right context frames: 0=80ms, 1=160ms, 6=560ms, 13=1.12s latency"
+        default=None,
+        choices=[0, 1, 3, 6, 13],
+        help=(
+            "Right context frames. Omit for model default "
+            "(English=1, prompted multilingual=3)."
+        )
     )
     args = parser.parse_args()
 

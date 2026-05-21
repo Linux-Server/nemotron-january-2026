@@ -110,7 +110,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
   Note: NO English-on-EA test needed — English stays on the omni NeMo.
   Key files: `proj-2026-05-20-1947/probe_ea_streaming.py` (scratch)
 
-- [ ] **2. `server.py` dual-runtime-clean + model-aware streaming config (test rc0 AND rc3)**
+- [x] **2. `server.py` dual-runtime-clean + model-aware streaming config (test rc0 AND rc3)**
   Guard multilingual-only imports so `server.py` imports clean under the omni NeMo. Make streaming
   config model-aware: English `[70,{0,1,6,13}]`, multilingual `[56,{0,3,6,13}]` (default `[56,0]`);
   model-aware rc selection (the English-only `choices`/`[70,R]` are insufficient). Recompute
@@ -123,7 +123,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
   valid rc.
   Key files: `src/nemotron_speech/server.py`
 
-- [ ] **2b. English byte-identity checkpoint** — short English `silence0_warm200` + FORK_ASSERT smoke
+- [x] **2b. English byte-identity checkpoint** — short English `silence0_warm200` + FORK_ASSERT smoke
   under the omni venv after the server.py edits. **GATE:** byte-identical / WER-within-CI.
   Key files: (scratch smoke)
 
@@ -178,8 +178,8 @@ apples-to-apples vs English — **with the English server byte-identical**.
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Probe: EA-NeMo venv + prompted-STREAMING proof | done — **GO** | (this commit) | Codex `b4b7s2t9y` GO. EA branch `kingformatty/NeMo@prompt_unitifed_architecture_hf_EA` (commit 2d8fcad82) cloned to `/home/khkramer/src/nemotron-ea-nemo` (6.3G, OUTSIDE repo) + dedicated `.venv-ea` (torch 2.12.0+cu130); omni NeMo/venv untouched. `restore_from` instantiated `EncDecRNNTBPEModelWithPrompt` (aux_ctc present but RNNT-only, has_ctc_decoder=False). **Decisive gate PASSED:** EA streaming-infer script (`target_lang=en-US`, `att_context_size=[56,3]`, `strip_lang_tags=true`) on English fixture → "How do I drain and refill my hot tub?" WER 0.0, no tag leak → **prompt IS applied in cache-aware streaming**. Prompt API = MODEL-GLOBAL (`set_inference_prompt`→`_inference_prompt_index`, read in `conformer_stream_step`) → Step 3 must set-under-lock per call. Lang tags = literal `<xx-XX>` (regex `\s*<[a-z]{2}-[A-Z]{2}>`). rc3 runs (exact); rc0 also runs (no rel-pos crash, WER 11.11 missing "?"). |
-| 2 | server.py dual-runtime-clean + model-aware config (rc0/rc3) | pending | — | hidden per-model state: FFT-plan ring, drop_extra, warmup, padding |
-| 2b | English byte-identity checkpoint | pending | — | omni venv, after server.py edits |
+| 2 | server.py dual-runtime-clean + model-aware config (rc0/rc3) | done | (this commit) | Codex `byf72tsi5` + Claude review ACCEPT. server.py +154/-22 (only file). `prompted_model = hasattr(model,'set_inference_prompt')`; `_select_att_context_size` keeps English `[70,{0,1,6,13}]` (rc1 default) byte-identical, multilingual reads cfg `[56,{0,3,6,13}]` default rc3; geometry (`final_padding=(rc+1)*shift`, FFT-ring) unchanged, auto-adapts via self.right_context. Prompt set-under-lock (`_apply_inference_prompt`) at all 4 inference sites, guarded; lang-tag strip (`_extract_hypothesis_text`, regex `\s*<[a-z]{2}-[A-Z]{2}>`) prompted-only. **English byte-identical 2/2 + FORK_ASSERT 2/2** (omni venv); multilingual rc3+rc0 → exact English, no tag leak (EA venv); dual-venv py_compile OK. |
+| 2b | English byte-identity checkpoint | done | (this commit) | satisfied by Step 2's English smoke: 2/2 byte-identical + FORK_ASSERT 2/2 under omni venv; guards provably skip multilingual code for English |
 | 3 | Prompt (scalar/per-call) + strip_lang_tags before delta | pending | — | concurrency-safe; no model-global lang state |
 | 4 | Uniform protocol: init handshake + endpoint routing + validation | pending | — | English+language=error; ml-default=auto; services.py + client |
 | 5 | Transcription correctness (subset) | pending | — | en-US sensible; optional 2nd-lang |
