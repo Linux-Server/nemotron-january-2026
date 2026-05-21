@@ -3908,21 +3908,74 @@ class ASRServer:
             # Update minimum for next iteration
             min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
 
-    def _prepare_scheduler_batch_row(self, session: ASRSession) -> Optional[SchedulerBatchRow]:
+    def _prepare_scheduler_fixed_preprocess_audio(
+        self,
+        session: ASRSession,
+    ) -> Optional[tuple[np.ndarray, int]]:
         if len(session.pending_audio) < self.preprocess_new_audio_samples:
             return None
 
         new_audio = session.pending_audio[: self.preprocess_new_audio_samples]
-        fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+        return self._build_fixed_preprocess_audio(
             session.raw_audio_ring,
             new_audio,
         )
-        mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
-        valid_new_mel = mel[
-            :,
-            :,
-            self.first_preprocess_mel_frame : self.first_preprocess_mel_frame + self.shift_frames,
+
+    def _preprocess_scheduler_fixed_audio_batch(
+        self,
+        fixed_audios: list[np.ndarray],
+        valid_samples: list[int],
+    ) -> Optional[list[torch.Tensor]]:
+        if len(fixed_audios) < 2:
+            return None
+        if len(fixed_audios) != len(valid_samples):
+            raise ValueError(
+                f"fixed audio count {len(fixed_audios)} != length count {len(valid_samples)}"
+            )
+
+        audio_rows: list[np.ndarray] = []
+        for audio, samples in zip(fixed_audios, valid_samples):
+            if len(audio) != self.constant_preprocess_samples:
+                return None
+            if audio.dtype != np.float32:
+                return None
+            if samples < 0 or samples > self.constant_preprocess_samples:
+                return None
+            audio_rows.append(np.ascontiguousarray(audio))
+
+        audio_batch = np.stack(audio_rows, axis=0)
+        if audio_batch.shape != (len(audio_rows), self.constant_preprocess_samples):
+            return None
+
+        audio_tensor = torch.from_numpy(audio_batch).cuda()
+        audio_len = torch.tensor(valid_samples, device='cuda', dtype=torch.long)
+        mel, _mel_len = self.model.preprocessor(
+            input_signal=audio_tensor,
+            length=audio_len,
+        )
+        start = self.first_preprocess_mel_frame
+        end = start + self.shift_frames
+        return [
+            mel[index : index + 1, :, start:end].detach().clone()
+            for index in range(len(audio_rows))
         ]
+
+    def _prepare_scheduler_batch_row(
+        self,
+        session: ASRSession,
+        valid_new_mel: Optional[torch.Tensor] = None,
+    ) -> Optional[SchedulerBatchRow]:
+        if len(session.pending_audio) < self.preprocess_new_audio_samples:
+            return None
+
+        if valid_new_mel is None:
+            fixed_input = self._prepare_scheduler_fixed_preprocess_audio(session)
+            if fixed_input is None:
+                return None
+            fixed_audio, valid_samples = fixed_input
+            mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+            start = self.first_preprocess_mel_frame
+            valid_new_mel = mel[:, :, start : start + self.shift_frames]
 
         if session.emitted_frames == 0:
             chunk_mel = valid_new_mel
@@ -3981,12 +4034,42 @@ class ASRServer:
                 return {}
 
             with torch.inference_mode():
-                rows: list[SchedulerBatchRow] = []
+                preprocess_inputs: list[tuple[ASRSession, np.ndarray, int]] = []
                 for session in sessions:
-                    row = self._prepare_scheduler_batch_row(session)
-                    if row is None:
+                    fixed_input = self._prepare_scheduler_fixed_preprocess_audio(session)
+                    if fixed_input is None:
                         continue
-                    rows.append(row)
+                    fixed_audio, valid_samples = fixed_input
+                    preprocess_inputs.append((session, fixed_audio, valid_samples))
+
+                if not preprocess_inputs:
+                    return {session.id: session.current_text for session in sessions}
+
+                fixed_audios = [item[1] for item in preprocess_inputs]
+                valid_samples = [item[2] for item in preprocess_inputs]
+                batched_valid_new_mels = self._preprocess_scheduler_fixed_audio_batch(
+                    fixed_audios,
+                    valid_samples,
+                )
+
+                rows: list[SchedulerBatchRow] = []
+                if batched_valid_new_mels is None:
+                    for session, _fixed_audio, _valid_samples in preprocess_inputs:
+                        row = self._prepare_scheduler_batch_row(session)
+                        if row is None:
+                            continue
+                        rows.append(row)
+                else:
+                    for index, (session, _fixed_audio, _valid_samples) in enumerate(
+                        preprocess_inputs
+                    ):
+                        row = self._prepare_scheduler_batch_row(
+                            session,
+                            batched_valid_new_mels[index],
+                        )
+                        if row is None:
+                            continue
+                        rows.append(row)
 
                 if not rows:
                     return {session.id: session.current_text for session in sessions}

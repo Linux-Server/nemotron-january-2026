@@ -1,0 +1,69 @@
+<task>
+Implement Step 7a of proj-2026-05-21-0410/PLAN.md: "Batch the preprocessor". Read the plan's Step 7a + the
+Round-4 Rules (C6/S1) + [[cufft-stft-plan-size-nondeterminism]] context. DE-RISK FIRST: write + run a
+byte-equality probe; only wire the batched preprocessor into server.py if the probe passes. Edit
+src/nemotron_speech/server.py (the batched path only) + a new probe file. No git commits.
+
+CONTEXT: The Step-7 batched path (`_process_ready_batch`) currently preprocesses PER ROW
+(`_prepare_scheduler_batch_row` → `_build_fixed_preprocess_audio` + `_preprocess_fixed_audio` per session).
+At N=40/B=3-4 that per-row STFT is serial within each tick. 7a stacks the per-row fixed audio into one
+`[B, K]` preprocessor call, slices per-row `valid_new_mel`, then assembles `chunk_mel = cat(session.mel_frame_ring,
+valid_new_mel[row])` per row (the mel ring stays per-session) and runs the existing batched model. Batching runs
+TF32-off (fp32) already.
+
+RISK: batched cuFFT may use a different plan/kernel than B=1 → per-row mel may not be BIT-identical to the
+per-row B=1 mel (the constant-plan-cuFFT nondeterminism note). So the gate is fp32-allclose per-row mel AND —
+the real test — the end-to-end transcript stays byte-identical.
+
+STEP 1 — PROBE (`proj-2026-05-21-0410/probe_batched_preprocess.py`, run under
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`, TF32-OFF, en model `$(cat /tmp/en-nemo-path)`):
+  For ≥4 distinct clips, at several stream positions (first chunk + steady chunks): build each row's
+  `fixed_audio` (the same constant-K window the server builds), then compare:
+    (a) per-row mel from ONE batched `model.preprocessor(input_signal=[B,K], length=[B])` call, sliced per row,
+        vs per-row mel from B=1 `model.preprocessor([1,K])`.
+    Report `torch.equal` (bit-identical?) and `torch.allclose(atol=1e-4, rtol=1e-5)` + max abs diff, for B=2/4/8.
+  GATE-probe: per-row mel allclose under fp32 (bit-equality is a bonus). If the mel DIVERGES beyond fp32 noise,
+  STOP and report — do NOT wire it.
+
+STEP 2 — WIRE (only if the probe passes): in `_process_ready_batch` / `_prepare_scheduler_batch_row`, stack the
+rows' `fixed_audio` into `[B, K]`, call the preprocessor ONCE, slice per-row `valid_new_mel`, then keep the
+existing per-row chunk_mel assembly + batched model + scatter. Preserve the constant-K plan invariant (don't
+change n_fft/hop). Keep a fallback to per-row preprocess if the group can't be uniformly stacked.
+
+GATE (en server, .venv-asr; NEMOTRON_CONTINUOUS=1 NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1
+NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1, port 8080, rc1):
+  (G1) CROSS-TALK byte-exact (the real gate): capture ≥4 distinct clips solo (B=1 dispatch) then concurrently
+       (B≥2, so batched preprocess is exercised); each stream's interim seq + final + delta byte-identical to
+       its solo run. (If batched-preprocess mel noise ever flips a token, that's a NO-GO → keep serial.)
+  (G2) FORK_ASSERT clean.
+  (G3) local knee: re-run a high-N check (you'll need the temp multi-sample concurrency wrapper again, like the
+       prior highN run, since the committed harness caps at 24) at N=24/40/48/60 with 7a ON; report whether the
+       knee moves past N=40 (the pre-7a batching knee) and the batch histogram. Don't overclaim if local
+       preprocess is already cheap — report the delta honestly (7a's bigger payoff is the slow-CPU cloud, Step 10).
+  CLEANUP: kill server by PID; free 8080 + GPU; remove temp wrapper/outputs/__pycache__; don't touch 8088.
+If G1 fails (token flip from batched-preprocess noise): revert to per-row preprocess, document, and report
+NO-GO for batched preprocess (Step 7 batching still stands).
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 7a, Round-4 C6/S1), server.py `_process_ready_batch` /
+`_prepare_scheduler_batch_row` / `_build_fixed_preprocess_audio` / `_preprocess_fixed_audio` (the per-row
+preprocess to batch), and the highN-validation.md method (the temp multi-sample wrapper for N>24). The mel ring
+(`mel_frame_ring`) is per-session — only the new-audio STFT is batched. Batching runs fp32 (TF32-off).
+</context>
+
+<verification_loop>
+Probe first (fp32-allclose per-row mel). Then G1 cross-talk byte-exact end-to-end — this is the real gate (the
+model must be robust to any batched-preprocess fp32 mel noise). If a token flips, keep serial preprocess.
+</verification_loop>
+
+<action_safety>
+Edit ONLY server.py (batched path) + the probe file. No commits. Default (no BATCH_SCHED) unaffected. Kill the
+server; free GPU; don't touch 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: 1) probe — per-row mel torch.equal/allclose + max diff at B=2/4/8; 2) wired or kept-serial (+ why);
+3) G1 cross-talk byte-exact; 4) G2 FORK_ASSERT; 5) G3 local knee delta (past N=40?) + batch hist; 6) cleanup;
+7) GO/NO-GO for batched preprocess.
+</compact_output_contract>
