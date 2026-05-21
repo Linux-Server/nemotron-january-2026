@@ -22,9 +22,25 @@ from aiohttp import ClientConnectionResetError, web, WSMsgType
 from loguru import logger
 
 try:
-    from nemotron_speech.batch_primitives import ready_predicate
+    from nemotron_speech.batch_primitives import (
+        batch_group_key,
+        ready_predicate,
+        scatter_cache_row,
+        stack_caches,
+        stack_hypotheses,
+        stack_pred_out,
+        stack_processed,
+    )
 except ImportError:  # Allows `python src/nemotron_speech/server.py`.
-    from batch_primitives import ready_predicate
+    from batch_primitives import (
+        batch_group_key,
+        ready_predicate,
+        scatter_cache_row,
+        stack_caches,
+        stack_hypotheses,
+        stack_pred_out,
+        stack_processed,
+    )
 
 # Enable debug logging with DEBUG_ASR=1
 DEBUG_ASR = os.environ.get("DEBUG_ASR", "0") == "1"
@@ -121,6 +137,7 @@ def clone_tree(obj: Any, memo: Optional[dict[int, Any]] = None) -> Any:
             cloned_dict[clone_tree(key, memo)] = clone_tree(value, memo)
         return cloned_dict
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        # Covers NeMo LabelLoopingStateItem decoder state under greedy_batch.
         cloned_obj = copy.copy(obj)
         memo[oid] = cloned_obj
         for field in dataclasses.fields(obj):
@@ -143,7 +160,7 @@ def clone_tree(obj: Any, memo: Optional[dict[int, Any]] = None) -> Any:
 
 
 def clone_hypotheses_deep(previous_hypotheses: Any) -> Any:
-    """Deep-copy each Hypothesis and recursively clone all tensor fields."""
+    """Deep-copy each Hypothesis and recursively clone tensor decoder state."""
     if previous_hypotheses is None:
         return None
     return [clone_tree(hyp) for hyp in previous_hypotheses]
@@ -182,6 +199,7 @@ def snapshot_tree_cpu(obj: Any, memo: Optional[dict[int, Any]] = None) -> Any:
             cloned_dict[snapshot_tree_cpu(key, memo)] = snapshot_tree_cpu(value, memo)
         return cloned_dict
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        # Covers NeMo LabelLoopingStateItem decoder state under greedy_batch.
         cloned_obj = copy.copy(obj)
         memo[oid] = cloned_obj
         for field in dataclasses.fields(obj):
@@ -293,6 +311,7 @@ def _assert_tree_equal(label: str, before: Any, after: Any) -> None:
     if before_is_dataclass or after_is_dataclass:
         if not (before_is_dataclass and after_is_dataclass and before.__class__ is after.__class__):
             raise AssertionError(f"{label}: dataclass type changed")
+        # Covers NeMo LabelLoopingStateItem decoder state under greedy_batch.
         for field in dataclasses.fields(before):
             _assert_tree_equal(
                 f"{label}.{field.name}",
@@ -432,6 +451,7 @@ class ASRSession:
     eou_snapshot_audio: bytearray = field(default_factory=bytearray)
     scheduler_generation: int = 0
     scheduler_inflight_generation: Optional[int] = None
+    scheduler_ready_since: Optional[float] = None
     scheduler_closed: bool = False
     scheduler_last_audio_monotonic: Optional[float] = None
 
@@ -439,6 +459,16 @@ class ASRSession:
     # This preserves the last N ms of audio to provide encoder left-context
     # when a new segment starts after a reset
     overlap_buffer: Optional[np.ndarray] = None
+
+
+@dataclass
+class SchedulerBatchRow:
+    session: ASRSession
+    generation: int
+    chunk_mel: torch.Tensor
+    valid_new_mel: torch.Tensor
+    drop_extra: int
+    eou_probe_snapshot: Optional[dict[str, Any]]
 
 
 class ASRServer:
@@ -476,16 +506,48 @@ class ASRServer:
         self.scheduler_b1_requested = os.environ.get("NEMOTRON_SCHEDULER_B1", "") == "1"
         self.scheduler_enabled = self.continuous_context and self.scheduler_b1_requested
         self.batch_enabled = os.environ.get("NEMOTRON_BATCH_SCHED", "") == "1"
+        if self.batch_enabled and not self.scheduler_b1_requested:
+            raise ValueError("NEMOTRON_BATCH_SCHED=1 requires NEMOTRON_SCHEDULER_B1=1")
+        if self.batch_enabled and not self.scheduler_enabled:
+            raise ValueError(
+                "NEMOTRON_BATCH_SCHED=1 requires the continuous scheduler "
+                "(NEMOTRON_CONTINUOUS=1 and NEMOTRON_SCHEDULER_B1=1)"
+            )
+        if self.batch_enabled:
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            logger.info(
+                "batch_sched_tf32_disabled "
+                "cuda.matmul.allow_tf32=False cudnn.allow_tf32=False"
+            )
         self.scheduler_queue_maxsize = _env_int("NEMOTRON_SCHEDULER_QUEUE_MAXSIZE", 256)
         if self.scheduler_queue_maxsize <= 0:
             raise ValueError("NEMOTRON_SCHEDULER_QUEUE_MAXSIZE must be > 0")
+        self.batch_max_wait_ms = _env_int("NEMOTRON_BATCH_MAX_WAIT_MS", 5)
+        self.batch_max_size = _env_int("NEMOTRON_BATCH_MAX_SIZE", 4)
+        if self.batch_max_wait_ms < 0:
+            raise ValueError("NEMOTRON_BATCH_MAX_WAIT_MS must be >= 0")
+        if self.batch_max_size <= 0:
+            raise ValueError("NEMOTRON_BATCH_MAX_SIZE must be > 0")
         self.scheduler_task: Optional[asyncio.Task] = None
         self._scheduler_wakeup: Optional[asyncio.Event] = None
         self._scheduler_ready: set[str] = set()
+        self._scheduler_batch_first_ready: dict[tuple, float] = {}
+        self._scheduler_batch_size_hist: dict[int, int] = {}
+        self._scheduler_batch_queue_wait_ms_total = 0.0
+        self._scheduler_batch_queue_wait_ms_max = 0.0
+        self._scheduler_batch_queue_wait_count = 0
+        self._scheduler_batches = 0
         self._scheduler_chunks = 0
         self._scheduler_lane_wait_ms_total = 0.0
         self._scheduler_lane_wait_ms_max = 0.0
-        self.decoder_strategy = os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower()
+        requested_decoder_strategy = os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower()
+        if self.batch_enabled and requested_decoder_strategy not in ("", "greedy"):
+            raise ValueError(
+                "NEMOTRON_BATCH_SCHED=1 requires NEMOTRON_DECODING=greedy "
+                f"(got {requested_decoder_strategy!r})"
+            )
+        self.decoder_strategy = "greedy_batch" if self.batch_enabled else requested_decoder_strategy
         self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
         self.eou_probe_enabled = os.environ.get("NEMOTRON_EOU_PROBE", "") == "1"
         # Per-chunk profiling (additive, flag-gated): time preprocess vs conformer_stream_step
@@ -839,6 +901,28 @@ class ASRServer:
                     'return_best_hypothesis': True,
                 }
             })
+        elif _decoding == "greedy_batch":
+            logger.info(
+                "Configuring greedy_batch decoding "
+                "(loop_labels=True, use_cuda_graph_decoder=False)..."
+            )
+            _decoding_cfg = OmegaConf.create({
+                'strategy': 'greedy_batch',
+                'greedy': {
+                    'max_symbols': 10,
+                    'loop_labels': True,
+                    'use_cuda_graph_decoder': False,
+                }
+            })
+            if self.eou_probe_enabled:
+                _decoding_cfg.greedy.preserve_alignments = True
+                _decoding_cfg.greedy.preserve_frame_confidence = True
+                _decoding_cfg.greedy.confidence_method_cfg = {
+                    'name': 'entropy',
+                    'entropy_type': 'tsallis',
+                    'alpha': 0.5,
+                    'entropy_norm': 'exp',
+                }
         else:
             logger.info("Configuring greedy decoding for Blackwell compatibility...")
             _decoding_cfg = OmegaConf.create({
@@ -2020,7 +2104,10 @@ class ASRServer:
             )
             logger.info(
                 "scheduler_b1_started "
-                f"queue_maxsize={self.scheduler_queue_maxsize} batch_size=1"
+                f"queue_maxsize={self.scheduler_queue_maxsize} "
+                f"batch_enabled={self.batch_enabled} "
+                f"batch_max_wait_ms={self.batch_max_wait_ms} "
+                f"batch_max_size={self.batch_max_size}"
             )
 
     def _wake_scheduler(self) -> None:
@@ -2072,17 +2159,44 @@ class ASRServer:
         elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
             await self._scheduler_queue_event(session, ("close",))
 
-    def _scheduler_has_work(self) -> bool:
-        if self._scheduler_ready:
-            return True
+    def _scheduler_next_batch_deadline(self) -> Optional[float]:
+        if not self.batch_enabled or not self._scheduler_ready:
+            return None
+        if not self._scheduler_batch_first_ready:
+            return None
+        return min(self._scheduler_batch_first_ready.values())
+
+    def _scheduler_wait_timeout(self) -> Optional[float]:
+        deadline = self._scheduler_next_batch_deadline()
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+    def _scheduler_has_queued_events(self) -> bool:
         for session in list(self.sessions.values()):
             queue = session.continuous_event_queue
             if queue is not None and not queue.empty():
                 return True
         return False
 
+    def _scheduler_has_work_or_due_timer(self) -> bool:
+        if self._scheduler_has_queued_events():
+            return True
+        if self._scheduler_ready:
+            if not self.batch_enabled:
+                return True
+            deadline = self._scheduler_next_batch_deadline()
+            if deadline is None or time.monotonic() >= deadline:
+                return True
+        return False
+
     async def _scheduler_loop(self) -> None:
-        logger.info("scheduler_b1_loop_running")
+        logger.info(
+            "scheduler_b1_loop_running "
+            f"batch_enabled={self.batch_enabled} "
+            f"batch_max_wait_ms={self.batch_max_wait_ms} "
+            f"batch_max_size={self.batch_max_size}"
+        )
         while True:
             try:
                 progressed = await self._scheduler_drain_once()
@@ -2100,9 +2214,16 @@ class ASRServer:
             if self._scheduler_wakeup is None:
                 self._scheduler_wakeup = asyncio.Event()
             self._scheduler_wakeup.clear()
-            if self._scheduler_has_work():
+            if self._scheduler_has_work_or_due_timer():
                 continue
-            await self._scheduler_wakeup.wait()
+            timeout = self._scheduler_wait_timeout()
+            if timeout is None:
+                await self._scheduler_wakeup.wait()
+            else:
+                try:
+                    await asyncio.wait_for(self._scheduler_wakeup.wait(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    pass
 
     async def _scheduler_drain_once(self) -> bool:
         progressed = False
@@ -2122,8 +2243,7 @@ class ASRServer:
             progressed = True
 
         if self._scheduler_ready:
-            await self._scheduler_process_ready_pass()
-            progressed = True
+            progressed = await self._scheduler_process_ready_pass() or progressed
 
         return progressed
 
@@ -2143,11 +2263,18 @@ class ASRServer:
 
     def _scheduler_mark_ready_if_ready_locked(self, session: ASRSession) -> None:
         if self._scheduler_session_ready(session):
+            if session.id not in self._scheduler_ready:
+                session.scheduler_ready_since = time.monotonic()
             self._scheduler_ready.add(session.id)
         else:
             self._scheduler_ready.discard(session.id)
+            session.scheduler_ready_since = None
 
-    async def _scheduler_process_ready_pass(self) -> None:
+    async def _scheduler_process_ready_pass(self) -> bool:
+        if self.batch_enabled:
+            return await self._scheduler_process_batched_ready_pass()
+
+        progressed = False
         ready_ids = list(self._scheduler_ready)
         self._scheduler_ready.clear()
         for session_id in ready_ids:
@@ -2156,12 +2283,237 @@ class ASRServer:
                 continue
             async with session.state_lock:
                 if not self._scheduler_session_ready(session):
+                    session.scheduler_ready_since = None
                     continue
-                await self._scheduler_process_one_ready_chunk_locked(
+                processed = await self._scheduler_process_one_ready_chunk_locked(
                     session,
                     reason="ready",
                     requeue=True,
                 )
+                progressed = processed or progressed
+        return progressed
+
+    def _scheduler_batch_group_key_for_session(self, session: ASRSession) -> tuple:
+        if session.emitted_frames == 0:
+            chunk_t = self.shift_frames
+            drop_extra = 0
+        else:
+            chunk_t = self.pre_encode_cache_size + self.shift_frames
+            drop_extra = self.drop_extra
+        target_lang = session.target_lang if session.target_lang is not None else self.target_lang
+        return batch_group_key(
+            target_lang,
+            False,
+            drop_extra,
+            chunk_t,
+            self.decoder_strategy,
+        )
+
+    def _scheduler_batch_session_eligible_for_key(self, session: ASRSession, key: tuple) -> bool:
+        if session.scheduler_closed or session.continuous_event_queue is None:
+            return False
+        if self._scheduler_batch_group_key_for_session(session) != key:
+            return False
+        pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
+        queue = session.continuous_event_queue
+        queue_has_events = queue is not None and not queue.empty()
+        return self._scheduler_session_ready(session) or pending_len > 0 or queue_has_events
+
+    def _scheduler_batch_eligible_count(self, key: tuple) -> int:
+        count = 0
+        for session in list(self.sessions.values()):
+            if self._scheduler_batch_session_eligible_for_key(session, key):
+                count += 1
+        return count
+
+    async def _scheduler_collect_ready_groups(self) -> dict[tuple, list[ASRSession]]:
+        ready_groups: dict[tuple, list[ASRSession]] = {}
+        now = time.monotonic()
+        for session_id in list(self._scheduler_ready):
+            session = self.sessions.get(session_id)
+            if session is None:
+                self._scheduler_ready.discard(session_id)
+                continue
+            async with session.state_lock:
+                if not self._scheduler_session_ready(session):
+                    self._scheduler_ready.discard(session_id)
+                    session.scheduler_ready_since = None
+                    continue
+                if session.scheduler_ready_since is None:
+                    session.scheduler_ready_since = now
+                key = self._scheduler_batch_group_key_for_session(session)
+                ready_groups.setdefault(key, []).append(session)
+
+        for key in list(self._scheduler_batch_first_ready):
+            if key not in ready_groups:
+                self._scheduler_batch_first_ready.pop(key, None)
+        return ready_groups
+
+    async def _scheduler_process_batched_ready_pass(self) -> bool:
+        ready_groups = await self._scheduler_collect_ready_groups()
+        if not ready_groups:
+            return False
+
+        now = time.monotonic()
+        candidates: list[tuple[int, float, str, tuple, list[ASRSession], str]] = []
+        for key, sessions in ready_groups.items():
+            sessions.sort(key=lambda s: (s.scheduler_ready_since or now, s.id))
+            ready_count = len(sessions)
+            active_count = self._scheduler_batch_eligible_count(key)
+            first_ready = min((s.scheduler_ready_since or now) for s in sessions)
+            deadline = self._scheduler_batch_first_ready.get(key)
+            if deadline is None:
+                deadline = first_ready + (self.batch_max_wait_ms / 1000.0)
+                self._scheduler_batch_first_ready[key] = deadline
+
+            reason = ""
+            if active_count <= 1:
+                reason = "solo"
+            elif ready_count >= self.batch_max_size:
+                reason = "max_size"
+            elif now >= deadline:
+                reason = "timer"
+            else:
+                continue
+
+            safe_size = min(ready_count, self.batch_max_size)
+            candidates.append(
+                (
+                    -safe_size,
+                    deadline,
+                    str(key),
+                    key,
+                    sessions[:safe_size],
+                    reason,
+                )
+            )
+
+        if not candidates:
+            return False
+
+        candidates.sort()
+        _neg_size, _deadline, _key_label, key, sessions, reason = candidates[0]
+        return await self._scheduler_process_ready_batch_locked_sessions(
+            key,
+            sessions,
+            reason=reason,
+        )
+
+    async def _scheduler_process_ready_batch_locked_sessions(
+        self,
+        key: tuple,
+        sessions: list[ASRSession],
+        *,
+        reason: str,
+    ) -> bool:
+        if not sessions:
+            return False
+
+        async with contextlib.AsyncExitStack() as stack:
+            for session in sorted(sessions, key=lambda s: s.id):
+                await stack.enter_async_context(session.state_lock)
+
+            valid_sessions: list[ASRSession] = []
+            for session in sessions:
+                if (
+                    not session.scheduler_closed
+                    and self._scheduler_session_ready(session)
+                    and self._scheduler_batch_group_key_for_session(session) == key
+                ):
+                    valid_sessions.append(session)
+                else:
+                    self._scheduler_ready.discard(session.id)
+                    session.scheduler_ready_since = None
+
+            if not valid_sessions:
+                return False
+            if len(valid_sessions) > self.batch_max_size:
+                valid_sessions = valid_sessions[: self.batch_max_size]
+
+            for session in valid_sessions:
+                self._scheduler_ready.discard(session.id)
+                session.scheduler_inflight_generation = session.scheduler_generation
+
+            generations = {
+                session.id: session.scheduler_generation for session in valid_sessions
+            }
+            dispatch_start = time.monotonic()
+            lane_wait_start = time.perf_counter()
+            lane_wait_ms = 0.0
+            texts: dict[str, Optional[str]] = {}
+            try:
+                async with self.inference_lock:
+                    lane_wait_ms = (time.perf_counter() - lane_wait_start) * 1000.0
+                    live_sessions = [
+                        session
+                        for session in valid_sessions
+                        if (
+                            generations[session.id] == session.scheduler_generation
+                            and not session.scheduler_closed
+                        )
+                    ]
+                    if not live_sessions:
+                        return False
+                    texts = await self._run_inference_call(
+                        self._process_ready_batch,
+                        live_sessions,
+                    )
+            finally:
+                for session in valid_sessions:
+                    session.scheduler_inflight_generation = None
+
+            progressed = False
+            sent_count = 0
+            for session in valid_sessions:
+                generation = generations[session.id]
+                if generation != session.scheduler_generation or session.scheduler_closed:
+                    logger.debug(
+                        f"Session {session.id}: suppressed stale scheduler batch output "
+                        f"reason={reason} gen={generation} current={session.scheduler_generation}"
+                    )
+                    continue
+
+                text = texts.get(session.id)
+                if text is not None and text != session.current_text:
+                    session.current_text = text
+                    logger.debug(
+                        f"Session {session.id} interim: "
+                        f"{text[-50:] if len(text) > 50 else text}"
+                    )
+                    await self._send_json_locked(
+                        session,
+                        {
+                            "type": "transcript",
+                            "text": text,
+                            "is_final": False,
+                        },
+                        tolerate_closed=True,
+                        description="scheduler batch interim transcript",
+                    )
+                    sent_count += 1
+
+                queue_wait_ms = 0.0
+                if session.scheduler_ready_since is not None:
+                    queue_wait_ms = (
+                        dispatch_start - session.scheduler_ready_since
+                    ) * 1000.0
+                session.scheduler_ready_since = None
+                self._scheduler_record_batch_row_telemetry(
+                    session,
+                    batch_size=len(valid_sessions),
+                    lane_wait_ms=lane_wait_ms,
+                    queue_wait_ms=queue_wait_ms,
+                    reason=reason,
+                )
+                self._scheduler_mark_ready_if_ready_locked(session)
+                progressed = True
+
+            self._scheduler_record_batch_telemetry(
+                batch_size=len(valid_sessions),
+                reason=reason,
+                sent_count=sent_count,
+            )
+            return progressed
 
     async def _scheduler_process_one_ready_chunk_locked(
         self,
@@ -2172,9 +2524,11 @@ class ASRServer:
     ) -> bool:
         if not self._scheduler_session_ready(session):
             self._scheduler_ready.discard(session.id)
+            session.scheduler_ready_since = None
             return False
 
         self._scheduler_ready.discard(session.id)
+        session.scheduler_ready_since = None
         generation = session.scheduler_generation
         session.scheduler_inflight_generation = generation
         lane_wait_start = time.perf_counter()
@@ -2222,6 +2576,56 @@ class ASRServer:
         if requeue:
             self._scheduler_mark_ready_if_ready_locked(session)
         return True
+
+    def _scheduler_record_batch_row_telemetry(
+        self,
+        session: ASRSession,
+        *,
+        batch_size: int,
+        lane_wait_ms: float,
+        queue_wait_ms: float,
+        reason: str,
+    ) -> None:
+        self._scheduler_record_chunk_telemetry(
+            session,
+            lane_wait_ms,
+            f"batch:{reason}:B{batch_size}",
+        )
+        self._scheduler_batch_queue_wait_ms_total += queue_wait_ms
+        self._scheduler_batch_queue_wait_ms_max = max(
+            self._scheduler_batch_queue_wait_ms_max,
+            queue_wait_ms,
+        )
+        self._scheduler_batch_queue_wait_count += 1
+
+    def _scheduler_record_batch_telemetry(
+        self,
+        *,
+        batch_size: int,
+        reason: str,
+        sent_count: int,
+    ) -> None:
+        self._scheduler_batches += 1
+        self._scheduler_batch_size_hist[batch_size] = (
+            self._scheduler_batch_size_hist.get(batch_size, 0) + 1
+        )
+        if self._scheduler_batches % 25 == 0 or batch_size > 1:
+            wait_avg = 0.0
+            if self._scheduler_batch_queue_wait_count:
+                wait_avg = (
+                    self._scheduler_batch_queue_wait_ms_total
+                    / self._scheduler_batch_queue_wait_count
+                )
+            logger.info(
+                "scheduler_batch_telemetry "
+                f"batches={self._scheduler_batches} "
+                f"last_batch_size={batch_size} "
+                f"last_reason={reason} "
+                f"sent_count={sent_count} "
+                f"effective_batch_hist={dict(sorted(self._scheduler_batch_size_hist.items()))} "
+                f"queue_wait_avg_ms={wait_avg:.2f} "
+                f"queue_wait_max_ms={self._scheduler_batch_queue_wait_ms_max:.2f}"
+            )
 
     def _scheduler_record_chunk_telemetry(
         self,
@@ -2290,6 +2694,7 @@ class ASRServer:
         reason: str,
     ) -> int:
         self._scheduler_ready.discard(session.id)
+        session.scheduler_ready_since = None
         session.scheduler_generation += 1
         logger.debug(
             f"Session {session.id}: scheduler generation={session.scheduler_generation} "
@@ -3502,6 +3907,205 @@ class ASRServer:
 
             # Update minimum for next iteration
             min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
+
+    def _prepare_scheduler_batch_row(self, session: ASRSession) -> Optional[SchedulerBatchRow]:
+        if len(session.pending_audio) < self.preprocess_new_audio_samples:
+            return None
+
+        new_audio = session.pending_audio[: self.preprocess_new_audio_samples]
+        fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+            session.raw_audio_ring,
+            new_audio,
+        )
+        mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+        valid_new_mel = mel[
+            :,
+            :,
+            self.first_preprocess_mel_frame : self.first_preprocess_mel_frame + self.shift_frames,
+        ]
+
+        if session.emitted_frames == 0:
+            chunk_mel = valid_new_mel
+            drop_extra = 0
+        else:
+            chunk_mel = torch.cat((session.mel_frame_ring, valid_new_mel), dim=-1)
+            drop_extra = self.drop_extra
+
+        return SchedulerBatchRow(
+            session=session,
+            generation=session.scheduler_generation,
+            chunk_mel=chunk_mel,
+            valid_new_mel=valid_new_mel,
+            drop_extra=int(drop_extra),
+            eou_probe_snapshot=self._eou_probe_snapshot(session),
+        )
+
+    def _advance_session_after_normal_chunk(
+        self,
+        session: ASRSession,
+        valid_new_mel: torch.Tensor,
+    ) -> None:
+        consumed_audio = session.pending_audio[: self.shift_frames * self.hop_samples]
+        if len(consumed_audio) >= self.raw_audio_ring_samples:
+            session.raw_audio_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+        else:
+            keep = self.raw_audio_ring_samples - len(consumed_audio)
+            session.raw_audio_ring = np.concatenate(
+                [session.raw_audio_ring[-keep:], consumed_audio]
+            ).astype(np.float32, copy=False)
+        session.pending_audio = session.pending_audio[self.shift_frames * self.hop_samples :]
+        session.accumulated_audio = session.pending_audio
+        self._update_mel_frame_ring(session, valid_new_mel)
+        session.emitted_frames += self.shift_frames
+
+    @staticmethod
+    def _scatter_batch_list_item(value: Any, index: int, batch_size: int) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            if len(value) != batch_size:
+                raise RuntimeError(
+                    f"batched decoder returned {len(value)} rows for B={batch_size}"
+                )
+            return [value[index]]
+        if batch_size == 1:
+            return [value]
+        raise RuntimeError(
+            f"batched decoder returned non-list {type(value).__name__} for B={batch_size}"
+        )
+
+    def _process_ready_batch(self, sessions: list[ASRSession]) -> dict[str, Optional[str]]:
+        """Process one scheduler batch of same-group ready normal chunks."""
+        try:
+            if not sessions:
+                return {}
+
+            with torch.inference_mode():
+                rows: list[SchedulerBatchRow] = []
+                for session in sessions:
+                    row = self._prepare_scheduler_batch_row(session)
+                    if row is None:
+                        continue
+                    rows.append(row)
+
+                if not rows:
+                    return {session.id: session.current_text for session in sessions}
+
+                drop_extras = {row.drop_extra for row in rows}
+                if len(drop_extras) != 1:
+                    raise RuntimeError(f"mixed drop_extra in scheduler batch: {sorted(drop_extras)}")
+
+                chunk_mels = [row.chunk_mel for row in rows]
+                processed_signal, processed_signal_length = stack_processed(chunk_mels)
+                cache_last_channel, cache_last_time, cache_last_channel_len = stack_caches(
+                    [
+                        (
+                            row.session.cache_last_channel,
+                            row.session.cache_last_time,
+                            row.session.cache_last_channel_len,
+                        )
+                        for row in rows
+                    ]
+                )
+                previous_hypotheses = [
+                    clone_hypotheses_deep(row.session.previous_hypotheses)
+                    for row in rows
+                ]
+                previous_pred_out = [
+                    clone_tree(row.session.pred_out_stream)
+                    for row in rows
+                ]
+                flat_hypotheses = stack_hypotheses(previous_hypotheses)
+                flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
+
+                if self.prompted_model:
+                    self._apply_inference_prompt(rows[0].session)
+
+                (
+                    pred_out_stream,
+                    transcribed_texts,
+                    batch_cache_last_channel,
+                    batch_cache_last_time,
+                    batch_cache_last_channel_len,
+                    batch_previous_hypotheses,
+                ) = self._conformer_stream_step(
+                    processed_signal=processed_signal,
+                    processed_signal_length=processed_signal_length,
+                    cache_last_channel=cache_last_channel,
+                    cache_last_time=cache_last_time,
+                    cache_last_channel_len=cache_last_channel_len,
+                    keep_all_outputs=False,
+                    previous_hypotheses=flat_hypotheses,
+                    previous_pred_out=flat_pred_out,
+                    drop_extra_pre_encoded=rows[0].drop_extra,
+                    return_transcription=True,
+                )
+
+                batch_size = len(rows)
+                scattered: list[tuple[SchedulerBatchRow, Any, Any, torch.Tensor, torch.Tensor, torch.Tensor, Optional[str]]] = []
+                for index, row in enumerate(rows):
+                    row_cache = scatter_cache_row(
+                        batch_cache_last_channel,
+                        batch_cache_last_time,
+                        batch_cache_last_channel_len,
+                        index,
+                    )
+                    row_pred_out = self._scatter_batch_list_item(
+                        pred_out_stream,
+                        index,
+                        batch_size,
+                    )
+                    row_hypotheses = self._scatter_batch_list_item(
+                        batch_previous_hypotheses,
+                        index,
+                        batch_size,
+                    )
+                    text = row.session.current_text
+                    if transcribed_texts and len(transcribed_texts) > index and transcribed_texts[index]:
+                        text = self._extract_hypothesis_text(transcribed_texts[index])
+                    scattered.append(
+                        (
+                            row,
+                            row_pred_out,
+                            row_hypotheses,
+                            row_cache[0],
+                            row_cache[1],
+                            row_cache[2],
+                            text,
+                        )
+                    )
+
+                texts: dict[str, Optional[str]] = {}
+                for (
+                    row,
+                    row_pred_out,
+                    row_hypotheses,
+                    row_cache_last_channel,
+                    row_cache_last_time,
+                    row_cache_last_channel_len,
+                    text,
+                ) in scattered:
+                    session = row.session
+                    if row.generation != session.scheduler_generation or session.scheduler_closed:
+                        continue
+                    session.pred_out_stream = row_pred_out
+                    session.previous_hypotheses = row_hypotheses
+                    session.cache_last_channel = row_cache_last_channel
+                    session.cache_last_time = row_cache_last_time
+                    session.cache_last_channel_len = row_cache_last_channel_len
+                    self._advance_session_after_normal_chunk(session, row.valid_new_mel)
+                    self._write_eou_probe_chunk(session, row.eou_probe_snapshot)
+                    self._write_eou_snapshot_chunk(session, row.eou_probe_snapshot)
+                    texts[session.id] = text
+
+                return texts
+
+        except Exception as e:
+            session_ids = ",".join(session.id for session in sessions)
+            logger.error(f"scheduler batch processing error sessions={session_ids}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {session.id: None for session in sessions}
 
     def _process_chunk(self, session: ASRSession) -> Optional[str]:
         """Process one fixed-plan audio window and run streaming inference."""

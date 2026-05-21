@@ -1,0 +1,70 @@
+<task>
+Implement the BLOCKING greedy_batch B≥2 multi-chunk probe required before Step 7 of
+proj-2026-05-21-0410/PLAN.md (round-4 C3). Read the plan's Step 3 + Step 7 + the "Round-4 review fixes"
+Rules. Create `proj-2026-05-21-0410/probe_greedy_batch_multichunk.py` (reuse the harness/comparison machinery
+from `proj-2026-05-21-0410/test_batch_state.py`). Edit ONLY that new probe file. No git commits.
+
+WHY: Probe C only proved `greedy_batch`==`greedy` at B=1 for ONE step. Step 7 will ship `greedy_batch`
+(loop_labels=True, cuda_graph=False) at B≥2 with per-row partial_hypotheses threaded across many ticks +
+max_symbols=10 + keep_all_outputs=True final chunks. This probe proves that path equals the CURRENT shippable
+`greedy` B=1 output before we wire it into the scheduler.
+
+SETUP: EN model, `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`, model `$(cat /tmp/en-nemo-path)`,
+att_context [70,1] (rc1), NEMOTRON_WARMUP_MS=200. Run **TF32-OFF** (the Step-5-validated batching precision:
+`torch.backends.cuda.matmul.allow_tf32=False` + `cudnn.allow_tf32=False`). Use the same ≥4 distinct equal-chunk
+clips as test_batch_state.py.
+
+PROBE:
+  1. REFERENCE = current `greedy` (loop_labels=False), B=1, full streams — per-row text + state per step.
+  2. CANDIDATE = `greedy_batch` (loop_labels=True, use_cuda_graph_decoder=False) at B=1, B=2, B=4, full
+     multi-chunk streams (one conformer_stream_step(B)/tick via batch_primitives; scatter per row each step).
+     The decoder strategy is GLOBAL on the model (change_decoding_strategy) — set greedy_batch once for the
+     candidate runs.
+  3. For EACH (B in {1,2,4}, each row, each step) compare to the greedy-B=1 reference:
+       - TEXT: EXACT byte equality over the FULL stream (the hard gate).
+       - STATE (caches/hyp/pred_out): torch.allclose(atol=1e-4, rtol=1e-5) (fp32) + report max drift.
+       - emitted_frames exact.
+     Plus row-order permutation invariance at B=4, and a keep_all_outputs=True FINAL chunk per row (compare
+     final text to the greedy-B=1 final).
+  4. DECODE TIMING (the speedup ceiling): with the encoder output fixed, time decode-only ms for current
+     `greedy` (serial row loop) vs `greedy_batch` at B=1/2/4/8, and full-step ms at B=1/2/4/8. Report
+     decode-ms/stream and full-step×.
+
+GATE (decision point per the plan):
+  (a) GO greedy_batch IF: greedy_batch B=1/2/4 text BYTE-IDENTICAL to greedy B=1 over full streams + state
+      allclose + row-permute invariant + final-chunk text matches, AND greedy_batch gives ≥25% lower
+      decode/stream at B=4/8 + ≥1.5× full-step at B=4/8.
+  (b) If greedy_batch text DIVERGES from greedy B=1 anywhere → greedy_batch NO-GO. Then test the FALLBACK:
+      batch the encoder (`encoder.cache_aware_stream_step` directly) + current per-row `greedy` decode; report
+      whether it still gives ≥1.5× end-to-end at B=4/8. If the fallback is <1.5×, the plan says STOP the
+      scheduler-batching (Steps 7-8) — report STOP with the numbers; don't sink the refactor for marginal gain.
+
+CLEANUP: free the GPU (kill anything you start, by PID); report GPU free; remove temp files/__pycache__.
+
+REPORT: 1) greedy_batch B=1/2/4 text byte-identity vs greedy B=1 (full streams; any diffs verbatim); 2) state
+allclose + max drift; 3) row-permute + final-chunk; 4) decode-ms/stream + full-step× at B=1/2/4/8; 5) cleanup;
+6) GO greedy_batch / NO-GO→fallback×N / STOP — the explicit decision with numbers.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 3, Step 7, Round-4 Rules), test_batch_state.py (reuse its Geometry,
+run_streams, process_group, compare machinery — but the candidate runs use greedy_batch), batch_primitives.py.
+Probe B2 already proved current-greedy batched↔separate is state-faithful under fp32. This probe is the
+decoder-strategy equivalence at B≥2 multi-chunk. conformer_stream_step = NeMo mixins.py:592; decoder factory
+greedy vs greedy_batch = rnnt_decoding.py:384-455.
+</context>
+
+<verification_loop>
+Confirm text byte-identity over the FULL stream (every chunk), not just step 1, for B=1/2/4. If any token
+flips vs greedy B=1, that's NO-GO — print the per-clip/step diff and pivot to the fallback test.
+</verification_loop>
+
+<action_safety>
+Create ONLY proj-2026-05-21-0410/probe_greedy_batch_multichunk.py. No server.py/NeMo edits, no commits. Run
+TF32-off. Free the GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report the 6 items: text byte-identity, state allclose, permute/final, decode timing + full-step×, cleanup,
+GO/NO-GO/STOP decision with numbers.
+</compact_output_contract>

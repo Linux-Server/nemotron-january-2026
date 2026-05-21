@@ -1,0 +1,86 @@
+<task>
+Implement Step 7 of proj-2026-05-21-0410/PLAN.md: "steady-state batching (NEMOTRON_BATCH_SCHED)". Read the
+plan's Step 7 (incl. Round-4 ADDITIONS i/ii/iii), the Round-4 Rules, and the Current state. Build on the 6a
+central scheduler (the `_scheduler_*` path behind NEMOTRON_SCHEDULER_B1, already committed). Edit ONLY
+src/nemotron_speech/server.py. No git commits. (Variable-B / join-leave / fail-closed / memory / telemetry is
+Step 8 — keep this to STEADY same-group batching.)
+
+DECISION (made): use **greedy_batch GLOBALLY** when batching is on (the probe proved greedy_batch B=1/2/4 text
+byte-identical to current greedy B=1 at 3.63×/5.18× full-step). This is accepted WITH its cost: greedy_batch's
+decoder state is a `LabelLoopingStateItem` (not None/tuple), so the finalize/fork path MUST be re-validated.
+
+REQUIREMENTS:
+1. **Flag:** `NEMOTRON_BATCH_SCHED=1` (requires NEMOTRON_SCHEDULER_B1=1). Default OFF = the 6a B=1 scheduler
+   unchanged. When ON, the scheduler's ready-pass batches instead of per-session B=1.
+2. **Decoder:** when NEMOTRON_BATCH_SCHED=1, set the decoding strategy GLOBALLY to greedy_batch
+   (loop_labels=True, use_cuda_graph_decoder=False — Blackwell-safe) at load. Flag-off keeps today's greedy
+   (loop_labels=False). (C4: one global strategy on one model object — no per-call switching.)
+3. **FORK/FINALIZE RE-VALIDATION (the accepted risk — first-class):** `clone_hypotheses_deep` (server.py:139)
+   + the FORK_ASSERT (`_snapshot_fork_assert_parent` / `_assert_fork_flush_parent_unchanged`) must DEEP-clone
+   and compare `LabelLoopingStateItem` decoder state correctly, so a fork's final-chunk decode cannot mutate
+   the parent session's hypothesis/decoder state. Extend the clone/compare to handle the new state type.
+4. **TF32-off (Step-5 finding):** when NEMOTRON_BATCH_SCHED=1, set
+   `torch.backends.cuda.matmul.allow_tf32=False` + `torch.backends.cudnn.allow_tf32=False` (state-faithful
+   batching). Log it.
+5. **Batching in the scheduler ready-pass:** group ready same-group sessions by `batch_group_key`
+   (target_lang, keep_all_outputs, drop_extra, chunk_T, decoder_mode); stack via batch_primitives
+   (`stack_processed`/`stack_caches` dim1/dim0, `stack_hypotheses`/`stack_pred_out`, uniform-None) — the
+   Probe-B2-validated recipe; ONE `conformer_stream_step(B)`/tick (greedy_batch decode); scatter per row
+   (`scatter_cache_row` → owned clones; per-row hyp/pred_out as one-element lists; per-row text/emit/ring
+   update exactly as B=1). Backlogged rows requeue (one shift/tick). Never pad/coerce a not-ready row.
+6. **Dispatch policy (C-S2):** if only one eligible same-group session → dispatch immediately (B=1); else
+   start a `NEMOTRON_BATCH_MAX_WAIT_MS=5` coalescing timer on first-ready and dispatch the largest safe
+   same-group batch when `NEMOTRON_BATCH_MAX_SIZE=4` is hit OR the timer expires. Track effective-batch-size
+   histogram + queue-wait. (Don't collapse N=2/4 to B=1; don't rely on an unobservable "all ready".)
+7. Finalize/fork stays per-session B=1 on the model-call lane (it's not batched) — but now under greedy_batch
+   + the re-validated clone/FORK_ASSERT.
+
+GATE (en server, .venv-asr):
+  Start: NEMOTRON_CONTINUOUS=1 NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_FINALIZE_SILENCE_MS=0 \
+    NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1 /home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python \
+    src/nemotron_speech/server.py --model $(cat /tmp/en-nemo-path) --host 127.0.0.1 --port 8080 --right-context 1
+  (G1) CROSS-TALK byte-exact: capture each of N≥4 DISTINCT clips solo (B=1 dispatch under this same config),
+       then stream the SAME N clips CONCURRENTLY (so they batch B≥2); each stream's interim sequence + final +
+       delta must be byte-identical to its solo capture. (Compare under the SAME precision/config — this is
+       the batching-doesn't-corrupt gate; the vs-committed-TF32-baseline regression check is Step 9's
+       re-baseline, NOT this gate.)
+  (G2) FORK_ASSERT clean under greedy_batch across the concurrent run (grep the log — 0 assertion failures);
+       finalize deltas correct (no truncation/dup).
+  (G3) local knee via `proj-2026-05-19-eou-endpointing/concurrency_test.py --url ws://127.0.0.1:8080`:
+       report the keep-up knee with batching ON vs the ~14 B=1 baseline; expect a clear increase (target
+       ≥21 or +≥4). Report effective batch sizes seen.
+  (G4) N=1 TTFS within the latency rule (p95 ≤ baseline + BATCH_MAX_WAIT_MS + 10ms); final p95 <400ms.
+  CLEANUP: kill server by PID; free port 8080; report GPU free; remove temp files/__pycache__. Don't touch 8088.
+If too big for one pass, land the batched ready-pass + greedy_batch + fork re-validation + G1/G2 FIRST (the
+correctness core), and report dispatch-policy/knee (G3) tuning as a follow-up — but G1 (cross-talk byte-exact)
+and G2 (FORK_ASSERT) are non-negotiable here.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 7 + Round-4 Rules + Current state), batch_primitives.py (the validated
+stack/scatter recipe + ready_predicate), the 6a scheduler (`_scheduler_loop`, `_scheduler_process_ready_pass`,
+`_scheduler_process_one_ready_chunk_locked`, generation tokens, barriers — all in server.py), and the fork path
+(`clone_hypotheses_deep` ~139, `_build_continuous_finalize_fork`, `_snapshot_fork_assert_parent`,
+`_assert_fork_flush_parent_unchanged`, `_continuous_finalize_emit_locked`). Probe B2 proved current-greedy
+batched↔separate state-faithful under fp32; `probe_greedy_batch_multichunk.py` proved greedy_batch text ==
+greedy B=1. conformer_stream_step = NeMo mixins.py:592; greedy_batch decoder state = LabelLoopingStateItem.
+</context>
+
+<verification_loop>
+G1 first: confirm each concurrent (batched) stream is byte-identical to its solo run under the same config —
+that proves batching doesn't corrupt. Then G2 FORK_ASSERT clean under greedy_batch (the accepted risk). If any
+cross-talk diff or fork-assert failure, print it and trace (axis? scatter clone? LabelLoopingStateItem clone?
+dispatch grouping?) before reporting.
+</verification_loop>
+
+<action_safety>
+Edit ONLY server.py. No commits. Default (no NEMOTRON_BATCH_SCHED) = 6a behavior unchanged. Kill the server
+when done; don't touch port 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: 1) design (decoder switch, TF32-off, batched ready-pass, dispatch, fork/clone re-validation for
+LabelLoopingStateItem); 2) server.py regions; 3) G1 cross-talk byte-exact (N clips, batch sizes seen); 4) G2
+FORK_ASSERT; 5) G3 knee ON vs ~14 baseline + effective batch sizes; 6) G4 N=1 latency; 7) cleanup; 8) GO/NO-GO
++ anything deferred.
+</compact_output_contract>
