@@ -1,0 +1,83 @@
+<task>
+Implement Step 6 (sub-step 6a) of proj-2026-05-21-0410/PLAN.md: "shared scheduler infra, B=1 only (no
+batching)". Read the plan's Context, the "Round-4 review fixes" Rules (esp. the scheduler rollback flag C7 and
+the reset/close barrier semantics C8), Current state, and Step 6. Edit ONLY src/nemotron_speech/server.py. No
+git commits. This is 6a (queue/lane/state-ownership refactor, byte-exact B=1); 6b (full fork/finalize
+migration onto the lane) is a SEPARATE follow-up — for 6a, keep fork/finalize correct via the existing
+inference_lock (mutually exclusive with the scheduler's model calls), don't fully rewrite it yet.
+
+PARAMOUNT SAFETY (C7 — the rollback flag): add `NEMOTRON_SCHEDULER_B1` (default OFF). Flag-OFF must execute
+the EXISTING per-session continuous worker (`_continuous_session_worker`, server.py ~1702) + `_handle_audio_locked`
++ `inference_lock` path completely UNCHANGED — byte-identical to today. A scheduler bug must never reach prod
+with the flag off. Startup-log `scheduler_enabled` / `batch_enabled` / `decoder_strategy` /
+`encoder_compile_enabled`.
+
+WHEN `NEMOTRON_SCHEDULER_B1=1` (additive new path):
+- A SINGLE central scheduler/drain task owns ALL ASR-state mutation (replacing the per-session worker's
+  inference calls). Sessions ENQUEUE audio + control events to the scheduler; they no longer call
+  `_process_chunk` themselves.
+- Deduped per-session READY set (a session-id set, not per-chunk). Each tick: collect ready sessions
+  (use the exact `ready_predicate` from batch_primitives.py), process each ready session's ONE chunk B=1 via
+  the existing `_process_chunk` math (IDENTICAL — NO batching in 6a; batching is Step 7). A backlogged session
+  does ONE shift then requeues (no multi-drain monopoly, no frame drop — bounded awaited put).
+- Single MODEL-CALL LANE serializes all model calls (normal chunks, warmup, finalize/fork). Per-session
+  generation/in-flight token so a queued chunk can't race a finalize/fork of the same session.
+- Per-session ORDER preserved (a session's chunks/control processed in arrival order) — this is required for
+  byte-exactness. Cross-session interleaving is fine (independent state).
+- The WS protocol/handshake + the Pipecat/`concurrency_test` client are UNCHANGED (the scheduler is internal;
+  do NOT touch the handler message flow, the ready/transcript/finalize message shapes, or timing semantics).
+
+BARRIER SEMANTICS (C8): reset / end / close / vad_stop-finalize for a session must: remove it from the ready
+set, wait-for-or-invalidate any in-flight generation for that session, drain/fold its earlier queued audio
+into state, THEN run finalize/fork. Every scatter + send must check the session's generation token before
+mutating/sending (no stale output into a session that finalized/reset/closed). For 6a, finalize/fork itself
+can still run via `_continuous_finalize_emit_locked` under `inference_lock` (which the scheduler lane also
+holds for its model calls → mutually exclusive, no race); just ensure the ordering/barrier above.
+
+TELEMETRY: model_lane_wait_ms, ready-set size, queue depth, per-session lag. fork_clone_ms if cheap.
+
+GATE (en server, .venv-asr — torch lacks in plain .venv): start with
+  NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1 \
+  [NEMOTRON_SCHEDULER_B1=1] /home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python \
+    src/nemotron_speech/server.py --model $(cat /tmp/en-nemo-path) --host 127.0.0.1 --port 8080 --right-context 1
+Use a COPY of baseline_capture.py (or an output-path arg) — do NOT overwrite baseline/english_baseline.json.
+  (G1) flag OFF → 8/8 byte-identical to the committed baseline (proves zero regression on the default path).
+  (G2) flag ON (NEMOTRON_SCHEDULER_B1=1) → 8/8 byte-identical to the committed baseline (interim seq + final +
+       delta), AND emitted/decoder state correct; FORK_ASSERT clean.
+  (G3) no latency regression flag-on vs flag-off at N=1..4 (the existing concurrency harness
+       `proj-2026-05-19-eou-endpointing/concurrency_test.py --url ws://127.0.0.1:8080`); final p95 <400ms.
+  (G4) barrier cases (flag-on): finalize-while-queued, close-while-in-flight, backlog+reset — each produces
+       the correct final and no stale/duplicate emission (script short ws clients).
+  CLEANUP: kill server by PID; free port 8080; report GPU free; remove temp capture files/__pycache__.
+If the full 6a is too large for one pass, land the queue/lane/state-ownership + rollback flag + byte-exact B=1
+FIRST and report what remains (barriers/telemetry) for a follow-up — but G1+G2 (byte-exact, both flags) are
+non-negotiable for this delegation.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Context, Round-4 Rules C7/C8, Current state, Step 6) + the current
+continuous path: `_continuous_session_worker` (~1702), `_queue_continuous_ws_message` (~1641),
+`_continuous_handle_audio_locked` (~2069), `_handle_audio_locked` (~2390), `_process_chunk` (~2437, now via
+`_conformer_stream_step`), the finalize/fork (`_continuous_finalize_emit_locked` ~2477, `_build_continuous_finalize_fork`
+~2335, `_process_final_chunk` ~2943), `inference_lock` (~463), `ASRSession` (~364). batch_primitives.ready_predicate
+encodes the readiness guard. The committed byte-exact reference is baseline/english_baseline.json (8 clips).
+Step 4 added `_conformer_stream_step` + a dedicated executor when compile is on; the scheduler must coexist
+with both flags (encoder-compile OFF by default; don't assume it's on).
+</context>
+
+<verification_loop>
+Confirm G1 (flag-off byte-identical) FIRST — it proves the rollback path is untouched. Then G2 (flag-on
+byte-identical), G3 (latency), G4 (barriers). If any byte mismatch flag-on, print per-clip diffs and trace
+the cause (ordering? state ownership? generation token?) before reporting.
+</verification_loop>
+
+<action_safety>
+Edit ONLY server.py. No commits. Default OFF = exact current behavior. Don't change the WS protocol or the
+client. Kill the server when done; don't touch port 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: 1) design (scheduler task, ready set, lane, generation token, barrier handling, flag gating); 2)
+server.py regions changed; 3) G1 flag-off 8/8; 4) G2 flag-on 8/8 + FORK_ASSERT; 5) G3 latency N=1..4; 6) G4
+barrier cases; 7) what (if anything) is deferred to a 6a-follow-up / 6b; 8) cleanup; 9) GO/NO-GO.
+</compact_output_contract>

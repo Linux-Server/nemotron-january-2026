@@ -21,6 +21,11 @@ import torch
 from aiohttp import ClientConnectionResetError, web, WSMsgType
 from loguru import logger
 
+try:
+    from nemotron_speech.batch_primitives import ready_predicate
+except ImportError:  # Allows `python src/nemotron_speech/server.py`.
+    from batch_primitives import ready_predicate
+
 # Enable debug logging with DEBUG_ASR=1
 DEBUG_ASR = os.environ.get("DEBUG_ASR", "0") == "1"
 
@@ -425,6 +430,10 @@ class ASRSession:
     continuous_debounce_expiry_ts: Optional[float] = None
     eou_probe_chunk_index: int = 0
     eou_snapshot_audio: bytearray = field(default_factory=bytearray)
+    scheduler_generation: int = 0
+    scheduler_inflight_generation: Optional[int] = None
+    scheduler_closed: bool = False
+    scheduler_last_audio_monotonic: Optional[float] = None
 
     # Audio overlap buffer for mid-utterance reset continuity
     # This preserves the last N ms of audio to provide encoder left-context
@@ -464,6 +473,19 @@ class ASRServer:
         self.inference_lock = asyncio.Lock()
 
         self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
+        self.scheduler_b1_requested = os.environ.get("NEMOTRON_SCHEDULER_B1", "") == "1"
+        self.scheduler_enabled = self.continuous_context and self.scheduler_b1_requested
+        self.batch_enabled = os.environ.get("NEMOTRON_BATCH_SCHED", "") == "1"
+        self.scheduler_queue_maxsize = _env_int("NEMOTRON_SCHEDULER_QUEUE_MAXSIZE", 256)
+        if self.scheduler_queue_maxsize <= 0:
+            raise ValueError("NEMOTRON_SCHEDULER_QUEUE_MAXSIZE must be > 0")
+        self.scheduler_task: Optional[asyncio.Task] = None
+        self._scheduler_wakeup: Optional[asyncio.Event] = None
+        self._scheduler_ready: set[str] = set()
+        self._scheduler_chunks = 0
+        self._scheduler_lane_wait_ms_total = 0.0
+        self._scheduler_lane_wait_ms_max = 0.0
+        self.decoder_strategy = os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower()
         self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
         self.eou_probe_enabled = os.environ.get("NEMOTRON_EOU_PROBE", "") == "1"
         # Per-chunk profiling (additive, flag-gated): time preprocess vs conformer_stream_step
@@ -805,7 +827,7 @@ class ASRServer:
         # Decoding strategy: greedy (default, Blackwell-safe) or beam via
         # NEMOTRON_DECODING=beam (experimental; may be slower / unsupported on
         # some GPUs).
-        _decoding = os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower()
+        _decoding = self.decoder_strategy
         if _decoding == "beam":
             logger.info("Configuring BEAM (maes) decoding...")
             _decoding_cfg = OmegaConf.create({
@@ -926,6 +948,13 @@ class ASRServer:
         logger.info(f"Audio overlap for resets: {overlap_ms:.0f}ms ({self.overlap_samples} samples)")
 
         self._configure_encoder_compile()
+        logger.info(
+            "startup_flags "
+            f"scheduler_enabled={self.scheduler_enabled} "
+            f"batch_enabled={self.batch_enabled} "
+            f"decoder_strategy={self.decoder_strategy} "
+            f"encoder_compile_enabled={self.encoder_compile_enabled}"
+        )
 
         # Warmup inference to ensure model is fully loaded on GPU
         # This prevents GPU memory issues when LLM starts later
@@ -1881,7 +1910,10 @@ class ASRServer:
 
             async for msg in ws:
                 if self.continuous_context:
-                    await self._queue_continuous_ws_message(session, msg)
+                    if self.scheduler_enabled:
+                        await self._queue_scheduler_ws_message(session, msg)
+                    else:
+                        await self._queue_continuous_ws_message(session, msg)
                     continue
 
                 if msg.type == WSMsgType.BINARY:
@@ -1933,6 +1965,10 @@ class ASRServer:
 
     def _start_continuous_session(self, session: ASRSession) -> None:
         """Start the ordered per-session event worker for continuous mode."""
+        if self.scheduler_enabled:
+            self._start_scheduler_continuous_session(session)
+            return
+
         session.continuous_event_queue = asyncio.Queue()
         session.continuous_worker_task = asyncio.create_task(
             self._continuous_session_worker(session),
@@ -1971,6 +2007,672 @@ class ASRServer:
             logger.error(f"Client {session.id} WebSocket error: {session.websocket.exception()}")
         elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
             await queue.put(("close",))
+
+    def _ensure_scheduler_task(self) -> None:
+        if not self.scheduler_enabled:
+            return
+        if self._scheduler_wakeup is None:
+            self._scheduler_wakeup = asyncio.Event()
+        if self.scheduler_task is None or self.scheduler_task.done():
+            self.scheduler_task = asyncio.create_task(
+                self._scheduler_loop(),
+                name="nemotron-scheduler-b1",
+            )
+            logger.info(
+                "scheduler_b1_started "
+                f"queue_maxsize={self.scheduler_queue_maxsize} batch_size=1"
+            )
+
+    def _wake_scheduler(self) -> None:
+        if self._scheduler_wakeup is not None:
+            self._scheduler_wakeup.set()
+
+    def _start_scheduler_continuous_session(self, session: ASRSession) -> None:
+        """Start scheduler-owned continuous mode without a per-session worker."""
+        self._ensure_scheduler_task()
+        session.continuous_event_queue = asyncio.Queue(
+            maxsize=self.scheduler_queue_maxsize
+        )
+        session.continuous_worker_task = None
+        session.scheduler_closed = False
+        logger.info(
+            f"Session {session.id}: continuous context enabled via scheduler_b1 "
+            f"(debounce={self.finalize_silence_ms}ms)"
+        )
+
+    async def _scheduler_queue_event(self, session: ASRSession, event: tuple) -> None:
+        queue = session.continuous_event_queue
+        if queue is None:
+            logger.warning(f"Session {session.id}: scheduler event queue missing")
+            return
+        await queue.put(event)
+        self._wake_scheduler()
+
+    async def _queue_scheduler_ws_message(self, session: ASRSession, msg) -> None:
+        """Queue raw WS events for the central B=1 scheduler."""
+        if msg.type == WSMsgType.BINARY:
+            await self._scheduler_queue_event(session, ("audio", msg.data))
+        elif msg.type == WSMsgType.TEXT:
+            try:
+                data = json.loads(msg.data)
+            except json.JSONDecodeError:
+                logger.warning(f"Client {session.id}: invalid JSON")
+                return
+
+            msg_type = data.get("type")
+            if msg_type == "reset" or msg_type == "end":
+                finalize = data.get("finalize", True)
+                await self._scheduler_queue_event(session, ("reset", finalize, msg_type))
+            elif msg_type == "vad_start" or msg_type == "vad_stop":
+                await self._scheduler_queue_event(session, (msg_type,))
+            else:
+                logger.warning(f"Client {session.id}: unknown message type: {msg_type}")
+        elif msg.type == WSMsgType.ERROR:
+            logger.error(f"Client {session.id} WebSocket error: {session.websocket.exception()}")
+        elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
+            await self._scheduler_queue_event(session, ("close",))
+
+    def _scheduler_has_work(self) -> bool:
+        if self._scheduler_ready:
+            return True
+        for session in list(self.sessions.values()):
+            queue = session.continuous_event_queue
+            if queue is not None and not queue.empty():
+                return True
+        return False
+
+    async def _scheduler_loop(self) -> None:
+        logger.info("scheduler_b1_loop_running")
+        while True:
+            try:
+                progressed = await self._scheduler_drain_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"scheduler_b1_loop_error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                progressed = False
+
+            if progressed:
+                continue
+
+            if self._scheduler_wakeup is None:
+                self._scheduler_wakeup = asyncio.Event()
+            self._scheduler_wakeup.clear()
+            if self._scheduler_has_work():
+                continue
+            await self._scheduler_wakeup.wait()
+
+    async def _scheduler_drain_once(self) -> bool:
+        progressed = False
+        for session in list(self.sessions.values()):
+            queue = session.continuous_event_queue
+            if queue is None:
+                continue
+            try:
+                event = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                continue
+
+            try:
+                await self._scheduler_process_event(session, event)
+            finally:
+                queue.task_done()
+            progressed = True
+
+        if self._scheduler_ready:
+            await self._scheduler_process_ready_pass()
+            progressed = True
+
+        return progressed
+
+    def _scheduler_session_ready(self, session: ASRSession) -> bool:
+        if session.scheduler_closed or session.continuous_event_queue is None:
+            return False
+        pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
+        return ready_predicate(
+            synthetic_prefix_samples=session.synthetic_prefix_samples,
+            total_audio_samples=session.total_audio_samples,
+            emitted_frames=session.emitted_frames,
+            shift_frames=self.shift_frames,
+            hop_samples=self.hop_samples,
+            pending_audio_len=pending_len,
+            preprocess_new_audio_samples=self.preprocess_new_audio_samples,
+        )
+
+    def _scheduler_mark_ready_if_ready_locked(self, session: ASRSession) -> None:
+        if self._scheduler_session_ready(session):
+            self._scheduler_ready.add(session.id)
+        else:
+            self._scheduler_ready.discard(session.id)
+
+    async def _scheduler_process_ready_pass(self) -> None:
+        ready_ids = list(self._scheduler_ready)
+        self._scheduler_ready.clear()
+        for session_id in ready_ids:
+            session = self.sessions.get(session_id)
+            if session is None:
+                continue
+            async with session.state_lock:
+                if not self._scheduler_session_ready(session):
+                    continue
+                await self._scheduler_process_one_ready_chunk_locked(
+                    session,
+                    reason="ready",
+                    requeue=True,
+                )
+
+    async def _scheduler_process_one_ready_chunk_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+        requeue: bool,
+    ) -> bool:
+        if not self._scheduler_session_ready(session):
+            self._scheduler_ready.discard(session.id)
+            return False
+
+        self._scheduler_ready.discard(session.id)
+        generation = session.scheduler_generation
+        session.scheduler_inflight_generation = generation
+        lane_wait_start = time.perf_counter()
+        lane_wait_ms = 0.0
+        text: Optional[str] = None
+        try:
+            async with self.inference_lock:
+                lane_wait_ms = (time.perf_counter() - lane_wait_start) * 1000.0
+                if generation != session.scheduler_generation or session.scheduler_closed:
+                    logger.debug(
+                        f"Session {session.id}: skipped stale scheduler chunk "
+                        f"reason={reason} gen={generation} current={session.scheduler_generation}"
+                    )
+                    return False
+                text = await self._run_inference_call(self._process_chunk, session)
+        finally:
+            session.scheduler_inflight_generation = None
+
+        if generation != session.scheduler_generation or session.scheduler_closed:
+            logger.debug(
+                f"Session {session.id}: suppressed stale scheduler chunk output "
+                f"reason={reason} gen={generation} current={session.scheduler_generation}"
+            )
+            return False
+
+        if text is not None and text != session.current_text:
+            session.current_text = text
+            logger.debug(
+                f"Session {session.id} interim: "
+                f"{text[-50:] if len(text) > 50 else text}"
+            )
+            if generation == session.scheduler_generation and not session.scheduler_closed:
+                await self._send_json_locked(
+                    session,
+                    {
+                        "type": "transcript",
+                        "text": text,
+                        "is_final": False,
+                    },
+                    tolerate_closed=True,
+                    description="scheduler interim transcript",
+                )
+
+        self._scheduler_record_chunk_telemetry(session, lane_wait_ms, reason)
+        if requeue:
+            self._scheduler_mark_ready_if_ready_locked(session)
+        return True
+
+    def _scheduler_record_chunk_telemetry(
+        self,
+        session: ASRSession,
+        lane_wait_ms: float,
+        reason: str,
+    ) -> None:
+        self._scheduler_chunks += 1
+        self._scheduler_lane_wait_ms_total += lane_wait_ms
+        self._scheduler_lane_wait_ms_max = max(
+            self._scheduler_lane_wait_ms_max,
+            lane_wait_ms,
+        )
+        queue = session.continuous_event_queue
+        queue_depth = queue.qsize() if queue is not None else 0
+        lag_ms = None
+        if session.scheduler_last_audio_monotonic is not None:
+            lag_ms = (time.monotonic() - session.scheduler_last_audio_monotonic) * 1000.0
+        lag_label = f"{lag_ms:.2f}" if lag_ms is not None else "n/a"
+        if self._scheduler_chunks % 50 == 0:
+            avg_wait = self._scheduler_lane_wait_ms_total / self._scheduler_chunks
+            logger.info(
+                "scheduler_b1_telemetry "
+                f"chunks={self._scheduler_chunks} "
+                f"model_lane_wait_avg_ms={avg_wait:.2f} "
+                f"model_lane_wait_max_ms={self._scheduler_lane_wait_ms_max:.2f} "
+                f"ready_set_size={len(self._scheduler_ready)} "
+                f"queue_depth={queue_depth} "
+                f"last_session={session.id} "
+                f"last_session_lag_ms={lag_label}"
+            )
+
+    async def _scheduler_drain_ready_barrier_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        self._scheduler_ready.discard(session.id)
+        if session.scheduler_inflight_generation is not None:
+            logger.debug(
+                f"Session {session.id}: scheduler barrier waiting for in-flight "
+                f"gen={session.scheduler_inflight_generation} reason={reason}"
+            )
+        drained = 0
+        while self._scheduler_session_ready(session):
+            processed = await self._scheduler_process_one_ready_chunk_locked(
+                session,
+                reason=f"barrier:{reason}",
+                requeue=False,
+            )
+            self._scheduler_ready.discard(session.id)
+            if not processed:
+                break
+            drained += 1
+        if drained:
+            logger.debug(
+                f"Session {session.id}: scheduler barrier drained {drained} "
+                f"ready chunks before {reason}"
+            )
+
+    def _scheduler_invalidate_session_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> int:
+        self._scheduler_ready.discard(session.id)
+        session.scheduler_generation += 1
+        logger.debug(
+            f"Session {session.id}: scheduler generation={session.scheduler_generation} "
+            f"reason={reason}"
+        )
+        return session.scheduler_generation
+
+    async def _scheduler_process_event(self, session: ASRSession, event: tuple) -> None:
+        event_type = event[0]
+        close_future = event[1] if event_type == "close" and len(event) > 1 else None
+        try:
+            async with session.state_lock:
+                if event_type != "audio":
+                    self._scheduler_ready.discard(session.id)
+                    await self._scheduler_drain_ready_barrier_locked(
+                        session,
+                        reason=event_type,
+                    )
+
+                if event_type == "close":
+                    await self._scheduler_continuous_handle_close_locked(session)
+                elif event_type == "audio":
+                    await self._scheduler_continuous_handle_audio_locked(session, event[1])
+                elif event_type == "vad_start":
+                    await self._scheduler_continuous_handle_vad_start_locked(session)
+                elif event_type == "vad_stop":
+                    await self._scheduler_continuous_handle_vad_stop_locked(session)
+                elif event_type == "reset":
+                    await self._scheduler_continuous_handle_reset_locked(
+                        session,
+                        finalize=event[1],
+                        msg_type=event[2],
+                    )
+                elif event_type == "debounce_expired":
+                    await self._scheduler_continuous_handle_debounce_expired_locked(
+                        session,
+                        stop_seq=event[1],
+                    )
+                else:
+                    logger.warning(
+                        f"Session {session.id}: unknown scheduler event {event_type}"
+                    )
+        except Exception as e:
+            logger.error(f"Session {session.id} scheduler worker error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            try:
+                await session.websocket.send_str(json.dumps({
+                    "type": "error",
+                    "message": str(e)
+                }))
+            except Exception:
+                pass
+        finally:
+            if close_future is not None and not close_future.done():
+                close_future.set_result(True)
+
+    async def _scheduler_continuous_handle_audio_locked(
+        self,
+        session: ASRSession,
+        audio_bytes: bytes,
+    ) -> None:
+        if session.continuous_state == PENDING_FINALIZE:
+            session.continuous_post_stop_audio.extend(audio_bytes)
+            if DEBUG_ASR:
+                samples = len(session.continuous_post_stop_audio) // 2
+                logger.debug(
+                    f"Session {session.id}: held {len(audio_bytes)}B post-vad_stop "
+                    f"audio ({samples} total samples) while pending finalize"
+                )
+            return
+
+        if session.continuous_post_stop_audio:
+            await self._scheduler_flush_post_stop_audio_locked(
+                session,
+                reason="streaming_resume",
+            )
+
+        await self._scheduler_append_audio_locked(session, audio_bytes)
+
+    async def _scheduler_append_audio_locked(
+        self,
+        session: ASRSession,
+        audio_bytes: bytes,
+    ) -> None:
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+        if DEBUG_ASR:
+            chunk_hash = hashlib.md5(audio_bytes).hexdigest()[:8]
+            logger.debug(
+                f"Session {session.id}: recv chunk {len(audio_bytes)}B hash={chunk_hash}"
+            )
+
+        self._capture_eou_snapshot_audio(session, audio_bytes)
+
+        session.pending_audio = np.concatenate([session.pending_audio, audio_np])
+        session.accumulated_audio = session.pending_audio
+        session.total_audio_samples += len(audio_np)
+        session.scheduler_last_audio_monotonic = time.monotonic()
+        self._scheduler_mark_ready_if_ready_locked(session)
+
+    async def _scheduler_flush_post_stop_audio_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        if not session.continuous_post_stop_audio:
+            return
+
+        audio_bytes = bytes(session.continuous_post_stop_audio)
+        session.continuous_post_stop_audio.clear()
+        samples = len(audio_bytes) // 2
+        logger.debug(
+            f"Session {session.id}: flushing {samples} post-vad_stop samples "
+            f"for {reason}"
+        )
+        await self._scheduler_append_audio_locked(session, audio_bytes)
+
+    def _scheduler_discard_post_stop_audio_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        if not session.continuous_post_stop_audio:
+            return
+
+        samples = len(session.continuous_post_stop_audio) // 2
+        session.continuous_post_stop_audio.clear()
+        logger.debug(
+            f"Session {session.id}: discarded {samples} post-vad_stop samples "
+            f"at true boundary ({reason})"
+        )
+
+    async def _scheduler_continuous_force_finalize_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+        include_post_stop_audio: bool,
+    ) -> None:
+        if reason not in _TRUE_BOUNDARY_FINALIZE_REASONS:
+            raise RuntimeError(
+                "continuous cold reset requested for non-boundary reason "
+                f"{reason!r}"
+            )
+
+        await self._continuous_cancel_debounce_locked(session, invalidate=True)
+        if include_post_stop_audio:
+            await self._scheduler_flush_post_stop_audio_locked(session, reason=reason)
+            await self._scheduler_drain_ready_barrier_locked(
+                session,
+                reason=f"{reason}:post_stop",
+            )
+        else:
+            self._scheduler_discard_post_stop_audio_locked(session, reason=reason)
+
+        if not self._continuous_has_audio_or_text(session):
+            session.continuous_state = STREAMING
+            session.continuous_reset_seen = False
+            session.continuous_vad_stop_ts = None
+            session.continuous_debounce_expiry_ts = None
+            logger.debug(
+                f"Session {session.id}: ignored empty forced continuous finalize "
+                f"for {reason}"
+            )
+            return
+
+        session.continuous_state = FINALIZED
+        if session.continuous_debounce_expiry_ts is None:
+            session.continuous_debounce_expiry_ts = time.time()
+        self._scheduler_invalidate_session_locked(session, reason=reason)
+        logger.debug(f"Session {session.id}: forced continuous finalize for {reason}")
+        await self._scheduler_continuous_finalize_and_reset_locked(
+            session,
+            reason=reason,
+        )
+
+    async def _scheduler_continuous_handle_close_locked(self, session: ASRSession) -> None:
+        if (
+            session.continuous_state == PENDING_FINALIZE
+            or self._continuous_has_audio_or_text(session)
+            or session.continuous_post_stop_audio
+        ):
+            await self._scheduler_continuous_force_finalize_locked(
+                session,
+                reason="close",
+                include_post_stop_audio=True,
+            )
+        else:
+            logger.debug(
+                f"Session {session.id}: continuous close with no pending final"
+            )
+        session.scheduler_closed = True
+        self._scheduler_ready.discard(session.id)
+        self._scheduler_invalidate_session_locked(session, reason="close")
+
+    async def _scheduler_continuous_handle_vad_start_locked(
+        self,
+        session: ASRSession,
+    ) -> None:
+        if session.continuous_state == PENDING_FINALIZE:
+            await self._continuous_cancel_debounce_locked(session, invalidate=True)
+            session.continuous_state = STREAMING
+            session.continuous_reset_seen = False
+            session.continuous_vad_stop_ts = None
+            session.continuous_debounce_expiry_ts = None
+            logger.debug(
+                f"Session {session.id}: vad_start canceled pending finalize; "
+                "discarded speculative fork and continuing same ASR context"
+            )
+            await self._scheduler_flush_post_stop_audio_locked(
+                session,
+                reason="vad_start",
+            )
+        else:
+            if session.continuous_post_stop_audio:
+                await self._scheduler_flush_post_stop_audio_locked(
+                    session,
+                    reason="vad_start_after_speculative_finalize",
+                )
+            logger.debug(
+                f"Session {session.id}: vad_start in state={session.continuous_state}"
+            )
+
+    async def _scheduler_continuous_handle_vad_stop_locked(
+        self,
+        session: ASRSession,
+    ) -> None:
+        self._scheduler_invalidate_session_locked(session, reason="vad_stop")
+        await self._continuous_cancel_debounce_locked(session, invalidate=False)
+        session.continuous_stop_seq += 1
+        stop_seq = session.continuous_stop_seq
+        session.continuous_state = PENDING_FINALIZE
+        session.continuous_reset_seen = False
+        session.continuous_vad_stop_ts = time.time()
+        session.continuous_debounce_expiry_ts = None
+        session.continuous_debounce_task = asyncio.create_task(
+            self._continuous_debounce_timer(session.id, stop_seq),
+            name=f"nemotron-continuous-debounce-{session.id}-{stop_seq}",
+        )
+        logger.debug(
+            f"Session {session.id}: vad_stop armed pending finalize seq={stop_seq} "
+            f"({self.finalize_silence_ms}ms)"
+        )
+
+    async def _scheduler_continuous_handle_reset_locked(
+        self,
+        session: ASRSession,
+        *,
+        finalize: bool,
+        msg_type: str,
+    ) -> None:
+        if not finalize:
+            text = session.current_text
+            await self._send_json_locked(
+                session,
+                {
+                    "type": "transcript",
+                    "text": text,
+                    "is_final": True,
+                    "finalize": False,
+                },
+                tolerate_closed=False,
+                description="continuous soft reset",
+            )
+            logger.debug(
+                f"Session {session.id}: continuous soft reset: "
+                f"'{text[-50:] if len(text) > 50 else text}'"
+            )
+            return
+
+        if msg_type == "end":
+            if session.continuous_state == PENDING_FINALIZE:
+                session.continuous_reset_seen = True
+            if (
+                session.continuous_state == PENDING_FINALIZE
+                or self._continuous_has_audio_or_text(session)
+                or session.continuous_post_stop_audio
+            ):
+                await self._scheduler_continuous_force_finalize_locked(
+                    session,
+                    reason=msg_type,
+                    include_post_stop_audio=True,
+                )
+                return
+
+            logger.debug(
+                f"Session {session.id}: ignored empty continuous {msg_type} in "
+                f"state={session.continuous_state}"
+            )
+            return
+
+        if session.continuous_state == PENDING_FINALIZE:
+            session.continuous_reset_seen = True
+            logger.debug(
+                f"Session {session.id}: delayed client {msg_type} while "
+                "server debounce is pending"
+            )
+            return
+
+        if self._continuous_has_audio_or_text(session):
+            logger.debug(
+                f"Session {session.id}: immediate continuous {msg_type} "
+                "without pending VAD stop; speculative finalizing with "
+                "context retained"
+            )
+            session.continuous_state = FINALIZED
+            self._scheduler_invalidate_session_locked(session, reason=msg_type)
+            await self._scheduler_continuous_finalize_emit_locked(
+                session,
+                reason=msg_type,
+            )
+            self._continuous_finish_speculative_finalize_locked(
+                session,
+                reason=msg_type,
+            )
+            return
+
+        logger.debug(
+            f"Session {session.id}: ignored empty continuous {msg_type} in "
+            f"state={session.continuous_state}"
+        )
+
+    async def _scheduler_continuous_handle_debounce_expired_locked(
+        self,
+        session: ASRSession,
+        *,
+        stop_seq: int,
+    ) -> None:
+        if (
+            session.continuous_state != PENDING_FINALIZE
+            or stop_seq != session.continuous_stop_seq
+        ):
+            logger.debug(
+                f"Session {session.id}: ignored stale debounce expiry "
+                f"seq={stop_seq} current={session.continuous_stop_seq} "
+                f"state={session.continuous_state}"
+            )
+            return
+
+        session.continuous_debounce_task = None
+        reset_seen = session.continuous_reset_seen
+        session.continuous_reset_seen = False
+        session.continuous_state = FINALIZED
+        session.continuous_debounce_expiry_ts = time.time()
+        logger.debug(
+            f"Session {session.id}: debounce expired seq={stop_seq}; "
+            f"finalizing (reset_seen={reset_seen})"
+        )
+        reason = "reset_then_debounce" if reset_seen else "debounce_expired"
+        self._scheduler_invalidate_session_locked(session, reason=reason)
+        await self._scheduler_continuous_finalize_emit_locked(session, reason=reason)
+        self._continuous_finish_speculative_finalize_locked(
+            session,
+            reason=reason,
+        )
+
+    async def _scheduler_continuous_finalize_emit_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        await self._continuous_finalize_emit_locked(
+            session,
+            reason=reason,
+            expected_generation=session.scheduler_generation,
+        )
+
+    async def _scheduler_continuous_finalize_and_reset_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        await self._scheduler_continuous_finalize_emit_locked(session, reason=reason)
+        await self._continuous_cold_reset_after_finalize_locked(session, reason=reason)
+        self._scheduler_invalidate_session_locked(
+            session,
+            reason=f"{reason}:cold_reset_complete",
+        )
 
     async def _send_json_locked(
         self,
@@ -2058,6 +2760,10 @@ class ASRServer:
 
     async def _close_continuous_session(self, session: ASRSession) -> None:
         """Drain pending finalization through the worker and stop continuous mode."""
+        if self.scheduler_enabled:
+            await self._close_scheduler_continuous_session(session)
+            return
+
         queue = session.continuous_event_queue
         worker = session.continuous_worker_task
         if queue is not None and worker is not None and not worker.done():
@@ -2077,6 +2783,29 @@ class ASRServer:
         session.continuous_worker_task = None
         session.continuous_post_stop_audio.clear()
 
+    async def _close_scheduler_continuous_session(self, session: ASRSession) -> None:
+        queue = session.continuous_event_queue
+        if queue is not None:
+            close_future = asyncio.get_running_loop().create_future()
+            await queue.put(("close", close_future))
+            self._wake_scheduler()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await close_future
+
+        task = session.continuous_debounce_task
+        session.continuous_debounce_task = None
+        session.continuous_stop_seq += 1
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        self._scheduler_ready.discard(session.id)
+        session.continuous_event_queue = None
+        session.continuous_worker_task = None
+        session.continuous_post_stop_audio.clear()
+        session.scheduler_closed = True
+
     async def _continuous_debounce_timer(self, session_id: str, stop_seq: int) -> None:
         """Wake after server-side silence and enqueue a finalize decision."""
         try:
@@ -2085,6 +2814,7 @@ class ASRServer:
             if session is None or session.continuous_event_queue is None:
                 return
             await session.continuous_event_queue.put(("debounce_expired", stop_seq))
+            self._wake_scheduler()
         except asyncio.CancelledError:
             pass
 
@@ -2517,8 +3247,20 @@ class ASRServer:
         session: ASRSession,
         *,
         reason: str,
+        expected_generation: Optional[int] = None,
     ) -> None:
         """Finalize once on a disposable fork and emit one incremental delta."""
+        if (
+            expected_generation is not None
+            and expected_generation != session.scheduler_generation
+        ):
+            logger.debug(
+                f"Session {session.id}: skipped stale continuous finalize "
+                f"reason={reason} expected_gen={expected_generation} "
+                f"current_gen={session.scheduler_generation}"
+            )
+            return
+
         audio_samples = session.total_audio_samples
         audio_duration_ms = (audio_samples * 1000) // self.sample_rate
         pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
@@ -2552,10 +3294,27 @@ class ASRServer:
                 if self.fork_assert_enabled
                 else None
             )
+            fork_clone_start = time.perf_counter()
             fork = self._build_continuous_finalize_fork(session)
+            fork_clone_ms = (time.perf_counter() - fork_clone_start) * 1000
+            if self.scheduler_enabled:
+                logger.info(
+                    f"Session {session.id}: scheduler_b1 fork_clone_ms="
+                    f"{fork_clone_ms:.2f} reason={reason}"
+                )
             if fork.pending_audio is not None and len(fork.pending_audio) > 0:
                 lock_wait_start = time.perf_counter()
                 async with self.inference_lock:
+                    if (
+                        expected_generation is not None
+                        and expected_generation != session.scheduler_generation
+                    ):
+                        logger.debug(
+                            f"Session {session.id}: skipped stale fork final chunk "
+                            f"reason={reason} expected_gen={expected_generation} "
+                            f"current_gen={session.scheduler_generation}"
+                        )
+                        return
                     timing["inference_lock_acquire_wait_ms"] = (
                         time.perf_counter() - lock_wait_start
                     ) * 1000
@@ -2582,6 +3341,17 @@ class ASRServer:
             final_text,
             session.continuous_emitted_text,
         )
+
+        if (
+            expected_generation is not None
+            and expected_generation != session.scheduler_generation
+        ):
+            logger.debug(
+                f"Session {session.id}: suppressed stale continuous final "
+                f"reason={reason} expected_gen={expected_generation} "
+                f"current_gen={session.scheduler_generation}"
+            )
+            return
 
         session.committed_text = final_text
         session.last_emitted_text = final_text
@@ -3097,6 +3867,8 @@ class ASRServer:
         """Start the HTTP + WebSocket server."""
         self.load_model()
         self.model_loaded = True
+        if self.scheduler_enabled:
+            self._ensure_scheduler_task()
 
         logger.info(f"Starting streaming ASR server on ws://{self.host}:{self.port}")
 
