@@ -66,6 +66,16 @@ def _env_int(name: str, default: int) -> int:
         raise ValueError(f"{name} must be an integer, got {value!r}") from e
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a float, got {value!r}") from e
+
+
 def _telemetry_run_tag() -> str | None:
     for env_name in (
         "NEMOTRON_RUN_TAG",
@@ -505,7 +515,15 @@ class ASRServer:
         self.continuous_context = os.environ.get("NEMOTRON_CONTINUOUS", "") == "1"
         self.scheduler_b1_requested = os.environ.get("NEMOTRON_SCHEDULER_B1", "") == "1"
         self.scheduler_enabled = self.continuous_context and self.scheduler_b1_requested
-        self.batch_enabled = os.environ.get("NEMOTRON_BATCH_SCHED", "") == "1"
+        self.batch_requested = os.environ.get("NEMOTRON_BATCH_SCHED", "") == "1"
+        self.batch_enabled = self.batch_requested
+        self.batch_fallback_reason: Optional[str] = None
+        self.requested_decoder_strategy = (
+            os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower() or "greedy"
+        )
+        self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
+        self.eou_probe_enabled = os.environ.get("NEMOTRON_EOU_PROBE", "") == "1"
+        self._scheduler_batch_fallback_counts: dict[str, int] = {}
         if self.batch_enabled and not self.scheduler_b1_requested:
             raise ValueError("NEMOTRON_BATCH_SCHED=1 requires NEMOTRON_SCHEDULER_B1=1")
         if self.batch_enabled and not self.scheduler_enabled:
@@ -513,6 +531,13 @@ class ASRServer:
                 "NEMOTRON_BATCH_SCHED=1 requires the continuous scheduler "
                 "(NEMOTRON_CONTINUOUS=1 and NEMOTRON_SCHEDULER_B1=1)"
             )
+        if self.batch_requested and self.requested_decoder_strategy not in ("", "greedy"):
+            raise ValueError(
+                "NEMOTRON_BATCH_SCHED=1 requires NEMOTRON_DECODING=greedy "
+                f"(got {self.requested_decoder_strategy!r})"
+            )
+        if self.batch_enabled and self.eou_probe_enabled:
+            self._disable_batching("eou_probe_preserve_alignments_unprobed")
         if self.batch_enabled:
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
@@ -529,6 +554,27 @@ class ASRServer:
             raise ValueError("NEMOTRON_BATCH_MAX_WAIT_MS must be >= 0")
         if self.batch_max_size <= 0:
             raise ValueError("NEMOTRON_BATCH_MAX_SIZE must be > 0")
+        if self.batch_requested and not self.batch_enabled:
+            self.batch_max_size = 1
+        self.batch_memory_headroom_fraction = _env_float(
+            "NEMOTRON_BATCH_MEMORY_HEADROOM_FRACTION",
+            0.80,
+        )
+        if not (0.0 < self.batch_memory_headroom_fraction <= 1.0):
+            raise ValueError(
+                "NEMOTRON_BATCH_MEMORY_HEADROOM_FRACTION must be > 0 and <= 1"
+            )
+        self.batch_memory_row_floor_bytes = (
+            _env_int("NEMOTRON_BATCH_MEMORY_ROW_FLOOR_MB", 512) * 1024 * 1024
+        )
+        if self.batch_memory_row_floor_bytes <= 0:
+            raise ValueError("NEMOTRON_BATCH_MEMORY_ROW_FLOOR_MB must be > 0")
+        self.batch_memory_telemetry_every = _env_int(
+            "NEMOTRON_BATCH_MEMORY_TELEMETRY_EVERY",
+            1,
+        )
+        if self.batch_memory_telemetry_every <= 0:
+            raise ValueError("NEMOTRON_BATCH_MEMORY_TELEMETRY_EVERY must be > 0")
         self.scheduler_task: Optional[asyncio.Task] = None
         self._scheduler_wakeup: Optional[asyncio.Event] = None
         self._scheduler_ready: set[str] = set()
@@ -541,15 +587,9 @@ class ASRServer:
         self._scheduler_chunks = 0
         self._scheduler_lane_wait_ms_total = 0.0
         self._scheduler_lane_wait_ms_max = 0.0
-        requested_decoder_strategy = os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower()
-        if self.batch_enabled and requested_decoder_strategy not in ("", "greedy"):
-            raise ValueError(
-                "NEMOTRON_BATCH_SCHED=1 requires NEMOTRON_DECODING=greedy "
-                f"(got {requested_decoder_strategy!r})"
-            )
-        self.decoder_strategy = "greedy_batch" if self.batch_enabled else requested_decoder_strategy
-        self.fork_assert_enabled = os.environ.get("NEMOTRON_FORK_ASSERT", "") == "1"
-        self.eou_probe_enabled = os.environ.get("NEMOTRON_EOU_PROBE", "") == "1"
+        self.decoder_strategy = (
+            "greedy_batch" if self.batch_enabled else self.requested_decoder_strategy
+        )
         # Per-chunk profiling (additive, flag-gated): time preprocess vs conformer_stream_step
         # to locate the single-thread bottleneck. Adds cuda.synchronize() so it perturbs
         # timing slightly — only enabled under NEMOTRON_PROFILE_CHUNK=1.
@@ -660,6 +700,293 @@ class ASRServer:
             except Exception:
                 return None
         return current
+
+    def _record_batch_fallback(self, reason: str) -> None:
+        self._scheduler_batch_fallback_counts[reason] = (
+            self._scheduler_batch_fallback_counts.get(reason, 0) + 1
+        )
+
+    def _disable_batching(self, reason: str) -> None:
+        if not self.batch_enabled and self.batch_fallback_reason == reason:
+            return
+        self.batch_enabled = False
+        self.batch_fallback_reason = reason
+        self.decoder_strategy = getattr(self, "requested_decoder_strategy", "greedy") or "greedy"
+        if hasattr(self, "batch_max_size"):
+            self.batch_max_size = 1
+        self._record_batch_fallback(reason)
+        logger.warning(
+            "batch_sched_disabled "
+            f"reason={reason} requested={self.batch_requested} fallback_to_B=1"
+        )
+
+    def _batch_model_rnnt_pure_status(self) -> tuple[bool, str]:
+        model = self.model
+        if model is None:
+            return False, "model_not_loaded"
+        if not hasattr(model, "conformer_stream_step"):
+            return False, "model_missing_conformer_stream_step"
+        if not hasattr(model, "joint"):
+            return False, "model_missing_rnnt_joint"
+        if not hasattr(model, "decoder"):
+            return False, "model_missing_rnnt_decoder"
+        if hasattr(model, "ctc_decoder"):
+            return False, "hybrid_ctc_decoder_present"
+        if hasattr(model, "ctc_loss"):
+            return False, "ctc_loss_present"
+
+        class_label = f"{model.__class__.__module__}.{model.__class__.__name__}".lower()
+        if "ctc" in class_label and "rnnt" not in class_label:
+            return False, "ctc_model_class"
+        if "hybrid" in class_label and "ctc" in class_label:
+            return False, "hybrid_ctc_model_class"
+
+        cfg = self._to_plain(getattr(model, "cfg", None))
+        if isinstance(cfg, dict):
+            for key in ("ctc", "ctc_decoder", "ctc_loss"):
+                if key in cfg and cfg.get(key) not in (None, False):
+                    return False, f"cfg_{key}_present"
+            decoder_cfg = cfg.get("decoder")
+            if isinstance(decoder_cfg, dict):
+                decoder_name = str(decoder_cfg.get("_target_", "")).lower()
+                if "ctc" in decoder_name and "rnnt" not in decoder_name:
+                    return False, "cfg_decoder_ctc_target"
+            decoding_cfg = cfg.get("decoding")
+            if isinstance(decoding_cfg, dict):
+                strategy = str(decoding_cfg.get("strategy", "")).lower()
+                if "ctc" in strategy and "rnnt" not in strategy:
+                    return False, "cfg_decoding_ctc_strategy"
+        return True, "rnnt_pure"
+
+    def _assert_batch_decoder_blackwell_safe(self) -> None:
+        if not self.batch_enabled:
+            return
+        decoding = getattr(self.model, "decoding", None)
+        uses_cuda_graph = False
+        for owner in (
+            decoding,
+            getattr(decoding, "decoding", None),
+            getattr(decoding, "greedy", None),
+        ):
+            value = getattr(owner, "use_cuda_graph_decoder", None)
+            if value is not None:
+                uses_cuda_graph = uses_cuda_graph or bool(value)
+        cfg = self._to_plain(getattr(self.model, "cfg", None))
+        cfg_value = self._cfg_get(cfg, "decoding", "greedy", "use_cuda_graph_decoder")
+        if cfg_value is not None:
+            uses_cuda_graph = uses_cuda_graph or bool(cfg_value)
+        if uses_cuda_graph:
+            self._disable_batching("cuda_graph_decoder_enabled")
+        else:
+            logger.info(
+                "batch_sched_decoder_assert "
+                "use_cuda_graph_decoder=False status=ok"
+            )
+
+    @staticmethod
+    def _tensor_storage_nbytes(tensor: torch.Tensor, seen: set[tuple]) -> int:
+        if tensor.device.type != "cuda":
+            return 0
+        try:
+            storage = tensor.untyped_storage()
+            key = (tensor.device.type, tensor.device.index, int(storage.data_ptr()))
+            if key in seen:
+                return 0
+            seen.add(key)
+            return int(storage.nbytes())
+        except Exception:
+            key = (tensor.device.type, tensor.device.index, int(tensor.data_ptr()))
+            if key in seen:
+                return 0
+            seen.add(key)
+            return int(tensor.nelement() * tensor.element_size())
+
+    @classmethod
+    def _tensor_tree_storage_nbytes(
+        cls,
+        obj: Any,
+        *,
+        seen_tensors: Optional[set[int]] = None,
+        seen_storages: Optional[set[tuple]] = None,
+        seen_objects: Optional[set[int]] = None,
+    ) -> int:
+        if seen_tensors is None:
+            seen_tensors = set()
+        if seen_storages is None:
+            seen_storages = set()
+        if seen_objects is None:
+            seen_objects = set()
+
+        if torch.is_tensor(obj):
+            oid = id(obj)
+            if oid in seen_tensors:
+                return 0
+            seen_tensors.add(oid)
+            return cls._tensor_storage_nbytes(obj, seen_storages)
+        if obj is None or isinstance(obj, (str, bytes, int, float, bool)):
+            return 0
+
+        oid = id(obj)
+        if oid in seen_objects:
+            return 0
+        seen_objects.add(oid)
+
+        if isinstance(obj, dict):
+            return sum(
+                cls._tensor_tree_storage_nbytes(
+                    value,
+                    seen_tensors=seen_tensors,
+                    seen_storages=seen_storages,
+                    seen_objects=seen_objects,
+                )
+                for value in obj.values()
+            )
+        if isinstance(obj, (list, tuple, set)):
+            return sum(
+                cls._tensor_tree_storage_nbytes(
+                    value,
+                    seen_tensors=seen_tensors,
+                    seen_storages=seen_storages,
+                    seen_objects=seen_objects,
+                )
+                for value in obj
+            )
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return sum(
+                cls._tensor_tree_storage_nbytes(
+                    getattr(obj, field.name),
+                    seen_tensors=seen_tensors,
+                    seen_storages=seen_storages,
+                    seen_objects=seen_objects,
+                )
+                for field in dataclasses.fields(obj)
+            )
+        if hasattr(obj, "__dict__") and obj.__class__.__module__.startswith("nemo."):
+            return sum(
+                cls._tensor_tree_storage_nbytes(
+                    value,
+                    seen_tensors=seen_tensors,
+                    seen_storages=seen_storages,
+                    seen_objects=seen_objects,
+                )
+                for value in vars(obj).values()
+            )
+        return 0
+
+    def _session_cache_storage_bytes(self, session: ASRSession) -> int:
+        seen_tensors: set[int] = set()
+        seen_storages: set[tuple] = set()
+        seen_objects: set[int] = set()
+        total = 0
+        for value in (
+            session.cache_last_channel,
+            session.cache_last_time,
+            session.cache_last_channel_len,
+            session.mel_frame_ring,
+            session.previous_hypotheses,
+            session.pred_out_stream,
+        ):
+            total += self._tensor_tree_storage_nbytes(
+                value,
+                seen_tensors=seen_tensors,
+                seen_storages=seen_storages,
+                seen_objects=seen_objects,
+            )
+        return total
+
+    def _retained_session_cache_bytes(self) -> int:
+        return sum(
+            self._session_cache_storage_bytes(session)
+            for session in list(self.sessions.values())
+            if not session.scheduler_closed
+        )
+
+    def _cuda_memory_snapshot(self) -> dict[str, int]:
+        if not torch.cuda.is_available():
+            return {
+                "active_bytes": 0,
+                "allocated_bytes": 0,
+                "reserved_bytes": 0,
+                "max_reserved_bytes": 0,
+                "retained_session_cache_bytes": self._retained_session_cache_bytes(),
+            }
+        stats = torch.cuda.memory_stats()
+        active = int(stats.get("active_bytes.all.current", torch.cuda.memory_allocated()))
+        return {
+            "active_bytes": active,
+            "allocated_bytes": int(torch.cuda.memory_allocated()),
+            "reserved_bytes": int(torch.cuda.memory_reserved()),
+            "max_reserved_bytes": int(torch.cuda.max_memory_reserved()),
+            "retained_session_cache_bytes": self._retained_session_cache_bytes(),
+        }
+
+    def _log_retained_cache_telemetry(self, reason: str) -> None:
+        if not self.batch_requested:
+            return
+        mem = self._cuda_memory_snapshot()
+        logger.info(
+            "scheduler_batch_retained_memory "
+            f"reason={reason} "
+            f"active_sessions={len(self.sessions)} "
+            f"retained_session_cache_bytes={mem['retained_session_cache_bytes']} "
+            f"cuda_active_bytes={mem['active_bytes']} "
+            f"cuda_allocated_bytes={mem['allocated_bytes']} "
+            f"cuda_reserved_bytes={mem['reserved_bytes']} "
+            f"cuda_max_reserved_bytes={mem['max_reserved_bytes']}"
+        )
+
+    def _estimate_batch_extra_row_bytes(self) -> int:
+        cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+        cache_bytes = sum(
+            self._tensor_tree_storage_nbytes(tensor)
+            for tensor in cache
+        )
+        mel_bytes = 0
+        if self.constant_preprocess_frames is not None:
+            mel_bytes = int(self.constant_preprocess_frames) * 128 * 4
+        return max(
+            int(self.batch_memory_row_floor_bytes),
+            int(cache_bytes * 4),
+            int(mel_bytes * 16),
+        )
+
+    def _configure_batch_memory_cap(self) -> None:
+        if not self.batch_enabled:
+            if self.batch_requested:
+                logger.info(
+                    "batch_memory_startup_cap "
+                    f"requested_max={self.batch_max_size} effective_max=1 "
+                    f"reason={self.batch_fallback_reason or 'batch_disabled'}"
+                )
+            return
+        torch.cuda.synchronize()
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        reserved_bytes = int(torch.cuda.memory_reserved())
+        allocated_bytes = int(torch.cuda.memory_allocated())
+        max_reserved_bytes = int(torch.cuda.max_memory_reserved())
+        headroom_bytes = int(total_bytes * self.batch_memory_headroom_fraction)
+        extra_row_bytes = self._estimate_batch_extra_row_bytes()
+        if reserved_bytes >= headroom_bytes:
+            device_cap = 1
+        else:
+            device_cap = 1 + ((headroom_bytes - reserved_bytes) // extra_row_bytes)
+            device_cap = max(1, int(device_cap))
+        requested_max = int(self.batch_max_size)
+        effective_max = max(1, min(requested_max, device_cap))
+        if effective_max < requested_max:
+            self.batch_max_size = effective_max
+            self._record_batch_fallback("memory_cap_clamped")
+        logger.info(
+            "batch_memory_startup_cap "
+            f"requested_max={requested_max} effective_max={self.batch_max_size} "
+            f"device_cap={device_cap} "
+            f"headroom_fraction={self.batch_memory_headroom_fraction:.2f} "
+            f"total_bytes={int(total_bytes)} free_bytes={int(free_bytes)} "
+            f"reserved_bytes={reserved_bytes} allocated_bytes={allocated_bytes} "
+            f"max_reserved_bytes={max_reserved_bytes} "
+            f"estimated_extra_row_bytes={extra_row_bytes} "
+            f"fallback_counts={dict(sorted(self._scheduler_batch_fallback_counts.items()))}"
+        )
 
     @staticmethod
     def _is_int_like(value: Any) -> bool:
@@ -873,6 +1200,15 @@ class ASRServer:
         self.prompt_dictionary = (
             self._read_prompt_dictionary() if self.prompted_model else {}
         )
+        if self.batch_enabled:
+            rnnt_ok, rnnt_reason = self._batch_model_rnnt_pure_status()
+            if not rnnt_ok:
+                self._disable_batching(rnnt_reason)
+            else:
+                logger.info(
+                    "batch_sched_model_assert "
+                    f"rnnt_pure=True reason={rnnt_reason}"
+                )
 
         # Configure attention context for streaming
         self.att_context_size = self._select_att_context_size()
@@ -944,6 +1280,7 @@ class ASRServer:
                 }
         self.model.change_decoding_strategy(decoding_cfg=_decoding_cfg)
         self.model.eval()
+        self._assert_batch_decoder_blackwell_safe()
 
         # Disable dither for deterministic preprocessing
         self.model.preprocessor.featurizer.dither = 0.0
@@ -1035,14 +1372,18 @@ class ASRServer:
         logger.info(
             "startup_flags "
             f"scheduler_enabled={self.scheduler_enabled} "
+            f"batch_requested={self.batch_requested} "
             f"batch_enabled={self.batch_enabled} "
+            f"batch_fallback_reason={self.batch_fallback_reason or 'none'} "
             f"decoder_strategy={self.decoder_strategy} "
-            f"encoder_compile_enabled={self.encoder_compile_enabled}"
+            f"encoder_compile_enabled={self.encoder_compile_enabled} "
+            f"batch_max_size={self.batch_max_size}"
         )
 
         # Warmup inference to ensure model is fully loaded on GPU
         # This prevents GPU memory issues when LLM starts later
         self._warmup()
+        self._configure_batch_memory_cap()
 
     def _configure_encoder_compile(self) -> None:
         """Configure optional B=1 static-shape encoder compilation."""
@@ -2044,6 +2385,7 @@ class ASRServer:
             self._flush_eou_snapshot_audio(session)
             if session_id in self.sessions:
                 del self.sessions[session_id]
+            self._log_retained_cache_telemetry("session_removed")
 
         return ws
 
@@ -2301,12 +2643,21 @@ class ASRServer:
             chunk_t = self.pre_encode_cache_size + self.shift_frames
             drop_extra = self.drop_extra
         target_lang = session.target_lang if session.target_lang is not None else self.target_lang
-        return batch_group_key(
+        base_key = batch_group_key(
             target_lang,
             False,
             drop_extra,
             chunk_t,
             self.decoder_strategy,
+        )
+        # RNNT batched state is validated only when decoder histories are
+        # uniformly fresh or uniformly established. Include that in the live
+        # grouping key so a newly joined stream cannot be coerced into an
+        # established batch.
+        return (
+            *base_key,
+            session.previous_hypotheses is None,
+            session.pred_out_stream is None,
         )
 
     def _scheduler_batch_session_eligible_for_key(self, session: ASRSession, key: tuple) -> bool:
@@ -2355,7 +2706,7 @@ class ASRServer:
             return False
 
         now = time.monotonic()
-        candidates: list[tuple[int, float, str, tuple, list[ASRSession], str]] = []
+        candidates: list[tuple[int, float, str, tuple, list[ASRSession], str, int, int]] = []
         for key, sessions in ready_groups.items():
             sessions.sort(key=lambda s: (s.scheduler_ready_since or now, s.id))
             ready_count = len(sessions)
@@ -2385,6 +2736,8 @@ class ASRServer:
                     key,
                     sessions[:safe_size],
                     reason,
+                    ready_count,
+                    active_count,
                 )
             )
 
@@ -2392,11 +2745,22 @@ class ASRServer:
             return False
 
         candidates.sort()
-        _neg_size, _deadline, _key_label, key, sessions, reason = candidates[0]
+        (
+            _neg_size,
+            _deadline,
+            _key_label,
+            key,
+            sessions,
+            reason,
+            ready_count,
+            active_count,
+        ) = candidates[0]
         return await self._scheduler_process_ready_batch_locked_sessions(
             key,
             sessions,
             reason=reason,
+            ready_count=ready_count,
+            eligible_count=active_count,
         )
 
     async def _scheduler_process_ready_batch_locked_sessions(
@@ -2405,6 +2769,8 @@ class ASRServer:
         sessions: list[ASRSession],
         *,
         reason: str,
+        ready_count: int,
+        eligible_count: int,
     ) -> bool:
         if not sessions:
             return False
@@ -2512,6 +2878,9 @@ class ASRServer:
                 batch_size=len(valid_sessions),
                 reason=reason,
                 sent_count=sent_count,
+                key=key,
+                ready_count=ready_count,
+                eligible_count=eligible_count,
             )
             return progressed
 
@@ -2604,6 +2973,9 @@ class ASRServer:
         batch_size: int,
         reason: str,
         sent_count: int,
+        key: Optional[tuple] = None,
+        ready_count: Optional[int] = None,
+        eligible_count: Optional[int] = None,
     ) -> None:
         self._scheduler_batches += 1
         self._scheduler_batch_size_hist[batch_size] = (
@@ -2621,8 +2993,14 @@ class ASRServer:
                 f"batches={self._scheduler_batches} "
                 f"last_batch_size={batch_size} "
                 f"last_reason={reason} "
+                f"group_key={key} "
+                f"prompt_lang={(key[0] if key else 'n/a')} "
+                f"ready_count={(ready_count if ready_count is not None else 'n/a')} "
+                f"eligible_ready_count={(eligible_count if eligible_count is not None else 'n/a')} "
                 f"sent_count={sent_count} "
                 f"effective_batch_hist={dict(sorted(self._scheduler_batch_size_hist.items()))} "
+                f"fallback_counts={dict(sorted(self._scheduler_batch_fallback_counts.items()))} "
+                f"last_fallback_reason={self.batch_fallback_reason or 'none'} "
                 f"queue_wait_avg_ms={wait_avg:.2f} "
                 f"queue_wait_max_ms={self._scheduler_batch_queue_wait_ms_max:.2f}"
             )
@@ -3210,6 +3588,7 @@ class ASRServer:
         session.continuous_worker_task = None
         session.continuous_post_stop_audio.clear()
         session.scheduler_closed = True
+        self._log_retained_cache_telemetry("scheduler_session_closed")
 
     async def _continuous_debounce_timer(self, session_id: str, stop_seq: int) -> None:
         """Wake after server-side silence and enqueue a finalize decision."""
@@ -3814,6 +4193,7 @@ class ASRServer:
             f"retained_post_stop_samples={held_len}, "
             f"{self._continuous_context_retention_summary(session)}"
         )
+        self._log_retained_cache_telemetry(f"speculative_finalize:{reason}")
 
     async def _continuous_cold_reset_after_finalize_locked(
         self,
@@ -3848,6 +4228,7 @@ class ASRServer:
             f"Session {session.id}: continuous true-boundary cold reset complete "
             f"(reason={reason})"
         )
+        self._log_retained_cache_telemetry(f"cold_reset:{reason}")
 
     async def _continuous_finalize_and_reset_locked(
         self,
@@ -4027,6 +4408,64 @@ class ASRServer:
             f"batched decoder returned non-list {type(value).__name__} for B={batch_size}"
         )
 
+    def _process_ready_batch_solo_fallback(
+        self,
+        sessions: list[ASRSession],
+        *,
+        reason: str,
+        error: Exception,
+    ) -> dict[str, Optional[str]]:
+        self._record_batch_fallback(reason)
+        logger.warning(
+            "scheduler_batch_fallback "
+            f"reason={reason} sessions={','.join(session.id for session in sessions)} "
+            f"error={type(error).__name__}: {error}"
+        )
+        texts: dict[str, Optional[str]] = {}
+        for session in sessions:
+            if session.scheduler_closed:
+                texts[session.id] = None
+                continue
+            texts[session.id] = self._process_chunk(session)
+        return texts
+
+    def _log_scheduler_batch_memory(
+        self,
+        *,
+        rows: list[SchedulerBatchRow],
+        preprocessor_ms: float,
+        model_ms: float,
+        scatter_ms: float,
+        mem_before: dict[str, int],
+        mem_after: dict[str, int],
+    ) -> None:
+        batch_size = len(rows)
+        if batch_size <= 0:
+            return
+        if (
+            batch_size == 1
+            and self._scheduler_batches % self.batch_memory_telemetry_every != 0
+        ):
+            return
+        prompt_lang = rows[0].session.target_lang or self.target_lang
+        logger.info(
+            "scheduler_batch_memory "
+            f"batch_size={batch_size} "
+            f"prompt_lang={prompt_lang} "
+            f"drop_extra={rows[0].drop_extra} "
+            f"preprocessor_batch_ms={preprocessor_ms:.2f} "
+            f"model_batch_ms={model_ms:.2f} "
+            f"scatter_postprocess_ms={scatter_ms:.2f} "
+            f"cuda_active_before_bytes={mem_before['active_bytes']} "
+            f"cuda_active_after_bytes={mem_after['active_bytes']} "
+            f"cuda_allocated_before_bytes={mem_before['allocated_bytes']} "
+            f"cuda_allocated_after_bytes={mem_after['allocated_bytes']} "
+            f"cuda_reserved_before_bytes={mem_before['reserved_bytes']} "
+            f"cuda_reserved_after_bytes={mem_after['reserved_bytes']} "
+            f"cuda_max_reserved_bytes={mem_after['max_reserved_bytes']} "
+            f"retained_session_cache_bytes={mem_after['retained_session_cache_bytes']}"
+        )
+
     def _process_ready_batch(self, sessions: list[ASRSession]) -> dict[str, Optional[str]]:
         """Process one scheduler batch of same-group ready normal chunks."""
         try:
@@ -4034,6 +4473,10 @@ class ASRServer:
                 return {}
 
             with torch.inference_mode():
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                mem_before = self._cuda_memory_snapshot()
+                pre_start = time.perf_counter()
                 preprocess_inputs: list[tuple[ASRSession, np.ndarray, int]] = []
                 for session in sessions:
                     fixed_input = self._prepare_scheduler_fixed_preprocess_audio(session)
@@ -4051,6 +4494,9 @@ class ASRServer:
                     fixed_audios,
                     valid_samples,
                 )
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                preprocessor_ms = (time.perf_counter() - pre_start) * 1000.0
 
                 rows: list[SchedulerBatchRow] = []
                 if batched_valid_new_mels is None:
@@ -4074,36 +4520,48 @@ class ASRServer:
                 if not rows:
                     return {session.id: session.current_text for session in sessions}
 
-                drop_extras = {row.drop_extra for row in rows}
-                if len(drop_extras) != 1:
-                    raise RuntimeError(f"mixed drop_extra in scheduler batch: {sorted(drop_extras)}")
-
-                chunk_mels = [row.chunk_mel for row in rows]
-                processed_signal, processed_signal_length = stack_processed(chunk_mels)
-                cache_last_channel, cache_last_time, cache_last_channel_len = stack_caches(
-                    [
-                        (
-                            row.session.cache_last_channel,
-                            row.session.cache_last_time,
-                            row.session.cache_last_channel_len,
+                try:
+                    drop_extras = {row.drop_extra for row in rows}
+                    if len(drop_extras) != 1:
+                        raise RuntimeError(
+                            f"mixed drop_extra in scheduler batch: {sorted(drop_extras)}"
                         )
+
+                    chunk_mels = [row.chunk_mel for row in rows]
+                    processed_signal, processed_signal_length = stack_processed(chunk_mels)
+                    cache_last_channel, cache_last_time, cache_last_channel_len = stack_caches(
+                        [
+                            (
+                                row.session.cache_last_channel,
+                                row.session.cache_last_time,
+                                row.session.cache_last_channel_len,
+                            )
+                            for row in rows
+                        ]
+                    )
+                    previous_hypotheses = [
+                        clone_hypotheses_deep(row.session.previous_hypotheses)
                         for row in rows
                     ]
-                )
-                previous_hypotheses = [
-                    clone_hypotheses_deep(row.session.previous_hypotheses)
-                    for row in rows
-                ]
-                previous_pred_out = [
-                    clone_tree(row.session.pred_out_stream)
-                    for row in rows
-                ]
-                flat_hypotheses = stack_hypotheses(previous_hypotheses)
-                flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
+                    previous_pred_out = [
+                        clone_tree(row.session.pred_out_stream)
+                        for row in rows
+                    ]
+                    flat_hypotheses = stack_hypotheses(previous_hypotheses)
+                    flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
+                except Exception as e:
+                    if len(rows) > 1:
+                        return self._process_ready_batch_solo_fallback(
+                            [row.session for row in rows],
+                            reason="unsafe_stack",
+                            error=e,
+                        )
+                    raise
 
                 if self.prompted_model:
                     self._apply_inference_prompt(rows[0].session)
 
+                model_start = time.perf_counter()
                 (
                     pred_out_stream,
                     transcribed_texts,
@@ -4123,40 +4581,53 @@ class ASRServer:
                     drop_extra_pre_encoded=rows[0].drop_extra,
                     return_transcription=True,
                 )
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                model_ms = (time.perf_counter() - model_start) * 1000.0
 
                 batch_size = len(rows)
+                scatter_start = time.perf_counter()
                 scattered: list[tuple[SchedulerBatchRow, Any, Any, torch.Tensor, torch.Tensor, torch.Tensor, Optional[str]]] = []
-                for index, row in enumerate(rows):
-                    row_cache = scatter_cache_row(
-                        batch_cache_last_channel,
-                        batch_cache_last_time,
-                        batch_cache_last_channel_len,
-                        index,
-                    )
-                    row_pred_out = self._scatter_batch_list_item(
-                        pred_out_stream,
-                        index,
-                        batch_size,
-                    )
-                    row_hypotheses = self._scatter_batch_list_item(
-                        batch_previous_hypotheses,
-                        index,
-                        batch_size,
-                    )
-                    text = row.session.current_text
-                    if transcribed_texts and len(transcribed_texts) > index and transcribed_texts[index]:
-                        text = self._extract_hypothesis_text(transcribed_texts[index])
-                    scattered.append(
-                        (
-                            row,
-                            row_pred_out,
-                            row_hypotheses,
-                            row_cache[0],
-                            row_cache[1],
-                            row_cache[2],
-                            text,
+                try:
+                    for index, row in enumerate(rows):
+                        row_cache = scatter_cache_row(
+                            batch_cache_last_channel,
+                            batch_cache_last_time,
+                            batch_cache_last_channel_len,
+                            index,
                         )
-                    )
+                        row_pred_out = self._scatter_batch_list_item(
+                            pred_out_stream,
+                            index,
+                            batch_size,
+                        )
+                        row_hypotheses = self._scatter_batch_list_item(
+                            batch_previous_hypotheses,
+                            index,
+                            batch_size,
+                        )
+                        text = row.session.current_text
+                        if transcribed_texts and len(transcribed_texts) > index and transcribed_texts[index]:
+                            text = self._extract_hypothesis_text(transcribed_texts[index])
+                        scattered.append(
+                            (
+                                row,
+                                row_pred_out,
+                                row_hypotheses,
+                                row_cache[0],
+                                row_cache[1],
+                                row_cache[2],
+                                text,
+                            )
+                        )
+                except Exception as e:
+                    if len(rows) > 1:
+                        return self._process_ready_batch_solo_fallback(
+                            [row.session for row in rows],
+                            reason="unsafe_scatter",
+                            error=e,
+                        )
+                    raise
 
                 texts: dict[str, Optional[str]] = {}
                 for (
@@ -4181,11 +4652,34 @@ class ASRServer:
                     self._write_eou_snapshot_chunk(session, row.eou_probe_snapshot)
                     texts[session.id] = text
 
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                scatter_ms = (time.perf_counter() - scatter_start) * 1000.0
+                mem_after = self._cuda_memory_snapshot()
+                self._log_scheduler_batch_memory(
+                    rows=rows,
+                    preprocessor_ms=preprocessor_ms,
+                    model_ms=model_ms,
+                    scatter_ms=scatter_ms,
+                    mem_before=mem_before,
+                    mem_after=mem_after,
+                )
                 return texts
 
         except Exception as e:
             session_ids = ",".join(session.id for session in sessions)
-            logger.error(f"scheduler batch processing error sessions={session_ids}: {e}")
+            oom = "out of memory" in str(e).lower()
+            if oom and self.batch_max_size > 1:
+                self.batch_max_size = 1
+                self._record_batch_fallback("cuda_oom_clamped_to_B1")
+                with contextlib.suppress(Exception):
+                    torch.cuda.empty_cache()
+                logger.error(
+                    "scheduler batch processing CUDA OOM; clamped batch_max_size=1 "
+                    f"sessions={session_ids}: {e}"
+                )
+            else:
+                logger.error(f"scheduler batch processing error sessions={session_ids}: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return {session.id: None for session in sessions}
@@ -4434,6 +4928,7 @@ class ASRServer:
         logger.debug(
             f"Session {session.id} hard reset complete, state fully reset for next turn"
         )
+        self._log_retained_cache_telemetry("hard_reset")
 
     def _process_final_chunk(self, session: ASRSession) -> Optional[str]:
         """Process remaining pending audio with fixed-plan preprocessing."""

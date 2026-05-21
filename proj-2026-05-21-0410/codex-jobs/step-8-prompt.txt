@@ -1,0 +1,69 @@
+<task>
+Implement Step 8 of proj-2026-05-21-0410/PLAN.md: "variable-B + fail-closed + memory + telemetry". Read the
+plan's Step 8 (incl. Round-4 ADDITIONS: retained-after-scatter memory + churn) + the Round-4 Rules (fail-closed,
+memory gate). Edit src/nemotron_speech/server.py + add a memory/churn test. No git commits. Batching runs under
+NEMOTRON_BATCH_SCHED=1 (greedy_batch, TF32-off) on the 6a/7 scheduler.
+
+NOTE what's already done (don't redo): the per-tick ready-collection already handles variable-B (streams
+join/leave between ticks — proven byte-exact by the high-N ramp), clone-on-scatter already gives each session
+owned cache storage, and Step-7 telemetry already logs batch-size histogram + queue/lane wait. Step 8 closes
+the remaining gaps:
+
+1. MEMORY GATE (main gap — needs GPU). Measure CUDA memory at effective batch B∈{1,2,4,8,16}: `max_memory_reserved`,
+   active bytes before/after each batched step, AND retained session-cache bytes AFTER streams leave/reset (the
+   clone-on-scatter should free a leaving stream's cache — verify no growth/leak under churn). Then add a
+   STARTUP device-aware cap: compute a safe max effective batch from device free memory (headroom, e.g. keep
+   max_memory_reserved < ~80% of device) and clamp NEMOTRON_BATCH_MAX_SIZE to it at startup, logging the chosen
+   cap — so OOM is never discovered in prod. No CUDA OOM at the default/clamped max.
+
+2. FAIL-CLOSED config checks (defensive; never crash — fall back to B=1):
+   - beam decoding + batch already raises — keep.
+   - if the model is NOT RNNT-pure (CTC / hybrid-ctc decoder) → refuse batching (force B=1) with a clear log,
+     since stack_pred_out is RNNT-only-validated.
+   - EOU preserve-alignments + batch is UNPROBED → force B=1 (or refuse) when NEMOTRON_EOU_PROBE=1 + batch.
+   - any group that can't be safely/uniformly stacked → split into safe sub-batches or B=1; never pad/coerce a
+     not-ready or incompatible row.
+
+3. EXPLICIT variable-B + churn correctness GATE (make it a test, not just rely on the ramp): streams join and
+   leave mid-flight (a stream closes/resets while peers are mid-batch; a fresh stream joins mid-run), row-order
+   permutation, and same-group integrity. Each stream's interim seq + final + delta byte-identical to its solo
+   B=1 run. Fairness: a backlogged stream does one shift/tick and requeues (no monopoly, no frame drop).
+
+4. TELEMETRY completeness: ensure fallback count + reason, grouping reason, prompt lang, and memory
+   (reserved + retained) are logged (most exist from Step 7 — add what's missing).
+
+GATE (en server, .venv-asr; NEMOTRON_CONTINUOUS=1 NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1
+NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 NEMOTRON_FORK_ASSERT=1, port 8080, rc1):
+  (G1) memory: report max_memory_reserved at B=1/2/4/8/16 + retained bytes after churn (no leak); confirm the
+       startup cap is computed/logged; no OOM at the cap. (Use a short scripted batched run at forced sizes, or
+       the concurrency churn, to reach B=16 — you may need the temp multi-sample wrapper for high N.)
+  (G2) fail-closed: with an unsupported config (e.g. NEMOTRON_DECODING=beam already errors; simulate CTC/EOU
+       path) the server falls back to B=1 / refuses cleanly (no crash, clear log).
+  (G3) variable-B/churn byte-exact: distinct clips with join/leave mid-run + permutation — each byte-identical
+       to its solo run; FORK_ASSERT clean.
+  CLEANUP: kill server by PID; free 8080 + GPU; remove temp files/__pycache__. Don't touch 8088.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 8, Round-4 Rules memory/fail-closed), the Step-6a/7 scheduler in
+server.py (`_scheduler_process_batched_ready_pass`, `_process_ready_batch`, generation tokens, the batch flags
++ batch_max_size), batch_primitives (stack_pred_out rnnt-only, group key). highN-validation.md shows the
+churn/ramp is already byte-exact; this step adds the memory cap + fail-closed + an explicit churn gate. The
+checkpoint is RNNT (greedy/greedy_batch) — CTC fail-closed is defensive.
+</context>
+
+<verification_loop>
+Reach B=16 (forced or via high-N churn) and confirm no OOM + bounded retained memory after streams leave.
+Confirm fail-closed paths log + fall back rather than crash. Confirm churn byte-exact + FORK_ASSERT clean.
+</verification_loop>
+
+<action_safety>
+Edit ONLY server.py + the new memory/churn test. No commits. Default (no BATCH_SCHED) unaffected. Kill server;
+free GPU; don't touch 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: 1) memory at B=1/2/4/8/16 + retained-after-churn + the startup cap chosen; 2) fail-closed behaviors
+(beam/CTC/EOU/unsafe → B=1, no crash); 3) variable-B/churn byte-exact + FORK_ASSERT; 4) telemetry added;
+5) cleanup; 6) GO/NO-GO.
+</compact_output_contract>
