@@ -356,6 +356,7 @@ RIGHT_CONTEXT_OPTIONS = {
 PROMPTED_FALLBACK_ATT_CONTEXT_SIZES = [[56, 0], [56, 3], [56, 6], [56, 13]]
 PROMPTED_DEFAULT_RIGHT_CONTEXT = 3
 LANG_TAG_RE = re.compile(r"\s*<[a-z]{2}-[A-Z]{2}>")
+PARTIAL_LANG_TAG_RE = re.compile(r"\s*<[a-z]{0,2}(?:-[A-Z]{0,2})?$")
 
 
 @dataclass
@@ -364,6 +365,7 @@ class ASRSession:
 
     id: str
     websocket: Any
+    target_lang: Optional[str] = None
 
     # Legacy/debug audio buffer name. Step 6b keeps this bounded to pending
     # audio only; the preprocessor must never see a growing full-stream buffer.
@@ -617,9 +619,22 @@ class ASRServer:
             f"{supported_right_contexts}, got {requested_right_context}"
         )
 
-    def _apply_inference_prompt(self) -> None:
+    def _ensure_session_target_lang(self, session: ASRSession) -> str:
+        if session.target_lang is None:
+            session.target_lang = self.target_lang
+        return session.target_lang
+
+    def _apply_inference_prompt(self, session: ASRSession) -> None:
         if self.prompted_model:
-            self.model.set_inference_prompt(self.target_lang)
+            self.model.set_inference_prompt(self._ensure_session_target_lang(session))
+
+    def _strip_lang_tags(self, text: Any) -> str:
+        stripped = LANG_TAG_RE.sub(" ", str(text))
+        # A cumulative streaming hypothesis may end with the beginning of the
+        # next language tag token. Keep that fragment out of emitted state; the
+        # complete tag is stripped when it appears in a later cumulative hyp.
+        stripped = PARTIAL_LANG_TAG_RE.sub("", stripped)
+        return re.sub(r"\s+", " ", stripped).strip()
 
     def _extract_hypothesis_text(self, hyp: Any) -> str:
         if hasattr(hyp, 'text'):
@@ -630,7 +645,7 @@ class ASRServer:
             text = str(hyp)
 
         if self.prompted_model:
-            text = LANG_TAG_RE.sub("", str(text)).strip()
+            text = self._strip_lang_tags(text)
         return text
 
     def load_model(self):
@@ -819,10 +834,15 @@ class ASRServer:
 
             # Get initial cache
             cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+            warmup_session = ASRSession(
+                id="warmup",
+                websocket=None,
+                target_lang=self.target_lang,
+            )
 
             # Run streaming step (processes entire mel as one chunk)
             if self.prompted_model:
-                self._apply_inference_prompt()
+                self._apply_inference_prompt(warmup_session)
             _ = self.model.conformer_stream_step(
                 processed_signal=mel,
                 processed_signal_length=mel_len,
@@ -846,6 +866,8 @@ class ASRServer:
         prepended to the accumulated audio to provide encoder left-context.
         This enables seamless transcription across mid-utterance resets.
         """
+        self._ensure_session_target_lang(session)
+
         # Initialize encoder cache
         cache = self.model.encoder.get_initial_cache_state(batch_size=1)
         session.cache_last_channel = cache[0]
@@ -913,7 +935,7 @@ class ASRServer:
             chunk_len = torch.tensor([warmup_mel.shape[-1]], device='cuda')
 
             if self.prompted_model:
-                self._apply_inference_prompt()
+                self._apply_inference_prompt(session)
             (
                 session.pred_out_stream,
                 discarded_transcribed_texts,
@@ -1418,7 +1440,11 @@ class ASRServer:
         await ws.prepare(request)
 
         session_id = str(uuid.uuid4())[:8]
-        session = ASRSession(id=session_id, websocket=ws)
+        session = ASRSession(
+            id=session_id,
+            websocket=ws,
+            target_lang=self.target_lang,
+        )
         self.sessions[session_id] = session
 
         logger.info(f"Client {session_id} connected")
@@ -1939,7 +1965,11 @@ class ASRServer:
             silence_padding = np.zeros(padding_samples, dtype=np.float32)
             pending_audio = np.concatenate([pending_audio, silence_padding])
 
-        fork = ASRSession(id=f"{session.id}:fork", websocket=None)
+        fork = ASRSession(
+            id=f"{session.id}:fork",
+            websocket=None,
+            target_lang=session.target_lang,
+        )
         fork.pending_audio = pending_audio
         fork.accumulated_audio = fork.pending_audio
         fork.total_audio_samples = session.total_audio_samples + padding_samples
@@ -2338,7 +2368,7 @@ class ASRServer:
 
                 # Run streaming inference
                 if self.prompted_model:
-                    self._apply_inference_prompt()
+                    self._apply_inference_prompt(session)
                 (
                     session.pred_out_stream,
                     transcribed_texts,
@@ -2589,7 +2619,7 @@ class ASRServer:
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
 
                 if self.prompted_model:
-                    self._apply_inference_prompt()
+                    self._apply_inference_prompt(session)
                 (
                     session.pred_out_stream,
                     transcribed_texts,

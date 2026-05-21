@@ -1,9 +1,7 @@
 # Plan: Multilingual checkpoint support — process-per-model + uniform client protocol
 
 Project directory: `./proj-2026-05-20-1947`
-Status: **DRAFT v3** — architecture decided (process-per-model, 2026-05-20) after two
-independent reviews (Codex `b4jynzb8e`, `bcq6plc7g` + Claude) converged on NEEDS-REWORK.
-Pending final sign-off, then `/implement`.
+Status: **IN /implement** (v3, process-per-model). Steps 1, 2, 2b, 3 done; Step 4 next.
 
 ## Context
 The English `silence0_warm200` shipped (full-1000 semantic WER 1.95%, TTFB p95 247 ms @ conc-12;
@@ -127,7 +125,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
   under the omni venv after the server.py edits. **GATE:** byte-identical / WER-within-CI.
   Key files: (scratch smoke)
 
-- [ ] **3. Prompt threading (scalar, per-call) + language-tag stripping (multilingual server)**
+- [x] **3. Prompt threading (scalar, per-call) + language-tag stripping (multilingual server)**
   Store `prompt_id` (from `prompt_dictionary`) as immutable session metadata; build the prompt
   vector per-call and apply it in `_process_chunk`, BOTH warmups, and `_process_final_chunk`; copy
   the scalar into the fork (no tensor clone; no model-global mutation). Strip complete language-tag
@@ -180,7 +178,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
 | 1 | Probe: EA-NeMo venv + prompted-STREAMING proof | done — **GO** | (this commit) | Codex `b4b7s2t9y` GO. EA branch `kingformatty/NeMo@prompt_unitifed_architecture_hf_EA` (commit 2d8fcad82) cloned to `/home/khkramer/src/nemotron-ea-nemo` (6.3G, OUTSIDE repo) + dedicated `.venv-ea` (torch 2.12.0+cu130); omni NeMo/venv untouched. `restore_from` instantiated `EncDecRNNTBPEModelWithPrompt` (aux_ctc present but RNNT-only, has_ctc_decoder=False). **Decisive gate PASSED:** EA streaming-infer script (`target_lang=en-US`, `att_context_size=[56,3]`, `strip_lang_tags=true`) on English fixture → "How do I drain and refill my hot tub?" WER 0.0, no tag leak → **prompt IS applied in cache-aware streaming**. Prompt API = MODEL-GLOBAL (`set_inference_prompt`→`_inference_prompt_index`, read in `conformer_stream_step`) → Step 3 must set-under-lock per call. Lang tags = literal `<xx-XX>` (regex `\s*<[a-z]{2}-[A-Z]{2}>`). rc3 runs (exact); rc0 also runs (no rel-pos crash, WER 11.11 missing "?"). |
 | 2 | server.py dual-runtime-clean + model-aware config (rc0/rc3) | done | (this commit) | Codex `byf72tsi5` + Claude review ACCEPT. server.py +154/-22 (only file). `prompted_model = hasattr(model,'set_inference_prompt')`; `_select_att_context_size` keeps English `[70,{0,1,6,13}]` (rc1 default) byte-identical, multilingual reads cfg `[56,{0,3,6,13}]` default rc3; geometry (`final_padding=(rc+1)*shift`, FFT-ring) unchanged, auto-adapts via self.right_context. Prompt set-under-lock (`_apply_inference_prompt`) at all 4 inference sites, guarded; lang-tag strip (`_extract_hypothesis_text`, regex `\s*<[a-z]{2}-[A-Z]{2}>`) prompted-only. **English byte-identical 2/2 + FORK_ASSERT 2/2** (omni venv); multilingual rc3+rc0 → exact English, no tag leak (EA venv); dual-venv py_compile OK. |
 | 2b | English byte-identity checkpoint | done | (this commit) | satisfied by Step 2's English smoke: 2/2 byte-identical + FORK_ASSERT 2/2 under omni venv; guards provably skip multilingual code for English |
-| 3 | Prompt (scalar/per-call) + strip_lang_tags before delta | pending | — | concurrency-safe; no model-global lang state |
+| 3 | Prompt (scalar/per-call) + strip_lang_tags before delta | done | (this commit) | Codex `b288n84bb` + Claude review ACCEPT. server.py +39/-9. `ASRSession.target_lang` (defaults to server target_lang); `_apply_inference_prompt(session)` set-under-lock from SESSION lang at all 4 sites; fork copies scalar (FORK_ASSERT clean). `_strip_lang_tags`: complete-tag (`\s*<[a-z]{2}-[A-Z]{2}>`→space) + partial-trailing-fragment (`\s*<[a-z]{0,2}(?:-[A-Z]{0,2})?$`) + ws-collapse, BEFORE current_text/committed_text/delta, prompted-only. **English byte-identical + FORK_ASSERT 2/2** (target_lang field unused for English; prompt+strip guarded off). Multilingual rc3 → exact, no tag leak; multi-segment deltas clean; mixed-lang sanity en-US→0/es-ES→2/en-US→0. dual-venv py_compile OK. |
 | 4 | Uniform protocol: init handshake + endpoint routing + validation | pending | — | English+language=error; ml-default=auto; services.py + client |
 | 5 | Transcription correctness (subset) | pending | — | en-US sensible; optional 2nd-lang |
 | 6 | Full-1000 conc-12 + semantic WER (en-US) | pending | — | harness needs init handshake; rc3 latency caveat |
