@@ -76,8 +76,15 @@ apples-to-apples vs English — **with the English server byte-identical**.
   **before** updating `current_text`/`last_emitted_text`/`committed_text`/`continuous_emitted_text`
   or computing append-only deltas, or tags poison multi-segment delta state.
 - **Don't assume rc1:** multilingual rc set {0,3,6,13}; test rc0 AND rc3 through live chunking +
-  final flush, not a one-call smoke. Note rc3's latency: `(R+1)*shift = 4*160 = 640 ms` synthetic
-  final-pad vs English rc1's 320 ms — multilingual TTFS is not directly comparable at equal budget.
+  final flush, not a one-call smoke. **rc3's larger final-pad is NOT a finalize-TTFS regression:**
+  the fork-flush pads `(R+1)*shift = 640 ms` of synthetic zeros and processes them in one
+  `conformer_stream_step` (faster-than-wallclock, exactly the silence_0 mechanism) — so the
+  last frame's rc3 right-context is closed synthetically at finalize, not by waiting 480 ms of real
+  audio. rc3 finalize TTFS ≈ rc1 + a small GPU delta (~2× the flush compute, tens of ms), NOT
+  +320 ms. rc3's real cost vs a smaller rc is **mid-stream interim-transcript look-ahead lag**
+  (480 ms vs 160 ms) — which is the interim/partial responsiveness, not the final TTFS the
+  benchmark measures — plus a likely accuracy *upside* (more right-context). So rc3 is a reasonable
+  default for this model on the finalize use case.
 - **Do NOT enable `NEMOTRON_EOU_PROBE` with the multilingual model** — its token-string probe
   assumes the English SentencePiece vocab; the 13047-token multilingual vocab would misbehave.
 - **No benchmark-gaming; no new pip deps beyond what the EA NeMo needs; no full-1000 except Step 6.**
@@ -147,8 +154,10 @@ apples-to-apples vs English — **with the English server byte-identical**.
   Add the `init` handshake (`model_name`, `language=en-US`) to `run_full1000_conc12.py` (it sends
   none today). Run against the multilingual server (`silence0_warm200`, chosen rc), tag
   `ml_silence0_warm200_c12`. GPU-mem check first. Claude semantic-WER judge (no `--test`, from the
-  stt-benchmark dir). Compare WER + TTFS to English 1.95% / 247 ms — **explicitly noting rc3's
-  640 ms final-pad makes TTFS not directly comparable** at equal budget. Carry the
+  stt-benchmark dir). Compare WER + TTFS to English 1.95% / 247 ms. **TTFS IS comparable**: rc3's
+  640 ms final-pad is faster-than-wallclock (synthetic single-call flush, like silence_0), so the
+  finalize TTFS reflects only the synthetic-flush GPU cost, not a 480 ms real-audio wait — expect
+  TTFS in the same ballpark as English (a small GPU delta for the ~2× flush). Carry the
   raw-harness-≠-Pipecat-pipeline caveat (`proj-2026-05-19-eou-endpointing/readme-row-silence0-warm200.md`).
   **GATE:** valid WER + TTFS + documented comparison; diagnose prompt/rc if WER is wildly off.
   Key files: `run_full1000_conc12.py`; `proj-2026-05-20-1947/` notes
