@@ -532,3 +532,18 @@ review process showed to be inaccurate. The corrections, with code references:
 - **TTFS explainer (companion doc):** `docs/ttfs-latency-explainer.html` —
   the finalization-latency bounds, contributing factors, and the
   greedy-append-only / rc1-stability nuance.
+
+# Follow-on: multilingual checkpoint support (2026-05-20)
+
+The `nvidia/NVIDIA-Nemotron-3.5-ASR-Streaming-Multilingual-0.6b` checkpoint was
+wired in alongside the English model via **process-per-model** (separate server
+processes/runtimes; client routes by `model_name` + optional `language`). At
+`en-US` it measured **latency parity** (TTFS p95 245 ms vs English 247 ms — its
+rc3 640 ms synthetic final-pad is faster-than-wallclock, same mechanism as
+`silence_0`) but **~2.4× worse English WER** (4.72%/4.84% vs 1.94%/1.95%), all
+in the error tail (10 catastrophic clips + 3 empties vs zero). Keep English as
+the default for English-only; use multilingual only when language coverage is
+needed. The Steps 2-4 `server.py` changes are byte-identical-inert for English
+(re-validated 100/100). Full design + results:
+`proj-2026-05-20-1947/multilingual-support-summary.md` +
+`proj-2026-05-20-1947/step6-ml-comparison.md`.

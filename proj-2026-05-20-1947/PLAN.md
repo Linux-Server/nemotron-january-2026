@@ -166,7 +166,7 @@ apples-to-apples vs English — **with the English server byte-identical**.
   **GATE:** valid WER + TTFS + documented comparison; diagnose prompt/rc if WER is wildly off.
   Key files: `run_full1000_conc12.py`; `proj-2026-05-20-1947/` notes
 
-- [ ] **7. Consolidate: docs + final English re-validation + recommendation**
+- [x] **7. Consolidate: docs + final English re-validation + recommendation**
   Document the process-per-model design (EA-NeMo venv + isolation, endpoint routing, handshake +
   validation, prompt/lang-tag handling, chosen rc + its latency, the WER/TTFS comparison). Final
   English `silence0_warm200` regression sign-off. Update canonical doc / explainer if warranted.
