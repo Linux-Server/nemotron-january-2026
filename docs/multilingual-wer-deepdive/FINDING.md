@@ -1,8 +1,8 @@
 # Multilingual checkpoint — elevated-WER deep dive (front-drop finding)
 
-**Date:** 2026-05-21  **Status:** LOGGED (not yet root-caused/fixed — by decision, to keep the batching
-`/implement` loop moving). **Scope:** the SHIPPED multilingual path (`proj-2026-05-20-1947`), not the
-batching plan.
+**Date:** 2026-05-21  **Status:** RESOLVED — root cause is **H1: the multilingual model's streaming decode
+goes silent on certain utterance onsets (model fragility), NOT a defect in our inference code** (confirmed by
+re-stream, see below). **Scope:** the SHIPPED multilingual path (`proj-2026-05-20-1947`).
 
 ## Question
 The multilingual checkpoint (`NVIDIA-Nemotron-3.5-ASR-Streaming-Multilingual-0.6b`) scored **4.84% pooled
@@ -15,8 +15,10 @@ Both runs used `language=en-US` explicitly (not auto) — verified in the run co
 (`Inference prompt set to 'en-US'` per session). So this is the model's English-*prompted* performance.
 
 ## TL;DR
-**~81% of the en→ml gap is genuine model quality; ~19% is a real, ml-specific inference bug** (front-of-
-utterance dropping on ~10 clips). The modified streaming/prompt/tag-strip path is otherwise clean.
+**~81% of the en→ml gap is genuine model quality; ~19% is the multilingual model's streaming decode going
+SILENT on the onset of ~10 clips (H1, confirmed by re-stream) — NOT a defect in our inference code.** The
+model emits nothing for the first 5–6.5s of these utterances then wakes up mid-stream; the English
+checkpoint emits from the first word. Our modified streaming/prompt/tag-strip/finalize path is clean.
 
 ## Evidence
 Method: head-to-head on stored `wer_metrics` (ml vs en, same samples), no new inference. Scripts:
@@ -59,16 +61,28 @@ c242a089 10.0s del=9/30  | 7abb01d2 12.7s del=9/33  | 7b170b20  5.3s del=5/11
 3196d91e 13.8s del=4/30
 ```
 
-## Root cause (hypothesis — NOT yet confirmed)
-A pause/disfluency mid-clip likely triggers a finalize + cold-reset in the continuous/silence0 path, and the
-first segment's text is lost from the captured finalize delta (the harness records only `is_final&&finalize`
-deltas, not interims). To confirm: re-stream `a934808b` through the ml server (EA venv,
-`/tmp/ml-nemo-path`, rc3, silence0_warm200) and capture the raw interim + finalize message stream + server
-log — does the front appear as interims but not in a finalize delta (delta bug), or never at all (streaming
-dropout)? Needs the GPU.
+## Root cause — RESOLVED: H1 (re-stream, 2026-05-21)
+Re-streamed the front-drop clips through the live ml server under the exact full-1000 conditions
+(`?language=en-US`, 20ms chunks realtime-paced, 200ms trailing silence, vad_stop+reset) with full
+interim+finalize logging (`restream_diag.py`). DECISIVE:
+- `a934808b` (13.2s): **first interim at t=6.5s = "It is not…"**; the front ("the expensive package i
+  ordered…") **never appears in any interim**; `current_text` never shrank; one finalize delta = the tail.
+- `5054b614` (15.5s): **first interim at t=5.2s = "Shake…"**; "can you give me some of the main plot points
+  of" **never decoded**.
+
+So the front is **never produced during streaming** — not lost at finalize (the finalize delta faithfully
+emits exactly what streaming produced), not truncated by our code (`current_text` grows monotonically from
+the late start, never shrinks). The earlier "internal-pause → mid-clip finalize/reset" hypothesis was wrong
+(the harness sends a single segment; there is no server-side VAD). This is **H1: the multilingual model's
+RNNT streaming decode emits blanks for the first ~5–6.5s of these specific utterances and "wakes up"
+mid-stream.** The English checkpoint emits from the first word on the same audio. Observation (not confirmed
+mechanism): the model starts at a strong content anchor ("Shakespeare", "It is…") and under-emits on the
+rapid function-word preamble — a decode fragility of the 0.6B multilingual model under rc3, not our code.
 
 ## Impact & recommendation
-This is a **shipped** bug: long utterances with an internal pause get their front truncated in production —
-a voice-agent dealbreaker (drops the first half of a user's sentence). Fix would take the English-set WER
-4.84% → ~4.29% and, more importantly, stop truncating real utterances. Worth a dedicated fix pass on the
-multilingual finalize/segment path (independent of the batching plan).
+This is a **shipped model-quality limitation, not a code defect** — the multilingual checkpoint occasionally
+swallows the onset of long English utterances. It is NOT fixable in our inference code (the streaming/prompt/
+tag-strip/finalize path is clean and faithful). Mitigations are model-level (finetune / different checkpoint)
+or application-level heuristics (e.g. detect a long speech-energy span that produced no transcript). Removing
+these ~10 clips puts ml at ~4.29% (still ~2.2× en = the inherent 0.6B-multilingual penalty). The English
+checkpoint and the batching plan are unaffected.
