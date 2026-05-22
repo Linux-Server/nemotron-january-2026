@@ -1,0 +1,71 @@
+<task>
+DEEP ANALYSIS — round 1 (NO code edits, NO cloud, NO commits): enumerate + prioritize concrete optimizations
+to improve (A) TTFS / finalize latency and (B) per-instance realtime scaling (the keep-up knee) for the
+Nemotron streaming ASR server, targeting AWS EC2 g6 (L4) and g6e (L40S). Write
+proj-2026-05-21-inference-opt/round1-analysis.md. Be concrete, quantitative, and ambitious.
+
+READ FIRST:
+- proj-2026-05-21-0410/SUMMARY.md — the lane analysis (single serial launch-dispatch lane = bottleneck; GPU
+  NOT saturated; forced-batch ceiling >=220; batching is a self-host lever; in-phase 115 vs out-of-phase 56;
+  the unbatched vad_stop barrier-drain caps in-phase; the 4 next-phase levers).
+- src/nemotron_speech/server.py — the scheduler + the model-call LANES (NEMOTRON_MODEL_LANES, just landed:
+  replica-per-lane, steady-same-drop_extra-only concurrent, exclusive non-steady path), the finalize/fork path
+  (_continuous_finalize*, _process_final_chunk, _scheduler_drain_ready_barrier_locked = the unbatched B=1
+  barrier-drain), warm200 (_init_session warmup), _process_chunk, the inference_lock.
+- proj-2026-05-21-1959-cudagraph/PLAN.md — the per-B manual CUDA-graph capture plan (B=1..K, the cloud cheaper-
+  call lever; replaces torch.compile which won't warm up on cloud).
+- batch_primitives.py — the batching/scatter primitives.
+
+EMPIRICAL CONTEXT (just measured on EC2; you can't see it, so here it is):
+- g6 / L4 + EPYC Milan (16 vCPU): B=1 baseline knee ~4-8, SERVER single-core-bound (server.py one core ~100%,
+  GPU only ~46%, loadgen idle). So Milan single-thread launch dispatch ~= Modal (~5), NOT faster than Modal;
+  only the local 5090 desktop core (knee 16) is faster per-core.
+- Batching does NOT raise the keep-up knee at low N on Milan (batches don't form) but improves high-N robustness.
+- LANES are the lever: lanes=2 -> knee 16 (GPU 46%->~92%); lanes=4 REGRESSED to 4 (GPU SM oversubscription).
+  So lanes=2 is the L4 sweet spot; lanes lift off the single-core CPU floor and the GPU compute becomes the new
+  ceiling (~16-24 on L4). g6e/L40S (3-4x compute, 48GB) is being measured now (more lanes expected).
+- Latency: <400ms production TTFS budget is the hard target. Current finalize = silence0_warm200 (fork-flush).
+
+DELIVERABLE — for BOTH axes, a table of candidate optimizations, each with: mechanism, exact code location,
+expected gain (quantify), effort (S/M/L), risk, interaction with the other levers (lanes / batching / CUDA-graphs),
+and local-vs-cloud test needed. Consider AT LEAST:
+(A) TTFS / finalize:
+  - the fork-flush finalize padding + the unbatched barrier-drain — batch it? shorten it? overlap with the lane?
+  - warm200 ready-latency contention at concurrent connect.
+  - right-context lookahead vs the 400ms budget; can rc shrink for lower TTFS?
+  - decode at finalize (RNNT greedy max_symbols; cost of the final chunk).
+  - speculative finalize — already exists; can the commit be earlier/faster?
+(B) scaling / knee:
+  - lanes x batching x CUDA-graph interaction: on g6 lanes=2 fills the GPU — do batching/graphs stack ON TOP, or
+    are they redundant once GPU-bound? On g6e (more headroom) what's the right combination?
+  - the barrier-drain as the in-phase high-N cap (115 not 180).
+  - coarse phase-alignment (the confirmed ~2x lever) within the latency budget.
+  - per-GPU optimal config (lane count, batch size, MAX_SIZE) for L4 vs L40S.
+  - pushing the GPU-compute ceiling once lanes fill it: fp16/bf16 inference? model precision? CUDA-graphs cheaper
+    call raising effective throughput? smaller chunk/right-context?
+  - per-stream cache/KV memory: does it cap concurrency on 24GB (L4) vs 48GB (L40S)?
+
+END WITH a RANKED shortlist: the top "TTFS wins" and top "scaling wins" for the next phase (highest value /
+lowest risk first), each flagged local-test vs cloud-test (g6/g6e). This feeds a proj implementation plan.
+</task>
+
+<context>
+This is round 1 of a multi-round ambitious optimization deep-dive. Analysis only — later rounds will prototype +
+test the top candidates (some on EC2 g6/g6e). The orchestrator is concurrently measuring g6e. Read the cited
+files; ground every claim in the actual code + the measured numbers above.
+</context>
+
+<verification_loop>
+Ground each optimization in a specific server.py location + the measured bottleneck (single-core launch dispatch,
+GPU 46% at 1 lane). Don't propose levers that the lane analysis already shows are redundant once GPU-bound without
+saying so. Quantify expected gains against the measured knees (g6 lanes=2 ~16-24).
+</verification_loop>
+
+<action_safety>
+Analysis only: NO edits to server.py / NeMo, NO cloud, NO commits. Produce round1-analysis.md only.
+</action_safety>
+
+<compact_output_contract>
+Report: the path written; the count of TTFS + scaling candidates; the top-3 ranked of each with expected gain +
+local/cloud test flag; the single highest-value next experiment.
+</compact_output_contract>

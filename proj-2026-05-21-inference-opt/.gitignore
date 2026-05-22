@@ -1,0 +1,5 @@
+# raw benchmark artifacts (large; the .md writeups capture the numbers) + logs/caches
+*-artifacts/
+*.log
+__pycache__/
+codex-jobs/*.log

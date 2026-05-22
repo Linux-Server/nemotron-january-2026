@@ -1,0 +1,58 @@
+<task>
+PROTOTYPE — round 2 (src/nemotron_speech/server.py, flag-gated default OFF, LOCAL only, NO commits): batch the
+vad_stop barrier-drain. This is the #1 convergent TTFS+scaling lever from the round-1 analysis
+(proj-2026-05-21-inference-opt/round1-synthesis.md + round1-analysis.md A1/B2).
+
+PROBLEM: `_scheduler_drain_ready_barrier_locked` (~server.py:3732-3759) drains a session's ready backlog ONE
+chunk at a time (B=1) via `_scheduler_process_one_ready_chunk_locked` (~3568-3608) before the fork-flush finalize.
+Under in-phase load this (a) balloons finalize TTFS and (b) caps the in-phase knee. MEASURED
+(proj-2026-05-21-0410/inphase-confirmation.md): in-phase N=120 TTFS p95 ~2567 ms with 452 B=1 barrier chunks;
+N=150 has 2236 B=1 barrier chunks and TTFS p95 ~21.5 s; the in-phase knee stalls at ~115 (not the ~180 ceiling).
+
+CHANGE: add `NEMOTRON_BATCH_BARRIER_DRAIN` (default 0; only engages with scheduler + batching on). When on, the
+scheduler GROUPS same-key ready barrier chunks across sessions and drains them through the existing batched
+`_process_ready_batch` path (~5197-5391; stack/scatter invariants in batch_primitives.py) instead of per-session
+B=1. A session's pending control event (vad_stop / reset / close) must resolve ONLY AFTER that session's backlog
+reaches not-ready (preserve event ordering). Respect generation invalidation, per-session state_lock, and
+close/reset semantics. With lanes>1, barrier chunks should run as normal steady batched work, NOT lane-exclusive
+B=1 (so they stop forcing `_scheduler_exclusive_model_path`).
+
+GATES (byte-exact is non-negotiable — the finalize path is the correctness hazard):
+1. BYTE-EXACT: per-stream final transcript + interim sequence + final deltas (no duplicate finals) byte-IDENTICAL
+   to `NEMOTRON_BATCH_BARRIER_DRAIN=0`, on a fixed clip set, IN-PHASE. Print every mismatch; any diff = NO-GO.
+2. DEFAULT-OFF identity: flag off (or unset) = today's exact behavior (bytes + the unbatched drain path).
+3. FORK_ASSERT=1 clean across the in-phase N=115/120/150 runs (no fork-assert / illegal-memory / stream errors).
+4. THROUGHPUT/TTFS: re-run the IN-PHASE sweep (the regime that exposed the cap) at N=115/120/150, flag on vs off.
+   Report, on/off: the B=1 barrier-chunk count (expect it to collapse), avg effective B, finalize TTFS p95 (expect
+   N=120 back under ~400 ms), and the in-phase knee (expect ~115 -> ~150-180 if no new limiter appears).
+
+Use the in-phase harness from proj-2026-05-21-0410/inphase-confirmation.md (the phase-aligned concurrency_test
+variant). LOCAL (RTX 5090) only — that is the right test bed for the in-phase cap. Write
+proj-2026-05-21-inference-opt/round2-barrier-drain.md. NO cloud, NO commits, NO unrelated refactors.
+</task>
+
+<context>
+Round 2 of the ambitious optimization deep-dive. The orchestrator is concurrently (a) measuring g6e lane scaling
+and (b) about to run a cloud fp16 probe — neither touches server.py, so no conflict with your edit. This change
+is the highest-value prototype because it has a known code location, a measured failure signature, and a
+quantified upside (TTFS-under-load + the in-phase knee cap), and it wins on BOTH the TTFS and scaling axes.
+Read round1-synthesis.md, round1-analysis.md (A1/A2/B2), inphase-confirmation.md, and the scheduler/finalize code.
+</context>
+
+<verification_loop>
+Byte-exact in-phase finals (flag on == off == baseline) is the hard gate — the finalize/barrier path is exactly
+where ordering + state races bite. If ANY final differs, diagnose (ordering? generation? state_lock? scatter?)
+before reporting. Confirm default-off is a true no-op. Run FORK_ASSERT on. Then quantify the in-phase TTFS/knee
+improvement vs the measured baseline (N=120 p95 2567 ms, knee 115).
+</verification_loop>
+
+<action_safety>
+Modify ONLY src/nemotron_speech/server.py (+ test/doc if needed). Flag-gated, default off = byte-identical. No
+NeMo edits, no cloud, no commits. Kill servers + free the local GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report: the flag + the batched-drain design + ordering guarantee; byte-exact in-phase result (on==off, any diffs);
+default-off identity; FORK_ASSERT; the on/off in-phase numbers (barrier-chunk count, avg B, TTFS p95 @N=120, knee);
+VERDICT on whether batched barrier-drain lifts the cap byte-exactly; round2-barrier-drain.md written; cleanup.
+</compact_output_contract>
