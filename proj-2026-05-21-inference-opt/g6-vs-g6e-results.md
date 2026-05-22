@@ -54,6 +54,20 @@ compute-bound. Confirms the GPU is not the ceiling. (*absolute inflated by the s
 - **Caveat:** the co-located load-gens steal ~K vCPUs; in production (remote clients) the per-box cap is likely
   **higher** than 48 even on this 16-vCPU box.
 
+### Multi-process scaling — g6e.8xlarge (L40S, 32 vCPU, MPS)
+| K | per-box target | GPU util | kept up | per-box knee |
+|--:|--:|--:|:--:|--:|
+| 2 | 32 | ~48% | 2/2 | 32 |
+| 3 | 48 | ~70% | 3/3 | 48 |
+| **4** | 64 | ~78% | **4/4** | **64** |
+| 5 | 80 | ~88% | 3/5 | regress |
+| 6 | 96 | ~93% | 1/6 | collapse |
+
+**>50 CONFIRMED: 64/box at K=4.** Doubling vCPUs (16→32) moved K 3→4 (48→64). The binding limit then **shifts from
+vCPU to the GPU**: K=4 at ~78%, K=5 saturates (~88%) → regresses. So the **L40S per-box ceiling is ~64** — more
+vCPUs (g6e.16xlarge) won't exceed it. (In production, without co-located load-gens stealing cores, g6e.4xlarge's
+16 vCPUs may also reach K=4 → 64, improving its $/stream below.)
+
 ## L4 multi-process — INFERRED (to confirm; creds expired before measuring)
 Single-process L4 = 16 @ 46% GPU → K=2 should ≈ fill the (smaller) L4 GPU → **~32/box** (L4 likely GPU-saturates
 near K=2, sooner than the L40S). Needs a measured g6 multi-process+MPS run to confirm.
@@ -61,9 +75,10 @@ near K=2, sooner than the L40S). Needs a measured g6 multi-process+MPS run to co
 ## $/stream and recommendation (approximate EC2 on-demand)
 | Instance | GPU | est. per-box knee | ~$/hr | ~$/stream-hr |
 |---|---|---:|---:|---:|
-| g6.2xlarge | L4 | ~32 (K=2) | ~$0.9 | **~$0.028** |
-| g6e.4xlarge | L40S | 48 (K=3, MPS) | ~$2.0 | ~$0.042 |
-| g6e.8xlarge | L40S | ~64–80? (more vCPU) | ~$3.5 | ~$0.04–0.05? |
+| g6.2xlarge | L4 | ~32 (K=2) | $0.978 | **$0.031** |
+| g6e.4xlarge | L40S | 48 (K=3, MPS) | $3.004 | $0.063 |
+| g6e.8xlarge | L40S | **64 (K=4, MPS — the L40S GPU-bound ceiling)** | $4.529 | $0.071 |
+| g6e.16xlarge | L40S | ~64 (GPU-capped; extra vCPU wasted) | $7.577 | worse |
 
 - **g6 / L4 wins $/stream** (cheapest GPU, fits ~2 processes) → best for cost + horizontal scale.
 - **g6e / L40S wins density-per-box** (48+, fewer instances to manage) at higher $/stream → choose if ops prefers
