@@ -43,7 +43,7 @@ re-explored.
 
 ## Steps
 
-- [ ] **1. Confirm the per-GPU multi-process+MPS matrix (cloud).**
+- [x] **1. Confirm the per-GPU multi-process+MPS matrix (cloud).**
   Measure what's currently inferred: (a) **L4 / g6** multi-process+MPS (`K_LIST=1,2,3`, lanes=2) → confirm ~32/box +
   where it GPU-saturates; (b) **L40S / bigger vCPU** (`g6e.8xlarge`, 32 vCPU) → does K=4–6 reach ~64–80 (is the
   prior K=3 cap really vCPU)? Record per (GPU, size): K*, GPU%, knee, $/stream. Note: co-located load-gen steals
@@ -69,7 +69,7 @@ re-explored.
   refuses known-bad configs (e.g. K beyond the measured GPU/vCPU cap). Default off / explicit until validated.
   Key files: `src/nemotron_speech/server.py` (or the launcher), config
 
-- [ ] **5. Finish the finalize/TTFS chain.**
+- [~] **5. Finish the finalize/TTFS chain.** (running in parallel with Step 1 — independent, local Codex)
   With barrier-drain + finalize-storm on, attack the *next* in-phase limiter (round 3's finding): batch finalize
   **preprocessing** (the reverted attempt dropped terminal punctuation — fix the per-fork preprocessing grouping to
   stay byte-exact) and the **close/cold-reset** cleanup path. Gate: in-phase byte-exact + knee past ~120 toward the
@@ -91,7 +91,7 @@ re-explored.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Per-GPU multi-process+MPS matrix (cloud) | pending | — | confirm L4 ~32; bigger-vCPU g6e → 64-80? |
+| 1 | Per-GPU multi-process+MPS matrix (cloud) | done | (this commit) | L4 K=2->32 (GPU-bound); L40S 48@16vCPU, 64@32vCPU (ceiling); full matrix measured |
 | 2 | Production multi-process launcher + MPS | pending | — | MPS blast-radius hardening |
 | 3 | Routing layer (LB leastconn+maxconn) | pending | — | local+remote process-ports |
 | 4 | Per-GPU config matrix + auto-select | pending | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |

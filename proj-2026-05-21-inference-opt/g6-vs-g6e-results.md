@@ -72,6 +72,10 @@ vCPUs (g6e.16xlarge) won't exceed it. (In production, without co-located load-ge
 Single-process L4 = 16 @ 46% GPU → K=2 should ≈ fill the (smaller) L4 GPU → **~32/box** (L4 likely GPU-saturates
 near K=2, sooner than the L40S). Needs a measured g6 multi-process+MPS run to confirm.
 
+**MEASURED (g6.4xlarge, MPS) — confirms the inference:** K=1 -> 16; **K=2 -> 32** (GPU ~88%); K=3 -> 0 (GPU
+saturates at ~100%, collapses). So the **L4 per-box ceiling = 32 (K=2, GPU-bound)** — the smaller L4 fills at K=2
+where the L40S fills at K=4, so L40S (64) is ~2x L4 (32), matching its ~2x compute. **Full matrix now measured.**
+
 ## $/stream and recommendation (approximate EC2 on-demand)
 | Instance | GPU | est. per-box knee | ~$/hr | ~$/stream-hr |
 |---|---|---:|---:|---:|
