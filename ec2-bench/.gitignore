@@ -1,0 +1,5 @@
+# never commit the private key, ephemeral instance state, logs, or caches
+*.pem
+.instance.json
+*.log
+__pycache__/
