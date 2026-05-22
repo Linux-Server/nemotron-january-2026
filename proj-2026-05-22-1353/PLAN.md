@@ -86,18 +86,20 @@ and pivot. Rationale (R5): the median (274 ms) is already frontier-competitive; 
 component and a no-regret byte-exact lever with a *capped* (~100 ms P95) ceiling — so de-risk cheaply before
 building/maintaining a whole capture/replay subsystem for it.
 
-**Parallel product-quality tracks (separate from this byte-exact graph plan — they trade accuracy, so they are a
-PRODUCT decision, not infra):** these carry the *bigger* latency upside and should be evaluated alongside:
-- **VAD stop-window** (the largest TTFS term, ~200 ms): sweep client `vad-stop-secs` 0.12 / 0.15 / 0.20 and measure
-  false-cutoff rate + WER impact. 200→120 ms saves ~80 ms of *every* turn's user-perceived latency (≈ the whole P95
-  gap to Deepgram) — but it is not an apples-to-apples benchmark lever and risks clipping speech.
+**The ~200 ms VAD stop-window is OUT — it is a FIXED benchmark requirement (`vad-stop-secs` cannot change).** That
+removes the single largest TTFS term as a lever and REINFORCES that the finalize tail is the right — and the only
+*within-benchmark controllable* — latency lever (so the probe is well-justified; R5's "is finalize the right lever"
+premise resolves to YES once the bigger term is off the table).
+
+**One parallel product-quality track (separate from this byte-exact graph plan — it trades accuracy, so it is a
+PRODUCT decision, not infra):**
 - **Final-only shorter padding** (rc1 pads 32 frames / 320 ms; `final_padding_frames`): a latency-vs-WER sweep on
-  the final tail only (NOT global rc0 — `[70,0]` crashes upstream NeMo). Lower final T → less finalize compute, at
-  some suffix-accuracy cost.
+  the final tail only (NOT global rc0 — `[70,0]` crashes upstream NeMo). Lower final `T` → less finalize compute, at
+  some suffix-accuracy cost. This is now the ONLY accuracy-trading latency lever left (the VAD window is fixed).
 
 ## Steps
 
-- [ ] **1. Finalize-tail telemetry + (B,T) histogram + BATCH_FINALIZE profiling (NO hard gate here).**
+- [~] **1. Finalize-tail telemetry + (B,T) histogram + BATCH_FINALIZE profiling (NO hard gate here).**
   `NEMOTRON_FINALIZE_PROFILE=1` (default-off, non-invasive). Per-final records `{finalize_wall, queue_wait,
   debounce_wait, lock_wait, fork_clone[audio/cache/hyps/pred], preproc_wall+count, encoder, decode, sync}` —
   encoder vs decode split via a profiling-only encoder wrapper (NOT whole-call events; see `profile_split.py`).
@@ -192,7 +194,7 @@ PRODUCT decision, not infra):** these carry the *bigger* latency upside and shou
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Telemetry + REPRODUCIBILITY gate + histogram + BATCH_FINALIZE profiling | pending | — | PROBE PHASE; repeat+on-box server-side timing+P95 CI+representative sample; STOP if 178ms is noise; E_eager/tail/(B,T)+B-dist |
+| 1 | Telemetry + REPRODUCIBILITY gate + histogram + BATCH_FINALIZE profiling | in-progress | — | PROBE PHASE; repeat+on-box server-side timing+P95 CI+representative sample; STOP if 178ms is noise; E_eager/tail/(B,T)+B-dist |
 | 2 | Probe (B=1) + cache-len ABORT + E_graph + BUSINESS-payoff gate | pending | — | PROBE PHASE; sweep ALL cache_lens (abort if mismatch); byte-exact+timing; build subsystem (3-7) ONLY if >=60-80ms P95 or robustness |
 | 3 | Finalize-bucket manager + test (partial) | pending | — | ≥1-bucket completeness; synthetic+real; mem/time |
 | 4 | Wire + executor CONTRACT + gate at scale | pending | — | requires steady; hard-disable on thread/stream mismatch; build multi-final harness; B>1 eager-fallback check; lanes×batch×steady matrix |
@@ -227,9 +229,11 @@ PRODUCT decision, not infra):** these carry the *bigger* latency upside and shou
 - **R5 (Codex `bkh0w88ad` + self) — PREMISE/SCOPE lens (mechanics had saturated):** both reviewers found all 4
   premises QUESTIONABLE + verdict **RE-SCOPE** (not "ready"). (1) Target reliability — the 178 ms is one noisy WAN
   run incl control-path RTT → Step 1 is now a hard **reproducibility gate** (repeat + on-box server-side timing +
-  P95 CI + representative multi-final sample). (2) Right lever — finalize is the smallest TTFS term; the **200 ms
-  VAD window** is the bigger product lever → added a parallel VAD track. (3) Byte-exact caps upside → added a
-  parallel final-padding latency-vs-WER track. (4) Effort/payoff — ~100 ms P95 doesn't justify the subsystem on
+  P95 CI + representative multi-final sample). (2) Right lever — finalize is the smallest TTFS term, but
+  the bigger one (~200 ms VAD window) is a **FIXED benchmark requirement** (user-confirmed post-R5: `vad-stop-secs`
+  cannot change) → finalize is the right + ONLY within-benchmark controllable lever; the parallel VAD track was
+  proposed then REMOVED. (3) Byte-exact caps upside → kept a parallel final-padding latency-vs-WER track (the only
+  accuracy-trading lever left). (4) Effort/payoff — ~100 ms P95 doesn't justify the subsystem on
   "physics works" → Step-2 gate raised to a **business-payoff threshold (≥60-80 ms or robustness)**; **Steps 1-2
   reframed as a probe phase, Steps 3-7 conditional.** This round (premise lens) changed the plan's SHAPE where the
   4 mechanics rounds could not — the value was in switching the lens, not the count.
