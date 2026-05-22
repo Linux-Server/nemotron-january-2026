@@ -67,8 +67,10 @@ byte-exact, fail-closed.
 - **Default-off identity**; **fail-closed** (any capture/replay/shape/key/thread-stream mismatch → eager;
   hard-disable, not warn); disable for `prompted_model`.
 ### Safety & scope
-- No padding (exact buckets); uncaptured → eager. Decode stays eager (Ada decoder graph OUT unless Step-1/2 show
-  decode dominates). Do NOT change fork semantics / rc1 padding. Debounce bypass OUT (silence0).
+- **B=1 finalize graphs first** (B>1 finals → clean eager fallback); B>1 graphs are a deferred follow-on only if
+  Step-1's B-distribution shows B>1 finals are material. No padding (exact buckets); uncaptured → eager. Decode
+  stays eager (Ada decoder graph OUT unless Step-1/2 show decode dominates). Do NOT change fork semantics / rc1
+  padding. Debounce bypass OUT (silence0).
 - **Finalize-specific completeness:** manager usable if ≥1 bucket captured; per-bucket skip reason + eager (NOT the
   steady all-or-nothing `~1592`). **Bucket budget:** top-N from the histogram up to a memory-headroom + capture-time
   limit; record allocated/reserved; partial expected. **Replay serialized** per replica.
@@ -84,23 +86,29 @@ byte-exact, fail-closed.
   Per-final key + shapes `{B,T,drop_extra,first/non-first,encoded shape/len,cache shapes,cache-present,att-context}`.
   Aggregate histogram **including empty/suppressed finals** (server-side). Profile the matrix:
   `BATCH_FINALIZE ∈ {0,1}` (+ `_PREPROC` if considered) × topology {one-proc lanes2; multi-proc+MPS} × concurrency
-  {10; the knee}. Build the **multi-final same-websocket harness** here (prove the continuous protocol works —
-  re-arm after finalize keeps state; NOT the reset-then-vad_start that timed out in `ec2_loadgen --rounds`) since
-  later byte-exact gates need it. SOFT outcome: report `E_eager_encoder` (median + tail), the tail attribution, the
-  `(B,T,...)` histogram per config, and a preliminary "encoder tail is worth probing" yes/no. Choose the production
-  BATCH_FINALIZE config. Deliverable: `finalize-telemetry.md`. (The HARD go/pivot gate is Step 2, once E_graph is measured.)
-  Key files: `src/nemotron_speech/server.py`, `proj-2026-05-22-1353/finalize-telemetry.md`, `.../multifinal_client.py`
+  {10; the knee}. (Telemetry uses the EXISTING one-final-per-connection harness — 1000 finals is ample; the
+  **multi-final same-websocket harness is deferred to Step 4** (after the Step-2 GO), not built here.) SOFT outcome:
+  report `E_eager_encoder` (median + tail), the tail attribution, the `(B,T,...)` + **B-distribution** histogram per
+  config, and a preliminary "encoder tail is worth probing" yes/no. Choose the production BATCH_FINALIZE config.
+  Deliverable: `finalize-telemetry.md`. (The HARD go/pivot gate is Step 2, once E_graph is measured.)
+  Key files: `src/nemotron_speech/server.py`, `proj-2026-05-22-1353/finalize-telemetry.md`
 
 - [ ] **2. Feasibility PROBE MATRIX + measured timing + COUNTERFACTUAL GO/PIVOT GATE.**
-  Standalone (no server.py wiring), mirroring the round-5 steady probe. Capture + prove `graph==eager` byte-exact
-  (encoded + encoded_len + state `max_abs==0`, `keep_all_outputs=True`) across a MATRIX: {B=1 first-final(drop=0);
-  B=1 non-first short-T; B=1 non-first long/p95-T; ≥1 B>1 non-first if BATCH_FINALIZE is in the prod config}, each
-  with multiple real fork states of differing `cache_last_channel_len` sharing the key — CONFIRM the key fully
-  determines all shapes. ALSO measure the per-bucket **`E_finalize_graph`** (synced) vs eager. **HARD GATE
-  (counterfactual, on the wall-time tail cohort from Step 1):** proceed to Steps 3-5 ONLY if
-  `P95(W) - P95(W - E_eager_encoder + E_finalize_graph)` clears a concrete threshold (e.g. ≥ ~30 ms), using the
-  MEASURED `E_finalize_graph` here (not the steady cost) and sanity-checked vs the measured eager cost. Else ABORT
-  the graph track and PIVOT to the dominant tail component (decode → reconsider Ada decoder graph; clone/sync/lock/GC).
+  Standalone (no server.py wiring), mirroring the round-5 steady probe. **Scope: B=1 finalize buckets** (B>1 finals
+  eager-fallback; B>1 graphs are a deferred follow-on only if Step-1's B-distribution shows they're material).
+  Capture + prove `graph==eager` byte-exact (encoded + encoded_len + state `max_abs==0`, `keep_all_outputs=True`)
+  across {B=1 first-final(drop=0); B=1 non-first short-T; B=1 non-first long/p95-T}.
+  **MAKE-OR-BREAK abort condition (the physical assumption the whole approach rests on):** for each key, SWEEP all
+  `cache_last_channel_len` in `0..last_channel_cache_size` and require ONE captured graph to be byte-exact across
+  ALL of them. If any mismatch, `cache_len` would have to enter the key (→ explosion) → **ABORT the graph track**
+  (do NOT add cache_len to the key). (NeMo uses `cache_last_channel_len` as a tensor value for offset/masks/clamp,
+  not a Python branch — `conformer_encoder.py` ~670/776/878 — so this is *plausible*; prove it first.) ALSO measure
+  the per-bucket **`E_finalize_graph`** (synced) vs eager. **GO/PIVOT GATE (counterfactual SCREEN, on the wall-time
+  tail cohort from Step 1):** proceed to Steps 3-5 ONLY if `P95(W) - P95(W - E_eager_encoder + E_finalize_graph)`
+  clears a concrete threshold (e.g. ≥ ~30 ms), using the MEASURED `E_finalize_graph`. NOTE this mixes production-load
+  `E_eager` with isolated-probe `E_graph` → an OPTIMISTIC screen, not proof: require margin + a sensitivity check
+  (Step 5's cloud retest is the real proof). Else ABORT the graph track and PIVOT to the dominant tail component
+  (decode → reconsider Ada decoder graph; clone/sync/lock/GC).
   Key files: `proj-2026-05-22-1353/probe_finalize_bucket.py`, `proj-2026-05-22-1353/finalize-gate.md`
 
 - [ ] **3. Finalize-bucket graph manager + standalone test (partial-capture aware).**
@@ -120,10 +128,13 @@ byte-exact, fail-closed.
   `6128` + serial `7310`): `keep_all_outputs=True` AND key captured → replay (clone outputs); else eager. Disable
   for `prompted_model`. Bound startup capture time + warm per-lane finalize buckets (first-final cold check).
   HARD GATE: TEST MATRIX `lanes∈{1,2} × batch_finalize∈{on,off} × steady∈{on,off}` (expected replay/disable);
-  **multi-final continuous-session** full-event byte-identical flag-on==off (using the Step-1 multi-final harness);
-  a **forced-B>1 scheduler-barrier** canary — a test-only hold flag that queues N `debounce_expired` events before
-  waking the scheduler (concurrent clients alone may drain B=1), asserting the effective-batch histogram has
-  B=2..batch_max_size and finalize replay counters increment; FORK_ASSERT clean; default-off==pre-change.
+  **multi-final continuous-session** full-event byte-identical flag-on==off (build the multi-final same-websocket
+  harness HERE — prove the continuous protocol first: re-arm after finalize keeps state, NOT the reset-then-vad_start
+  that timed out in `ec2_loadgen --rounds`; capture server-side suppressed/empty finals);
+  a **B>1 eager-fallback** check — under BATCH_FINALIZE, force coalesced finals via a test-only scheduler hold that
+  queues N `debounce_expired` before waking, and assert B>1 finals **fall back to eager cleanly** (B=1-only graph
+  scope) with byte-exact output (if B>1 graphs are later added, this asserts replay only on captured B,T buckets);
+  FORK_ASSERT clean; default-off==pre-change.
   Key files: `src/nemotron_speech/server.py`, `proj-2026-05-22-1353/step4_finalize_canary.sh`
 
 - [ ] **5. Cloud TTFS retest — BOTH topologies (one-proc WAN + multi-proc+MPS), L40S + L4.**
@@ -154,10 +165,10 @@ byte-exact, fail-closed.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Telemetry + histogram + BATCH_FINALIZE profiling + multi-final harness | pending | — | NO hard gate; E_eager + tail attribution + (B,T) per config; build multi-final client |
-| 2 | Probe matrix + measured E_graph + COUNTERFACTUAL gate | pending | — | byte-exact + timing; hard GO/PIVOT/ABORT with measured numbers |
+| 1 | Telemetry + histogram + BATCH_FINALIZE profiling | pending | — | NO hard gate; E_eager + tail attribution + (B,T)+B-dist per config; existing harness (multi-final deferred to Step 4) |
+| 2 | Probe (B=1) + cache-len ABORT + E_graph + counterfactual SCREEN | pending | — | sweep ALL cache_lens (abort if mismatch); byte-exact + timing; GO/PIVOT screen w/ margin |
 | 3 | Finalize-bucket manager + test (partial) | pending | — | ≥1-bucket completeness; synthetic+real; mem/time |
-| 4 | Wire + executor CONTRACT + gate at scale | pending | — | requires steady; hard-disable on thread/stream mismatch; multi-final + forced-B>1 barrier; matrix |
+| 4 | Wire + executor CONTRACT + gate at scale | pending | — | requires steady; hard-disable on thread/stream mismatch; build multi-final harness; B>1 eager-fallback check; lanes×batch×steady matrix |
 | 5 | Cloud retest — both topologies | pending | — | one-proc WAN + multi-proc+MPS; memory fit; histogram re-check |
 | 6 | (Optional) one-shot preprocessor | pending | — | non-blocking; gated on Step-1; byte-exact (punctuation) |
 | 7 | Finalize-batching prod config + canary | pending | — | per Step-1; L40S canary |
@@ -177,4 +188,12 @@ byte-exact, fail-closed.
   scheduler-barrier** for forced B>1 (concurrent clients may drain B=1); Step 1 must profile BATCH_FINALIZE 0/1 at
   conc-10 AND the knee. MINOR — finalize replay must HARD-disable (not warn) on thread/stream mismatch; Step 6 made
   optional/non-blocking. Both reviewers converged on the same two issues (gate ordering + harness buildability),
-  severity dropped each round → **plan converged; ready to /implement** after these fixes (now folded in).
+  severity dropped each round.
+- **R4 (Codex `bfaaftew2` + self):** NO new CRITICAL; reviewers FULLY converged (same 4 findings). MAJOR — Step 2
+  makes the **all-cache-lens byte-exact** the explicit make-or-break ABORT (NeMo uses cache_len as a value, not a
+  branch, `conformer_encoder.py ~670/776/878` → plausible, but prove it before Steps 3-5); **scope the first graph
+  to B=1** (B>1 → clean eager fallback), which halves the bucket space and collapses the forced-B>1 *replay* canary
+  to a clean-fallback check. MINOR — the gate is an optimistic SCREEN (prod E_eager + isolated E_graph) needing
+  margin/sensitivity (Step 5 is proof); defer the multi-final harness out of Step 1 (existing harness suffices for
+  telemetry) to Step 4. Both VERDICTS: **ready to /implement.** Net across R1-R4: severity C/C → C/M → C+refine →
+  none/scoping, and R4's changes *removed* complexity — the plan has converged.
