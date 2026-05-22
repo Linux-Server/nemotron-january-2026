@@ -18,7 +18,8 @@ else
   git show HEAD:src/nemotron_speech/batch_primitives.py > "$STAGE/batch_primitives.py"
   echo "[push] COMMITTED (HEAD) server.py + batch_primitives.py"
 fi
-cp ec2-bench/ec2_loadgen.py ec2-bench/run_bench.sh ec2-bench/run_lanes.sh ec2-bench/bootstrap.sh "$STAGE/"
+cp ec2-bench/ec2_loadgen.py ec2-bench/run_bench.sh ec2-bench/run_lanes.sh ec2-bench/run_multiproc.sh \
+   ec2-bench/run_l4_ttfs_sweep.sh ec2-bench/bootstrap.sh "$STAGE/"
 cp -r proj-2026-05-20-modal-cost/loadgen_audio "$STAGE/loadgen_audio"
 rsync -az -e "ssh -i $KEY $SSHO" "$STAGE"/ ubuntu@"$IP":/home/ubuntu/nemotron/
 echo "[push] done -> ubuntu@$IP:~/nemotron/  ($(ls "$STAGE"/loadgen_audio | wc -l) audio clips)"
