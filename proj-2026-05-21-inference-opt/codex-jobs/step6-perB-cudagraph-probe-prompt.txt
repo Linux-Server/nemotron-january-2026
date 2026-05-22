@@ -1,0 +1,46 @@
+<task>
+PROBE — Step 6 of proj-2026-05-21-inference-opt/PLAN.md (de-risk per-B manual CUDA-graphs). This is Step 1 of the
+referenced cudagraph plan (proj-2026-05-21-1959-cudagraph/PLAN.md), RE-SCOPED with the new finding. LOCAL (RTX
+5090), standalone (NO server.py edit), no commits.
+
+Extend the validated B=1 manual-graph probe (proj-2026-05-21-0410/probe_manual_cudagraph.py — already byte-exact,
+251 ms warmup, 1.36x@B=1) to PER-B: capture encoder.cache_aware_stream_step as a manual torch.cuda.CUDAGraph for
+B = 1..16 (build per-B stacked inputs from K independent clips; static buffers per B; no padding). For each B:
+1. BYTE-EXACT: graph(B) per-stream output == eager-batched(B) — text byte-identical + state max_abs (extend the
+   probe's existing compare to B>1). Hard gate.
+2. SPEEDUP curve: synced per-chunk wall (manual-graph + eager decode) vs fully-eager, per B. Report the curve.
+3. **NEW (re-scoped) — the key question:** does the graph reduce the per-call GPU-ACTIVE time (use cuda events to
+   measure GPU-active, not just wall)? The deep-dive found the per-box ceilings (L4 32, L40S 64) are GPU-bound but
+   the workload is NOT compute-bound (fp16 was 0.79x — slower). So the GPU "saturation" is likely LAUNCH-OCCUPANCY
+   (many tiny kernels keeping the GPU busy). If manual graphs collapse that occupancy (lower GPU-active per chunk),
+   they could RAISE the GPU-bound per-box ceiling under multi-process+MPS — a real scaling lever, not just low-N.
+   Report whether GPU-active/chunk drops with the graph, and by how much, per B.
+
+Pick K = the B where speedup drops below ~1.15x. Write proj-2026-05-21-inference-opt/round5-perB-cudagraph.md with:
+the per-B byte-exact result, the speedup + GPU-active curves, the K recommendation, and a VERDICT on whether full
+per-B-graph wiring into the scheduler (cudagraph plan Steps 2-3) is worth it GIVEN multi-process+MPS is the scaling
+lever — specifically, is there evidence graphs would lift the GPU-bound ceiling (worth a cloud GPU-bound retest)?
+</task>
+
+<context>
+Step 6 of the inference-opt /implement run. Read proj-2026-05-21-1959-cudagraph/PLAN.md (the full per-B plan),
+probe_manual_cudagraph.py (the B=1 probe to extend), and proj-2026-05-21-inference-opt/g6-vs-g6e-results.md (the
+multi-process+MPS scaling: single proc GIL-capped ~16; per-box ceilings GPU-bound — L4 32, L40S 64; fp16 dead).
+This probe decides whether the (risky, large) full scheduler-wiring of per-B graphs is worth executing.
+</context>
+
+<verification_loop>
+Byte-exact per B (graph(B)==eager(B), incl. state max_abs=0) is the hard gate — the B>1 stacking is where it can
+break. Measure GPU-active (cuda events), not just wall-clock, to answer the ceiling-raising question. If the GPU is
+shared (no other process should be — confirm), note it.
+</verification_loop>
+
+<action_safety>
+Standalone probe only. NO server.py / NeMo edits, no cloud, no commits. Free the GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report: per-B byte-exact (B=1..K, any diffs); the speedup + GPU-active-time curves vs B; the K recommendation;
+VERDICT — is full per-B-graph wiring worth it given multi-process+MPS, and is there evidence it would lift the
+GPU-bound ceiling (→ a cloud GPU-bound retest)? round5-perB-cudagraph.md written; cleanup.
+</compact_output_contract>

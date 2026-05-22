@@ -76,7 +76,7 @@ re-explored.
   ~180 forced-batch ceiling. (TTFS is already ~40–150 ms out-of-phase; this is burst robustness.)
   Key files: `src/nemotron_speech/server.py`, `proj-2026-05-21-0410/inphase_loadgen.py`
 
-- [ ] **6. Per-B manual CUDA-graphs (re-scoped).**
+- [x] **6. Per-B manual CUDA-graphs (re-scoped).** DE-RISKED + re-ranked POSITIVE (per-B byte-exact B=1..16, GPU-active drops 12–30%, K=10). Full scheduler wiring = the referenced `proj-2026-05-21-1959-cudagraph` plan — now JUSTIFIED (a separate /implement + cloud GPU-bound retest), since graphs likely lift the GPU-bound per-box ceiling.
   Execute `proj-2026-05-21-1959-cudagraph/PLAN.md` as the **per-lane cheaper-call** lever (collapse launch dispatch
   → each lane/process does more → fewer processes to fill the GPU / lower vCPU pressure). Re-rank vs multi-process:
   most valuable where vCPU-bound (Step 1 will show how vCPU-bound we are). Byte-exact per B, fail-closed, default off.
@@ -96,5 +96,5 @@ re-explored.
 | 3 | Routing layer (LB leastconn+maxconn) | done (design) | (deploy commit) | deploy/haproxy.cfg.example (+ ALB equiv) |
 | 4 | Per-GPU config matrix + auto-select | done | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |
 | 5 | Finish finalize/TTFS chain | done | — | finalize preprocessing + close/cold-reset, byte-exact |
-| 6 | Per-B manual CUDA-graphs (re-scoped) | pending | — | per-lane cheaper-call; re-rank vs multi-process |
+| 6 | Per-B manual CUDA-graphs (re-scoped) | done (de-risked) | — | per-lane cheaper-call; re-rank vs multi-process |
 | 7 | Deployment substrate + SageMaker | done (design) | — | EC2/ECS + ALB; not SM real-time endpoints |
