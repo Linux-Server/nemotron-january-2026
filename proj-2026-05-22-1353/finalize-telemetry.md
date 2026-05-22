@@ -70,6 +70,27 @@ host/Python path.** The gate ran with `NEMOTRON_BATCH_FINALIZE` OFF → the glob
 flag → pinned-lane finalize, no global lock) and re-measure the lock/queue tail. Then the deeper Python fixes
 (de-dup the decoder-state clone, parallelize finalize, buffer reuse — Codex's ranked list).
 
+## BATCH_FINALIZE on/off (step1c, same box, K=4+MPS, conc-10) — partial win
+Worst-proc server-side finalize span (loadgen TTFS, no WAN): **BF=0 (global-exclusive) 447 ms p95 (spread
+354-447, a straggler); BF=1 (pinned-lane) 350 ms p95 (uniform 327-350).** BF=1 cuts ~100 ms + removes the
+straggler + erased a pathological 318 ms fork_clone outlier (BF0 max 319 -> BF1 max 5). Byte-exact, existing flag.
+BUT not the full fix: `lock_wait` p95 ~86 ms BOTH ways (pinned-lane did NOT eliminate it — the finalize still waits
+for its pinned lane, which is busy with steady inference at this load). The loadgen span (~350) is much larger than
+any single named component, BUT the per-COMPONENT p95s aren't additive — I can't validly subtract them to claim a
+fixed "un-instrumented gap." NEEDS a follow-up: the per-FINAL total instrumented span (sum the components per
+final, then p95) vs the loadgen ttfs p95 — to learn whether the 350 is dominated by `lock_wait` (lane contention)
+or by an un-instrumented host edge (debounce / scheduler-pickup / emit / asyncio wakeup — the un-instrumented
+edges). (Per-final model_wall/encoder rise under BF=1 because batching makes B>1 — confounded; the loadgen span is
+the clean outcome signal.) Production `deploy/launch_multiproc.sh` already sets BATCH_FINALIZE (not `_PREPROC`).
+
+**The 401/178 target was DOUBLY unrepresentative of production: single-process AND BATCH_FINALIZE-off.** Production
+is K-proc + MPS + BATCH_FINALIZE-on; under that density (40-64/box) the finalize is host-bound and ~350 ms p95
+server-side (much larger than the single-process bench). Next levers (host-side, byte-exact; GPU graph stays
+dropped): (1) compute the per-final TOTAL span + extend the telemetry to the un-instrumented edges (debounce /
+scheduler-pickup / emit) to LOCALIZE the 350 ms — is it `lock_wait`/lane-contention or a host/asyncio edge?
+(2) reduce finalize-vs-steady lane contention (`lock_wait` ~86); (3) add `_PREPROC` to prod; (4) a clean
+production-config (K=4 + BATCH_FINALIZE + LB) WAN bench for the true client number.
+
 ## Value of the probe (why this is a success, not a failure)
 The probe-first plan (gate Steps 1–2 before building Steps 3–7) + the **reproducibility gate added in review R5**
 caught this for ~1 instrumentation pass + ~1 cloud run (~30 min, ~$2) — instead of building a 7-step finalize-graph
