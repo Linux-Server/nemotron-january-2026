@@ -91,6 +91,31 @@ scheduler-pickup / emit) to LOCALIZE the 350 ms — is it `lock_wait`/lane-conte
 (2) reduce finalize-vs-steady lane contention (`lock_wait` ~86); (3) add `_PREPROC` to prod; (4) a clean
 production-config (K=4 + BATCH_FINALIZE + LB) WAN bench for the true client number.
 
+## DECISIVE (step1c free decomposition): the finalize is TWO halves, we instrumented ONE
+Per-final decomposition of the step1c records (finalize_wall ≈ fork_flush; other components nested INSIDE it —
+the residual was negative, confirming nesting):
+
+| half | what | p95 (K=4+MPS) | instrumented |
+|---|---|--:|:--:|
+| **COMPUTE** (`finalize_wall`/`fork_flush`) | `lock_wait` ~87 + GPU model ~38, nested | **~130 ms** (terminal max 138, tight) | yes |
+| **TRIGGER** (`vad_stop` → finalize-START) | loadgen vad_stop→final (~340) − finalize_wall (~130) | **~210 ms** | **NO — dark** |
+
+1. The COMPUTE half is **`lock_wait`-dominated (~87 p95)** = lane contention (finalize waits for its inference lane,
+   busy with steady), NOT GPU (model ~38). GPU/graph out for the 3rd time; compute lever = host-side lock contention.
+2. **BF=1 is a tail-OUTLIER fix, not a bulk win**: `finalize_wall` p95 130 BOTH ways; BF only erased a pathological
+   318 ms `fork_clone` spike + capped `fork_flush` max 436→313. Each utterance emits 2 records
+   (`reset_then_debounce` emitted=False + `close` emitted=True/delta>0); terminal/emitted both p95 ~130. Keep BF
+   (+`_PREPROC`) for the outlier cap, but it is NOT the lever.
+3. **The bigger half (~210 ms) is the un-instrumented TRIGGER latency** (`vad_stop`→finalize-start: reset / debounce
+   / scheduler-pickup). NOT a loadgen artifact — the REAL WAN bench's "178 ms server finalize" decomposes as
+   ~66 ms compute + **~112 ms trigger** even single-process; it grows ~112→~210 ms under K=4. `FINALIZE_PROFILE`
+   only instrumented the compute half, so the plan's "178 ms server finalize" was itself a conflation.
+
+**NEXT PROBE (cheap, decisive):** add ONE field to `FINALIZE_PROFILE` — the `vad_stop`-received → finalize-start
+delta — and re-run step1c (K=4). Localizes the dark ~210 ms (reset vs debounce vs scheduler-pickup). The dominant,
+growing half of the client finalize is host-side and currently dark — fix THAT, not the (already-fast) compute.
+Then a production-config (K + BATCH_FINALIZE + LB, real client) WAN bench for the true client TTFS.
+
 ## Value of the probe (why this is a success, not a failure)
 The probe-first plan (gate Steps 1–2 before building Steps 3–7) + the **reproducibility gate added in review R5**
 caught this for ~1 instrumentation pass + ~1 cloud run (~30 min, ~$2) — instead of building a 7-step finalize-graph
