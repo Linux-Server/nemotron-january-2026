@@ -11,7 +11,8 @@ batching, so we capture a graph **per batch size B = 1…K** (no padding), repla
 eager for B>K and all non-steady buckets. This is the cloud lever (B=1 lifts the ~5 knee where batches don't
 form) **and** the self-host lever (small-B graphs compound with batching; avg B≈4 at the N=56 knee, so the
 realtime range is exactly where graphs help most). Flag-gated, default off, fail-closed, English-first.
-Deployment target is **AWS SageMaker** (likely **L40/L40S**, Ada), not Modal — Modal is only the benchmark
+Deployment target is **AWS SageMaker** (Ada GPU; reasoned default **G6/L4 sized for vCPUs**, not L40S — see
+deployment memory), not Modal — Modal is only the benchmark
 proxy, and since the knee is single-thread-CPU-bound the production knee must be validated on the target
 instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 
@@ -100,8 +101,9 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   failure mode must be gone), smoke for correctness, then sweep and compare to the batch=1 baseline. Use **L4
   and L40S** (both Ada sm_89 — capturability transfers; **T4 dropped**, production targets higher-end). Does the
   cheaper call lift the knee? Billable, cost-conscious (smoke first, stop apps immediately).
-  **CAVEAT — Modal is a launch-bound *proxy*, not the deploy target.** Production is **AWS SageMaker** (likely
-  L40/L40S); the knee is single-thread-CPU-bound and SageMaker's dedicated vCPUs differ from Modal's allocation,
+  **CAVEAT — Modal is a launch-bound *proxy*, not the deploy target.** Production is **AWS SageMaker** (reasoned
+  default **G6/L4 sized for vCPUs**, not L40S — same Milan CPU, GPU underutilized, cheaper); the knee is
+  single-thread-CPU-bound and SageMaker's dedicated vCPUs differ from Modal's allocation,
   so the production knee MUST be re-measured on the actual SageMaker instance before sign-off (and the Modal
   "batching doesn't help" conclusion may not hold there).
   Write into `proj-2026-05-20-modal-cost/RESULTS.md` (Step 10c).
