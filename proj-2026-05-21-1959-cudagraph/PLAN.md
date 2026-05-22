@@ -51,13 +51,19 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   server still serves. Eager is never removed.
 - **No padding**: capture every B in 1…K (real lengths). B>K → eager. Non-steady buckets (warmup/first-chunk
   drop_extra=0 / vad_stop finalize / barrier-drain) → eager.
+- **Graph-pool memory (watch this)**: graphs are per-CUDA-context, so each lane/process replica captures its own
+  1…K set; the cache tensors scale with B, so per-B (1…K) × lanes(2) × processes(K=2–4) replicas must fit GPU
+  memory (24 GB L4 = the tight one, alongside ~2.4 GB × replicas of model). Fail-closed: OOM on capture of any B →
+  that B (or that replica) falls back to eager; the server still serves. If the full 1…K set won't fit per
+  replica, cap K (keep no-padding byte-exactness for whatever B *are* captured) rather than padding. The cloud
+  retest (Step 6) must confirm the chosen K fits at the target K_proc×lanes on both L4 and L40S.
 - Only the **encoder** is graphed; decode stays eager (`use_cuda_graph_decoder=False`).
 - Don't break the multilingual prompted path, the silence0_warm200 finalize/fork logic, or the warmup path.
 - No new heavy deps. Flag-gated; default = current behavior until proven.
 
 ## Steps
 
-- [ ] **1. Per-B byte-exact + speedup probe; pick K.**
+- [x] **1. Per-B byte-exact + speedup probe; pick K.**  (DONE — round5; `probe_perB_cudagraph.py`: per-B byte-exact B=1..16, GPU-active −12..30%, **K≈10**.)
   Extend `proj-2026-05-21-0410/probe_manual_cudagraph.py` (or a sibling) to capture B = 1…16 (configurable),
   building per-B stacked inputs from K independent clips. For each B: confirm byte-exact vs eager-batched
   (per-step text bytes + state `max_abs=0`, the existing compare extended to B>1) AND measure the synced per-B
@@ -96,25 +102,34 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   Record avg B at the knee + the per-B engagement mix.
   Key files: `proj-2026-05-21-1959-cudagraph/local-knee.md`
 
-- [ ] **6. Cloud knee test on Modal (L4 + L40S, Ada) — the deliverable torch.compile couldn't run.**
-  Deploy with manual capture; CONFIRM it engages at startup (~250 ms × K, no inductor hang — the Step-10b
-  failure mode must be gone), smoke for correctness, then sweep and compare to the batch=1 baseline. Use **L4
-  and L40S** (both Ada sm_89 — capturability transfers; **T4 dropped**, production targets higher-end). Does the
-  cheaper call lift the knee? Billable, cost-conscious (smoke first, stop apps immediately).
-  **CAVEAT — Modal is a launch-bound *proxy*, not the deploy target.** Production is **AWS SageMaker** (reasoned
-  default **G6/L4 sized for vCPUs**, not L40S — same Milan CPU, GPU underutilized, cheaper); the knee is
-  single-thread-CPU-bound and SageMaker's dedicated vCPUs differ from Modal's allocation,
-  so the production knee MUST be re-measured on the actual SageMaker instance before sign-off (and the Modal
-  "batching doesn't help" conclusion may not hold there).
-  Write into `proj-2026-05-20-modal-cost/RESULTS.md` (Step 10c).
-  Key files: `src/nemotron_speech/modal/asr_bench_modal.py`, `proj-2026-05-20-modal-cost/RESULTS.md`
+- [ ] **6. Cloud GPU-bound retest on EC2 g6 (L4) + g6e (L40S) — tight TTFS budget (p50<250 / p95<300).**
+  Deploy manual capture to **EC2 via `ec2-bench/`** (NOT Modal — Modal is the launch-bound proxy; EC2 g6/g6e is
+  the SageMaker-representative target and our established vehicle). CONFIRM capture engages at startup (~250 ms × K
+  per replica, no inductor hang — the Step-10b failure mode must be gone) and **fits memory** at the target
+  K_proc×lanes (the graph-pool risk above), then smoke byte-exact. Then, with **multi-process + MPS** (the
+  production scaling unit) under the **tight latency budget p50<250 / p95<300** (the `run_l4_ttfs_sweep.sh`
+  methodology: staggered, sustained `--rounds` for stable p95), measure graph-ON vs graph-OFF in the GPU-bound
+  regime and answer three questions:
+  - **(a) per-process knee** — does collapsing launch dispatch raise the GIL-bound ~16 (→ fewer processes for the
+    same box capacity; shifts the K-matrix)?
+  - **(b) per-box GPU-bound ceiling** — graphs cut GPU-active 12–30%, so does the L4 hold >32 (K=2) and does the
+    L40S 64 (K=4) become **robust** (it was variance-prone/fragile at the full per-process knee — see
+    g6-vs-g6e-results.md TTFS section)?
+  - **(c) p95 tail** — deterministic single-replay should tighten the tail that straddled 300 ms in the 20–32/box
+    L4 zone → does the **tight-budget per-box max-streams** rise?
+  Compare to the pre-cudagraph tight-budget baseline (the `run_l4_ttfs_sweep.sh` results). Billable,
+  cost-conscious (smoke first; ALWAYS `ec2_down.py`). Write into
+  `proj-2026-05-21-1959-cudagraph/cloud-retest.md` and fold the new max-streams + any K-matrix shift into
+  `proj-2026-05-21-inference-opt/g6-vs-g6e-results.md`, the deploy docs (`deploy/`), and memory
+  (`deployment-target-sagemaker`).
+  Key files: `ec2-bench/run_l4_ttfs_sweep.sh`, `ec2-bench/run_multiproc.sh`, `proj-2026-05-21-inference-opt/g6-vs-g6e-results.md`
 
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Per-B byte-exact + speedup probe; pick K | pending | — | standalone; resolves the speedup curve + K |
-| 2 | Bucketed graph-manager module | pending | — | standalone-tested; fail-closed |
-| 3 | Wire into scheduler's batched call | pending | — | **finalize after (b) lands**; lanes+graphs compose |
+| 1 | Per-B byte-exact + speedup probe; pick K | done | round5 | probe_perB_cudagraph.py: per-B byte-exact B=1..16, GPU-active −12..30%, K≈10 |
+| 2 | Bucketed graph-manager module | pending | — | standalone-tested; fail-closed; watch graph-pool memory |
+| 3 | Wire into scheduler's batched call | pending | — | lanes (b) committed (7bf0e04); lanes+graphs compose (per-lane stream/buffers) |
 | 4 | Local byte-exact gate at scale | pending | — | hard gate: graph-on==graph-off, FORK_ASSERT |
 | 5 | Local knee measurement | pending | — | first measured payoff (56→?) |
-| 6 | Cloud knee test on Modal (L4+L40S) | pending | — | torch.compile-couldn't-run; Modal=proxy, validate on SageMaker target |
+| 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | pending | — | p50<250/p95<300, multi-proc+MPS; per-proc knee + per-box ceiling + p95 tail vs graph-off |
