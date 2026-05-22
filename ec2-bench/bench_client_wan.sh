@@ -52,18 +52,17 @@ run_one(){
   ssh -i "$KEY" $SSHO ubuntu@"$IP" 'cd ~/nemotron && nohup bash bootstrap.sh > bootstrap.log 2>&1 & echo started'
   local ok=0; for _ in $(seq 1 80); do sleep 15; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -qi DONE ~/nemotron/bootstrap.log' 2>/dev/null && { ok=1; echo "bootstrap DONE"; break; }; done
   [ $ok != 1 ] && { echo "bootstrap TIMEOUT"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -20 ~/nemotron/bootstrap.log'; "$PY" $E/ec2_down.py; return 1; }
-  # ONE production server, bound 0.0.0.0 (external client), cudagraph ON + lanes=2.
-  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && pkill -f 'server.py --model' 2>/dev/null; sleep 3; \
-    env -u LD_LIBRARY_PATH NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 \
-    NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_BATCH_MAX_SIZE=32 NEMOTRON_BATCH_MAX_WAIT_MS=8 \
-    NEMOTRON_MODEL_LANES=2 NEMOTRON_ENCODER_CUDAGRAPH=1 NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B HF_HOME=\$HOME/hf \
-    nohup \$HOME/nemo-venv/bin/python server.py --model $MODEL --host 0.0.0.0 --port 8080 --right-context 1 > srv_prod.log 2>&1 & echo started"
+  # ONE production server, bound 0.0.0.0 (external client), cudagraph ON + lanes=2. Run in the FOREGROUND of a
+  # BACKGROUNDED ssh so the server lives with the connection (one-shot `ssh "... &"` gets torn down at close).
+  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B bash start_prod_server.sh > srv_prod.log 2>&1" &
+  local SSHSRV=$!
   local sok=0; for _ in $(seq 1 90); do sleep 4; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -q "ASR server listening" ~/nemotron/srv_prod.log' 2>/dev/null && { sok=1; break; }; done
-  [ $sok != 1 ] && { echo "server FAILED to start"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -25 ~/nemotron/srv_prod.log'; "$PY" $E/ec2_down.py; return 1; }
+  if [ $sok != 1 ]; then echo "server FAILED to start"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -30 ~/nemotron/srv_prod.log' 2>/dev/null; kill $SSHSRV 2>/dev/null; "$PY" $E/ec2_down.py; return 1; fi
   ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -E "encoder_cuda_graph_enabled=|manager_captured" ~/nemotron/srv_prod.log | head'
   echo "=== LOCAL harness (client) -> ws://$IP:8080 | full 1000 @ conc $CONC (latency INCLUDES WAN to $REGION) ==="
   "$PY" proj-2026-05-19-eou-endpointing/run_full1000_conc12.py --url "ws://$IP:8080" --model-tag "$tag" --concurrency "$CONC" 2>&1 | tail -6
   ssh -i "$KEY" $SSHO ubuntu@"$IP" "pkill -f 'server.py --model'" 2>/dev/null || true
+  kill $SSHSRV 2>/dev/null || true
   "$PY" $E/ec2_down.py
   echo "=== $ITYPE done + terminated (tag=$tag) ==="
 }
