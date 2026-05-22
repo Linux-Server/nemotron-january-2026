@@ -69,7 +69,7 @@ re-explored.
   refuses known-bad configs (e.g. K beyond the measured GPU/vCPU cap). Default off / explicit until validated.
   Key files: `src/nemotron_speech/server.py` (or the launcher), config
 
-- [~] **5. Finish the finalize/TTFS chain.** (running in parallel with Step 1 — independent, local Codex)
+- [x] **5. Finish the finalize/TTFS chain.** (`NEMOTRON_BATCH_FINALIZE_PREPROC` + close-cleanup; in-phase knee 130→140, byte-exact)
   With barrier-drain + finalize-storm on, attack the *next* in-phase limiter (round 3's finding): batch finalize
   **preprocessing** (the reverted attempt dropped terminal punctuation — fix the per-fork preprocessing grouping to
   stay byte-exact) and the **close/cold-reset** cleanup path. Gate: in-phase byte-exact + knee past ~120 toward the
@@ -95,6 +95,6 @@ re-explored.
 | 2 | Production multi-process launcher + MPS | done (design) | (deploy commit) | deploy/launch_multiproc.sh + MPS hardening notes |
 | 3 | Routing layer (LB leastconn+maxconn) | done (design) | (deploy commit) | deploy/haproxy.cfg.example (+ ALB equiv) |
 | 4 | Per-GPU config matrix + auto-select | done | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |
-| 5 | Finish finalize/TTFS chain | pending | — | finalize preprocessing + close/cold-reset, byte-exact |
+| 5 | Finish finalize/TTFS chain | done | — | finalize preprocessing + close/cold-reset, byte-exact |
 | 6 | Per-B manual CUDA-graphs (re-scoped) | pending | — | per-lane cheaper-call; re-rank vs multi-process |
 | 7 | Deployment substrate + SageMaker | done (design) | — | EC2/ECS + ALB; not SM real-time endpoints |

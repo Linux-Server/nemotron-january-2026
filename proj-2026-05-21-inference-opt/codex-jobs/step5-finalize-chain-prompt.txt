@@ -1,0 +1,57 @@
+<task>
+Implement Step 5 of proj-2026-05-21-inference-opt/PLAN.md: "Finish the finalize/TTFS chain." LOCAL (RTX 5090),
+flag-gated default OFF, byte-exact, NO commits (orchestrator reviews + commits).
+
+Builds on the COMMITTED round-2 (NEMOTRON_BATCH_BARRIER_DRAIN) + round-3 (NEMOTRON_BATCH_FINALIZE). Round 3
+(proj-2026-05-21-inference-opt/round3-finalize-storm.md) batched the finalize MODEL call but had to REVERT batched
+finalize PREPROCESSING — it dropped terminal punctuation on final transcripts (byte diffs) — and close/cold-reset
+cleanup still runs serial. So with barrier-drain + finalize-storm ON, the in-phase knee is stuck ~120 (vs the
+~180 forced-batch ceiling, per max-parallelism-sweep.md).
+
+Implement under a flag (extend NEMOTRON_BATCH_FINALIZE or a new NEMOTRON_BATCH_FINALIZE_PREPROC=1, default off;
+engages only with scheduler + batching + finalize-batch on):
+(a) BATCH the per-fork finalize PREPROCESSING byte-exactly. FIRST diagnose why the prior attempt dropped terminal
+    punctuation — almost certainly a variable-length issue when stacking final forks (each fork has a different
+    pending-audio / mel length + keep_all_outputs=True), so naive stacking truncates/pads the tail (where the last
+    word + punctuation live). Fix the grouping (group by exact final chunk_T, or pad-and-mask without dropping the
+    real tail) so the batched preprocessing yields byte-identical mel + final text to the per-fork path.
+(b) Where safe, reduce the close/cold-reset cleanup serialization on the finalize path (it currently runs after
+    the client-visible speculative final — keep ordering, but stop it from blocking the lane/scheduler).
+
+GATES (byte-exact is non-negotiable — finalize text + deltas are the hazard):
+1. BYTE-EXACT: in-phase per-stream final transcript + full final-delta list + full interim sequence +
+   no-duplicate-final, byte-IDENTICAL to flag-off, fixed clip set, N=120/130/140/150 with BARRIER_DRAIN +
+   FINALIZE on. Print every mismatch; any diff (esp. dropped punctuation) = NO-GO → diagnose.
+2. DEFAULT-OFF identity (flag off = round-3 behavior).
+3. FORK_ASSERT=1 clean across N=120/130/140/150.
+4. THROUGHPUT: in-phase sweep N=120/130/140/150, flag on vs off (BARRIER_DRAIN + FINALIZE on for both). Report
+   finalize TTFS p95 + the in-phase knee — target moving past ~120 toward ~180.
+
+Use proj-2026-05-21-0410/inphase_loadgen.py --include-interims. Write
+proj-2026-05-21-inference-opt/round4-finalize-preproc.md. LOCAL only, no cloud, no commits.
+</task>
+
+<context>
+Step 5 of the inference-opt /implement run. The orchestrator is concurrently measuring L4 multi-process+MPS on a
+CLOUD box (different machine — no conflict with your local server.py edit). Read PLAN.md Step 5,
+round3-finalize-storm.md (what was reverted + why), round2-barrier-drain.md, and the finalize/fork +
+preprocessor-batching code in server.py. This is the last finalize-chain limiter before the forced-batch ceiling.
+</context>
+
+<verification_loop>
+Byte-exact in-phase finals (on==off, incl. final deltas + interims, NO dropped terminal punctuation) is the hard
+gate — the prior preprocessing-batching attempt failed exactly here. Diagnose the variable-length stacking root
+cause and prove byte-identity before reporting. Confirm default-off no-op. FORK_ASSERT on. Then quantify the
+in-phase knee vs ~120.
+</verification_loop>
+
+<action_safety>
+Modify ONLY src/nemotron_speech/server.py (+ test/doc). Flag-gated, default off = round-3 behavior. No NeMo edits,
+no cloud, no commits. Kill servers + free the local GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report: the flag; the root-cause of the prior punctuation drop + the fix; byte-exact in-phase result (on==off, any
+diffs); default-off identity; FORK_ASSERT; on/off in-phase TTFS p95 + knee at N=120/130/140/150; VERDICT on moving
+the knee past 120; round4-finalize-preproc.md written; cleanup.
+</compact_output_contract>

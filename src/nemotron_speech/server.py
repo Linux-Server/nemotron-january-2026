@@ -511,6 +511,16 @@ class SchedulerFinalizeBatchRow:
     drop_extra: int
 
 
+@dataclass
+class SchedulerFinalizePreprocessState:
+    item: SchedulerFinalizeItem
+    pending: np.ndarray
+    raw_ring: np.ndarray
+    remaining_frames: int
+    frames_collected: int = 0
+    new_mels: list[torch.Tensor] = field(default_factory=list)
+
+
 class ASRServer:
     """WebSocket server for streaming ASR with true incremental processing."""
 
@@ -553,6 +563,9 @@ class ASRServer:
         )
         self.batch_finalize_requested = (
             os.environ.get("NEMOTRON_BATCH_FINALIZE", "") == "1"
+        )
+        self.batch_finalize_preproc_requested = (
+            os.environ.get("NEMOTRON_BATCH_FINALIZE_PREPROC", "") == "1"
         )
         self.batch_fallback_reason: Optional[str] = None
         self.model_lanes_requested = _env_int("NEMOTRON_MODEL_LANES", 1)
@@ -1462,6 +1475,8 @@ class ASRServer:
             f"batch_enabled={self.batch_enabled} "
             f"batch_finalize_requested={self.batch_finalize_requested} "
             f"batch_finalize={self._scheduler_batch_finalize_active()} "
+            f"batch_finalize_preproc_requested={self.batch_finalize_preproc_requested} "
+            f"batch_finalize_preproc={self._scheduler_batch_finalize_preproc_active()} "
             f"batch_fallback_reason={self.batch_fallback_reason or 'none'} "
             f"decoder_strategy={self.decoder_strategy} "
             f"encoder_compile_enabled={self.encoder_compile_enabled} "
@@ -2888,6 +2903,7 @@ class ASRServer:
                 f"batch_enabled={self.batch_enabled} "
                 f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
                 f"batch_finalize={self._scheduler_batch_finalize_active()} "
+                f"batch_finalize_preproc={self._scheduler_batch_finalize_preproc_active()} "
                 f"model_lanes={self.model_lanes} "
                 f"batch_max_wait_ms={self.batch_max_wait_ms} "
                 f"batch_max_size={self.batch_max_size}"
@@ -2989,6 +3005,12 @@ class ASRServer:
             and self.batch_enabled
         )
 
+    def _scheduler_batch_finalize_preproc_active(self) -> bool:
+        return (
+            self.batch_finalize_preproc_requested
+            and self._scheduler_batch_finalize_active()
+        )
+
     def _scheduler_has_queued_events(self) -> bool:
         for session in list(self.sessions.values()):
             if (
@@ -3028,6 +3050,7 @@ class ASRServer:
             f"batch_enabled={self.batch_enabled} "
             f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
             f"batch_finalize={self._scheduler_batch_finalize_active()} "
+            f"batch_finalize_preproc={self._scheduler_batch_finalize_preproc_active()} "
             f"model_lanes={self.model_lanes} "
             f"batch_max_wait_ms={self.batch_max_wait_ms} "
             f"batch_max_size={self.batch_max_size}"
@@ -4451,6 +4474,16 @@ class ASRServer:
         reason: str,
     ) -> None:
         await self._scheduler_continuous_finalize_emit_locked(session, reason=reason)
+        if reason == "close" and self._scheduler_batch_finalize_preproc_active():
+            self._continuous_close_cleanup_after_finalize_locked(
+                session,
+                reason=reason,
+            )
+            self._scheduler_invalidate_session_locked(
+                session,
+                reason=f"{reason}:close_cleanup_complete",
+            )
+            return
         await self._continuous_cold_reset_after_finalize_locked(session, reason=reason)
         self._scheduler_invalidate_session_locked(
             session,
@@ -5354,6 +5387,206 @@ class ASRServer:
             drop_extra=int(drop_extra),
         )
 
+    def _preprocess_final_fixed_audio_batch(
+        self,
+        fixed_audios: list[np.ndarray],
+        valid_samples: list[int],
+        frames_this_call: int,
+    ) -> Optional[list[torch.Tensor]]:
+        if len(fixed_audios) < 2:
+            return None
+        if len(fixed_audios) != len(valid_samples):
+            raise ValueError(
+                f"fixed audio count {len(fixed_audios)} != length count {len(valid_samples)}"
+            )
+        if frames_this_call <= 0 or frames_this_call > self.shift_frames:
+            raise ValueError(
+                f"final preprocessor frames_this_call={frames_this_call} "
+                f"outside 1..{self.shift_frames}"
+            )
+
+        audio_rows: list[np.ndarray] = []
+        for audio, samples in zip(fixed_audios, valid_samples):
+            if len(audio) != self.constant_preprocess_samples:
+                return None
+            if audio.dtype != np.float32:
+                return None
+            if samples < 0 or samples > self.constant_preprocess_samples:
+                return None
+            audio_rows.append(np.ascontiguousarray(audio))
+
+        audio_batch = np.stack(audio_rows, axis=0)
+        if audio_batch.shape != (len(audio_rows), self.constant_preprocess_samples):
+            return None
+
+        audio_tensor = torch.from_numpy(audio_batch).cuda()
+        audio_len = torch.tensor(valid_samples, device='cuda', dtype=torch.long)
+        mel, _mel_len = self._current_inference_model().preprocessor(
+            input_signal=audio_tensor,
+            length=audio_len,
+        )
+        start = self.first_preprocess_mel_frame
+        end = start + frames_this_call
+        return [
+            mel[index : index + 1, :, start:end].detach().clone()
+            for index in range(len(audio_rows))
+        ]
+
+    def _advance_final_preprocess_state(
+        self,
+        state: SchedulerFinalizePreprocessState,
+        frames_this_call: int,
+    ) -> None:
+        if frames_this_call == self.shift_frames:
+            consumed_samples = min(
+                self.shift_frames * self.hop_samples,
+                len(state.pending),
+            )
+            consumed_audio = state.pending[:consumed_samples]
+            if len(consumed_audio) >= self.raw_audio_ring_samples:
+                state.raw_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+            elif len(consumed_audio) > 0:
+                keep = self.raw_audio_ring_samples - len(consumed_audio)
+                state.raw_ring = np.concatenate(
+                    [state.raw_ring[-keep:], consumed_audio]
+                ).astype(
+                    np.float32,
+                    copy=False,
+                )
+            state.pending = state.pending[consumed_samples:]
+        state.frames_collected += frames_this_call
+
+    def _prepare_final_fork_batch_rows_batched_preprocess(
+        self,
+        items: list[SchedulerFinalizeItem],
+    ) -> list[SchedulerFinalizeBatchRow]:
+        states: list[SchedulerFinalizePreprocessState] = []
+        for item in items:
+            session = item.fork
+            if session is None or session.pending_audio is None or len(session.pending_audio) == 0:
+                continue
+
+            padded_total_samples = (
+                session.emitted_frames * self.hop_samples + len(session.pending_audio)
+            )
+            total_mel_frames = (padded_total_samples // self.hop_samples) + 1
+            remaining_frames = total_mel_frames - session.emitted_frames
+
+            logger.debug(
+                f"Session {session.id} final chunk: "
+                f"total_mel={total_mel_frames}, emitted={session.emitted_frames}, "
+                f"remaining={remaining_frames}"
+            )
+
+            if remaining_frames <= 0:
+                logger.warning(f"Session {session.id}: No remaining frames to process!")
+                continue
+
+            states.append(
+                SchedulerFinalizePreprocessState(
+                    item=item,
+                    pending=session.pending_audio,
+                    raw_ring=session.raw_audio_ring,
+                    remaining_frames=remaining_frames,
+                )
+            )
+
+        while True:
+            active_states = [
+                state
+                for state in states
+                if state.frames_collected < state.remaining_frames
+            ]
+            if not active_states:
+                break
+
+            grouped: dict[
+                tuple[int, int],
+                list[tuple[SchedulerFinalizePreprocessState, np.ndarray, int, int]],
+            ] = {}
+            for state in active_states:
+                frames_this_call = min(
+                    self.shift_frames,
+                    state.remaining_frames - state.frames_collected,
+                )
+                needed_new_samples = min(
+                    len(state.pending),
+                    self.preprocess_new_audio_samples,
+                )
+                new_audio = state.pending[:needed_new_samples]
+                fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+                    state.raw_ring,
+                    new_audio,
+                )
+                grouped.setdefault((valid_samples, frames_this_call), []).append(
+                    (state, fixed_audio, valid_samples, frames_this_call)
+                )
+
+            for (valid_sample_count, frames_this_call), group in grouped.items():
+                for start_index in range(0, len(group), self.batch_max_size):
+                    batch_group = group[start_index : start_index + self.batch_max_size]
+                    mels: Optional[list[torch.Tensor]] = None
+                    if len(batch_group) > 1:
+                        fixed_audios = [entry[1] for entry in batch_group]
+                        valid_samples = [entry[2] for entry in batch_group]
+                        try:
+                            mels = self._preprocess_final_fixed_audio_batch(
+                                fixed_audios,
+                                valid_samples,
+                                frames_this_call,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "scheduler_finalize_preproc_batch_fallback "
+                                f"reason=batch_error group_size={len(batch_group)} "
+                                f"valid_samples={valid_sample_count} "
+                                f"frames={frames_this_call} "
+                                f"error={type(e).__name__}: {e}"
+                            )
+                            mels = None
+
+                    if mels is None:
+                        mels = []
+                        for _state, fixed_audio, valid_samples, _frames in batch_group:
+                            mel, _mel_len = self._preprocess_fixed_audio(
+                                fixed_audio,
+                                valid_samples,
+                            )
+                            mel_start = self.first_preprocess_mel_frame
+                            mels.append(
+                                mel[:, :, mel_start : mel_start + frames_this_call]
+                            )
+
+                    for (state, _fixed_audio, _valid_samples, _frames), mel in zip(
+                        batch_group,
+                        mels,
+                        strict=True,
+                    ):
+                        state.new_mels.append(mel)
+                        self._advance_final_preprocess_state(state, frames_this_call)
+
+        rows: list[SchedulerFinalizeBatchRow] = []
+        for state in states:
+            session = state.item.fork
+            if session is None or not state.new_mels:
+                continue
+            new_mel = torch.cat(state.new_mels, dim=-1)
+            if session.emitted_frames == 0:
+                chunk_mel = new_mel
+                drop_extra = 0
+            else:
+                chunk_mel = torch.cat((session.mel_frame_ring, new_mel), dim=-1)
+                drop_extra = self.drop_extra
+
+            rows.append(
+                SchedulerFinalizeBatchRow(
+                    item=state.item,
+                    chunk_mel=chunk_mel,
+                    drop_extra=int(drop_extra),
+                )
+            )
+        return rows
+
     def _finalize_batch_group_key_for_row(
         self,
         row: SchedulerFinalizeBatchRow,
@@ -5425,7 +5658,7 @@ class ASRServer:
             }
             with torch.inference_mode():
                 self._cuda_synchronize_for_current_model_lane()
-                rows: list[SchedulerFinalizeBatchRow] = []
+                live_items: list[SchedulerFinalizeItem] = []
                 for item in items:
                     if item.expected_generation != item.session.scheduler_generation:
                         logger.debug(
@@ -5434,10 +5667,19 @@ class ASRServer:
                             f"current_gen={item.session.scheduler_generation}"
                         )
                         continue
-                    row = self._prepare_final_fork_batch_row(item)
-                    if row is None:
-                        continue
-                    rows.append(row)
+                    live_items.append(item)
+
+                if self._scheduler_batch_finalize_preproc_active():
+                    rows = self._prepare_final_fork_batch_rows_batched_preprocess(
+                        live_items
+                    )
+                else:
+                    rows = []
+                    for item in live_items:
+                        row = self._prepare_final_fork_batch_row(item)
+                        if row is None:
+                            continue
+                        rows.append(row)
 
                 grouped: dict[tuple, list[SchedulerFinalizeBatchRow]] = {}
                 for row in rows:
@@ -5830,6 +6072,48 @@ class ASRServer:
             f"{self._continuous_context_retention_summary(session)}"
         )
         self._log_retained_cache_telemetry(f"speculative_finalize:{reason}")
+
+    def _continuous_close_cleanup_after_finalize_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> None:
+        if reason != "close":
+            raise RuntimeError(
+                "close cleanup requested for non-close reason "
+                f"{reason!r}"
+            )
+
+        session.current_text = ""
+        session.committed_text = ""
+        session.last_emitted_text = ""
+        session.continuous_emitted_text = ""
+        session.pending_audio = np.array([], dtype=np.float32)
+        session.accumulated_audio = session.pending_audio
+        session.total_audio_samples = 0
+        session.synthetic_prefix_samples = 0
+        session.raw_audio_ring = np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
+        session.mel_frame_ring = None
+        session.emitted_frames = 0
+        session.cache_last_channel = None
+        session.cache_last_time = None
+        session.cache_last_channel_len = None
+        session.previous_hypotheses = None
+        session.pred_out_stream = None
+        session.overlap_buffer = None
+        session.continuous_post_stop_audio.clear()
+        session.continuous_reset_seen = False
+        session.continuous_vad_stop_ts = None
+        session.continuous_debounce_expiry_ts = None
+        session.continuous_stop_seq += 1
+        session.continuous_state = STREAMING
+
+        logger.info(
+            f"Session {session.id}: continuous close cleanup complete "
+            "(state cleared without cold model reset)"
+        )
+        self._log_retained_cache_telemetry("close_cleanup")
 
     async def _continuous_cold_reset_after_finalize_locked(
         self,
