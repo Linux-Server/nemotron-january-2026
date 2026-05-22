@@ -99,7 +99,13 @@ PRODUCT decision, not infra):**
 
 ## Steps
 
-- [~] **1. Finalize-tail telemetry + (B,T) histogram + BATCH_FINALIZE profiling (NO hard gate here).**
+> **GATE OUTCOME (2026-05-22): STOP at the probe.** Step-1 on-box telemetry: server finalize is **~39 ms p95**
+> (encoder ~35, reproducible), NOT the ~178 ms client attribution — the client P95 gap is **network/client-side
+> WAN tail**, not server compute. A finalize graph would move the client P95 by only ~20 ms, not the ~100 ms to
+> the frontier. Business-payoff gate NOT met → **Steps 2–7 NOT pursued.** See `finalize-telemetry.md`. The
+> instrumentation (`NEMOTRON_FINALIZE_PROFILE`, default-off) ships as reusable profiling.
+
+- [x] **1. Finalize-tail telemetry + (B,T) histogram + BATCH_FINALIZE profiling (NO hard gate here).**
   `NEMOTRON_FINALIZE_PROFILE=1` (default-off, non-invasive). Per-final records `{finalize_wall, queue_wait,
   debounce_wait, lock_wait, fork_clone[audio/cache/hyps/pred], preproc_wall+count, encoder, decode, sync}` —
   encoder vs decode split via a profiling-only encoder wrapper (NOT whole-call events; see `profile_split.py`).
@@ -194,13 +200,8 @@ PRODUCT decision, not infra):**
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Telemetry + REPRODUCIBILITY gate + histogram + BATCH_FINALIZE profiling | in-progress | — | PROBE PHASE; repeat+on-box server-side timing+P95 CI+representative sample; STOP if 178ms is noise; E_eager/tail/(B,T)+B-dist |
-| 2 | Probe (B=1) + cache-len ABORT + E_graph + BUSINESS-payoff gate | pending | — | PROBE PHASE; sweep ALL cache_lens (abort if mismatch); byte-exact+timing; build subsystem (3-7) ONLY if >=60-80ms P95 or robustness |
-| 3 | Finalize-bucket manager + test (partial) | pending | — | ≥1-bucket completeness; synthetic+real; mem/time |
-| 4 | Wire + executor CONTRACT + gate at scale | pending | — | requires steady; hard-disable on thread/stream mismatch; build multi-final harness; B>1 eager-fallback check; lanes×batch×steady matrix |
-| 5 | Cloud retest — both topologies | pending | — | one-proc WAN + multi-proc+MPS; memory fit; histogram re-check |
-| 6 | (Optional) one-shot preprocessor | pending | — | non-blocking; gated on Step-1; byte-exact (punctuation) |
-| 7 | Finalize-batching prod config + canary | pending | — | per Step-1; L40S canary |
+| 1 | Telemetry + REPRODUCIBILITY gate | DONE — gate=STOP | (step1) | server finalize ~39ms p95 (encoder ~35), reproducible; client P95 is network-bound, NOT server compute -> graph won't close the frontier gap. Instrumentation ships (default-off). finalize-telemetry.md |
+| 2-7 | Probe/manager/wire/cloud-retest/preproc/batch-config | NOT PURSUED | — | Step-1 business-payoff gate not met (a graph moves client P95 ~20ms, not the ~100ms needed). Pivot = network/multi-region (server is already fast). Revisit only if a multi-process finalize-contention problem surfaces |
 
 ## Review log
 - **R1 (Codex `bfqf2k2ug` + self):** fix MPS-framing (one-proc/no-MPS) → both-topology Step 5; GO/PIVOT gate;
