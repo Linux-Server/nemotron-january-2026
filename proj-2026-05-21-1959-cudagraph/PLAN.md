@@ -97,7 +97,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   per-lane-stream path deferred from step 3) and confirm byte-identical + per-lane replay engagement.**
   Key files: existing harness (`proj-2026-05-19-eou-endpointing/`), `proj-2026-05-21-1959-cudagraph/`
 
-- [ ] **5. Local knee measurement (first measured payoff).**
+- [x] **5. Local knee measurement (first measured payoff).**
   Realtime keep-up sweep, graph-on vs graph-off (scheduler+batching on): does the knee lift at the small B
   realtime produces (baseline 56 → ?)? Also single-stream B=1 latency/knee (expect ≈ the old compile-only 24).
   Record avg B at the knee + the per-B engagement mix.
@@ -131,6 +131,6 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | 1 | Per-B byte-exact + speedup probe; pick K | done | round5 | probe_perB_cudagraph.py: per-B byte-exact B=1..16, GPU-active −12..30%, K≈10 |
 | 2 | Bucketed graph-manager module | done | bf0a639 | cudagraph_encoder.py + test; byte-exact B=1..16 (encoded+state max_abs=0), fail-closed B=17->None/captured=False; capture ~60-82ms/bucket (~1.1s for K=16/replica) |
 | 3 | Wire into scheduler's batched call | done | 22a817c | NEMOTRON_ENCODER_CUDAGRAPH; monkeypatch like compile path; steady-bucket-only per-B; per-replica + per-lane-stream managers; fail-closed; default-off identity; cudagraph supersedes compile. lanes=1 byte-identical smoked; lanes=2 impl fail-closed, runtime-verify in step4. NOTE: manager is all-or-nothing per replica (uncaptured B disables that replica) -> pick K to fit in step6 |
-| 4 | Local byte-exact gate at scale | done | (step4 commit) | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
-| 5 | Local knee measurement | pending | — | first measured payoff (56→?) |
+| 4 | Local byte-exact gate at scale | done | 023c99c | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
+| 5 | Local knee measurement | done | (step5 commit) | knee 48->56 (+17%) on 5090; lag p95 @N48 229->151ms; avg B~2-3, 0 fallbacks; local-knee.md. Cloud expected to lift more (more launch-bound) |
 | 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | pending | — | p50<250/p95<300, multi-proc+MPS; per-proc knee + per-box ceiling + p95 tail vs graph-off |
