@@ -68,5 +68,24 @@ each process `managers=3`, ~1.7 s/replica, 0 fallbacks. Fit 48 GB cleanly.
   the budget.**
 - Byte-exact (step 4), fail-closed, default-off -> safe to enable in production. maxB=8 was sufficient (realtime
   B-mix is small) and fit both GPUs; capture cold-start ~1.7-2 s/replica, one-time at startup.
-- **Open follow-up (step 7):** the coalescing tick (`NEMOTRON_BATCH_MAX_WAIT_MS=8`) — with graphs collapsing
-  per-launch cost, dropping it (work-conserving) should lower under-load p95 further; measure the 2x2.
+## Step 7 — coalescing tick (MAX_WAIT) 2x2: KEEP the tick (work-conserving did NOT help)
+
+2x2 on one g6.4xlarge (K=2 x lanes2, tight budget, rounds-pooled), `MAX_WAIT in {8,0} x graph in {off,on}`.
+Tight-budget max-streams/box:
+
+| | graph OFF | graph ON |
+|---|--:|--:|
+| MAX_WAIT=8 (tick) | 20 | **24** |
+| MAX_WAIT=0 (work-conserving) | 16 | **24** |
+
+- **Graph ON: MAX_WAIT=0 is neutral on capacity (24=24) and does NOT lower p95** — slightly worse in the budget
+  zone (N=10 graph-on p95 214->297; N=12 268->288).
+- **Graph OFF: dropping the tick HURTS (20->16, N=10 p95 265->476)** — confirms coalescing still matters in the
+  launch-bound regime (the original 40->56 rationale).
+- **Why the hypothesis failed:** (1) the tick is *adaptive* — it ends early when there's nothing to coalesce, so
+  it adds ~0 latency (the "N=1 unchanged" note at server.py:632); (2) even with cudagraph the single dispatch
+  lane still rewards fewer-bigger passes, so work-conserving makes MORE small passes -> more total dispatch ->
+  slightly higher p95, not lower.
+- **DECISION: keep `NEMOTRON_BATCH_MAX_WAIT_MS=8` (no default change).** Work-conserving is not a win here.
+  (Note: graph-OFF MAX_WAIT=8 read 20/box here vs 16 in the L4 section above — N=10 p95 straddles 300, run-to-run
+  noise at the boundary; the graph-ON 24/box is consistent across both runs.)

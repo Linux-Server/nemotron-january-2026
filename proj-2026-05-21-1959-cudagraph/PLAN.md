@@ -125,7 +125,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   (`deployment-target-sagemaker`).
   Key files: `ec2-bench/run_l4_ttfs_sweep.sh`, `ec2-bench/run_multiproc.sh`, `proj-2026-05-21-inference-opt/g6-vs-g6e-results.md`
 
-- [~] **7. Drop the coalescing tick (work-conserving batching) — measure, then flip if it wins.**
+- [x] **7. Drop the coalescing tick (work-conserving batching) — measure, then flip if it wins.**  (RESULT: NEGATIVE — keep the tick; no default change. See below.)
   Hypothesis: the `NEMOTRON_BATCH_MAX_WAIT_MS=8` coalescing timer (server.py:635) was a *launch-bound*
   amortization — it forced bigger batches so fewer kernel-launch dispatches were paid (our note at
   server.py:632 records it raised the local knee 40->56). The scheduler loop (`_scheduler_drain_once`,
@@ -153,4 +153,4 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | 4 | Local byte-exact gate at scale | done | 023c99c | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
 | 5 | Local knee measurement | done | ed53ff2 | knee 48->56 (+17%) on 5090; lag p95 @N48 229->151ms; avg B~2-3, 0 fallbacks; local-knee.md. Cloud expected to lift more (more launch-bound) |
 | 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | done | 39956fa | L4 K=2: 16->24/box (+50%); L40S K=4: fails-at-32 (MPS-bifurcated) -> 64/box ROBUST (p95 216, ~4x p95 cut, bifurcation gone). cudagraph = tight-budget lever; maxB=8 fit both; byte-exact. cloud-retest.md |
-| 7 | Drop coalescing tick (work-conserving) | pending | — | measure MAX_WAIT 0 vs 8 x graph off/on; flip default to 0 if it wins w/ graphs on; byte-exact ~free (batch-grouping only) |
+| 7 | Drop coalescing tick (work-conserving) | done | (step7 commit) | NEGATIVE: graph-on MAX_WAIT 0==8 on capacity (24/box) + p95 not lower (slightly worse N10 214->297); graph-off 0 HURTS (20->16). Tick is adaptive (~0 cost) + dispatch still rewards bigger passes. KEEP MAX_WAIT=8, no code change |
