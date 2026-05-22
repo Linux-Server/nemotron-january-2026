@@ -508,6 +508,7 @@ class SchedulerFinalizeItem:
     final_text: str
     should_flush: bool
     fork_clone_ms: float = 0.0
+    finalize_profile: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -696,6 +697,19 @@ class ASRServer:
         # to locate the single-thread bottleneck. Adds cuda.synchronize() so it perturbs
         # timing slightly — only enabled under NEMOTRON_PROFILE_CHUNK=1.
         self.profile_chunk = os.environ.get("NEMOTRON_PROFILE_CHUNK", "") == "1"
+        self.finalize_profile_enabled = (
+            os.environ.get("NEMOTRON_FINALIZE_PROFILE", "") == "1"
+        )
+        self._finalize_profile_records = 0
+        self._finalize_profile_hist: dict[tuple[int, int, int | None, str], int] = {}
+        self._finalize_profile_b_hist: dict[int, int] = {}
+        self._finalize_profile_hist_every = 10
+        if self.finalize_profile_enabled:
+            logger.info(
+                "finalize_profile_enabled=True "
+                "flag=NEMOTRON_FINALIZE_PROFILE "
+                "mode=read_only syncs=profile_only"
+            )
         self._prof_n = 0
         self._prof_pre_ms = 0.0
         self._prof_step_ms = 0.0
@@ -1934,7 +1948,455 @@ class ASRServer:
             else:
                 object.__delattr__(encoder, attr_name)
 
-    def _conformer_stream_step(self, **kwargs):
+    @staticmethod
+    def _finalize_profile_shape(value: Any) -> Optional[list[int]]:
+        if not torch.is_tensor(value):
+            return None
+        return [int(dim) for dim in value.shape]
+
+    @staticmethod
+    def _finalize_profile_first_key(first: Any) -> str:
+        if first is True:
+            return "first"
+        if first is False:
+            return "non_first"
+        return "unknown"
+
+    @staticmethod
+    def _finalize_profile_tensor_values(
+        value: Any,
+        *,
+        index: Optional[int] = None,
+    ) -> Optional[list[int | float]]:
+        if not torch.is_tensor(value):
+            return None
+        try:
+            tensor = value.detach()
+            if index is not None and tensor.ndim > 0 and int(tensor.shape[0]) > index:
+                tensor = tensor[index : index + 1]
+            flat = tensor.reshape(-1).cpu().tolist()
+        except Exception:
+            return None
+        values: list[int | float] = []
+        for item in flat:
+            number = float(item)
+            if number.is_integer():
+                values.append(int(number))
+            else:
+                values.append(number)
+        return values
+
+    @classmethod
+    def _finalize_profile_tensor_value(
+        cls,
+        value: Any,
+        *,
+        index: Optional[int] = None,
+    ) -> Any:
+        values = cls._finalize_profile_tensor_values(value, index=index)
+        if values is None:
+            return None
+        if len(values) == 1:
+            return values[0]
+        return values
+
+    @staticmethod
+    def _finalize_profile_event_queued_perf(event: tuple) -> Optional[float]:
+        if len(event) <= 2:
+            return None
+        value = event[2]
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    def _new_finalize_profile(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+        path: str,
+        debounce_event_queued_perf: Optional[float] = None,
+    ) -> Optional[dict[str, Any]]:
+        if not self.finalize_profile_enabled:
+            return None
+
+        start_perf = time.perf_counter()
+        queue_wait_ms = None
+        if debounce_event_queued_perf is not None:
+            queue_wait_ms = max(0.0, (start_perf - debounce_event_queued_perf) * 1000)
+
+        return {
+            "_start_perf": start_perf,
+            "session_id": session.id,
+            "reason": reason,
+            "path": path,
+            "start_unix": time.time(),
+            "queue_wait_ms": queue_wait_ms,
+            "debounce_wait_ms": None,
+            "lock_wait_ms": None,
+            "fork_flush_wall_ms": None,
+            "fork_clone_ms": 0.0,
+            "fork_clone_audio_ms": 0.0,
+            "fork_clone_cache_ms": 0.0,
+            "fork_clone_hyps_ms": 0.0,
+            "fork_clone_pred_ms": 0.0,
+            "fork_clone_other_ms": 0.0,
+            "preproc_wall_ms": 0.0,
+            "preproc_invocations": 0,
+            "model_wall_ms": None,
+            "encoder_wall_ms": None,
+            "encoder_cuda_event_ms": None,
+            "encoder_invocations": 0,
+            "decode_wall_ms": None,
+            "cuda_sync_ms": 0.0,
+            "cuda_sync_invocations": 0,
+            "B": None,
+            "T": None,
+            "processed_signal_length": None,
+            "drop_extra": None,
+            "first": None,
+            "encoded_shape": None,
+            "encoded_len": None,
+            "cache_present": None,
+            "cache_last_channel_shape": None,
+            "cache_last_channel_len": None,
+            "cache_last_channel_out_shape": None,
+            "cache_last_channel_len_out": None,
+            "att_context": list(self.att_context_size)
+            if self.att_context_size is not None
+            else None,
+            "scheduler_enabled": self.scheduler_enabled,
+            "batch_finalize": self._scheduler_batch_finalize_active(),
+            "batch_finalize_preproc": self._scheduler_batch_finalize_preproc_active(),
+            "model_lanes": self.model_lanes,
+        }
+
+    def _finalize_profile_cuda_synchronize(
+        self,
+        profile: Optional[dict[str, Any]],
+    ) -> float:
+        if profile is None or not torch.cuda.is_available():
+            return 0.0
+        start = time.perf_counter()
+        self._cuda_synchronize_for_current_model_lane()
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        profile["cuda_sync_ms"] = float(profile.get("cuda_sync_ms") or 0.0) + elapsed_ms
+        profile["cuda_sync_invocations"] = int(
+            profile.get("cuda_sync_invocations") or 0
+        ) + 1
+        return elapsed_ms
+
+    @staticmethod
+    def _finalize_profile_add_cuda_sync_observed(
+        profile: Optional[dict[str, Any]],
+        elapsed_ms: float,
+    ) -> None:
+        if profile is None:
+            return
+        profile["cuda_sync_ms"] = float(profile.get("cuda_sync_ms") or 0.0) + elapsed_ms
+        profile["cuda_sync_invocations"] = int(
+            profile.get("cuda_sync_invocations") or 0
+        ) + 1
+
+    def _finalize_profile_cuda_synchronize_many(
+        self,
+        profiles: list[Optional[dict[str, Any]]],
+    ) -> None:
+        live_profiles = [profile for profile in profiles if profile is not None]
+        if not live_profiles:
+            self._cuda_synchronize_for_current_model_lane()
+            return
+        sync_ms = self._finalize_profile_cuda_synchronize(live_profiles[0])
+        for profile in live_profiles[1:]:
+            self._finalize_profile_add_cuda_sync_observed(profile, sync_ms)
+
+    def _finalize_profile_add_preproc(
+        self,
+        profile: Optional[dict[str, Any]],
+        wall_ms: float,
+        *,
+        invocations: int = 1,
+    ) -> None:
+        if profile is None:
+            return
+        profile["preproc_wall_ms"] = float(profile.get("preproc_wall_ms") or 0.0) + wall_ms
+        profile["preproc_invocations"] = int(
+            profile.get("preproc_invocations") or 0
+        ) + invocations
+
+    def _finalize_profile_set_model_inputs(
+        self,
+        profile: Optional[dict[str, Any]],
+        *,
+        processed_signal: Any,
+        processed_signal_length: Any,
+        cache_last_channel: Any,
+        cache_last_channel_len: Any,
+        drop_extra: int,
+        first: bool,
+        row_index: Optional[int] = None,
+    ) -> None:
+        if profile is None:
+            return
+        if torch.is_tensor(processed_signal) and processed_signal.ndim >= 3:
+            profile["B"] = int(processed_signal.shape[0])
+            profile["T"] = int(processed_signal.shape[-1])
+        profile["processed_signal_length"] = self._finalize_profile_tensor_value(
+            processed_signal_length,
+            index=row_index,
+        )
+        profile["drop_extra"] = int(drop_extra)
+        profile["first"] = bool(first)
+        profile["cache_present"] = cache_last_channel is not None
+        cache_shape = self._finalize_profile_shape(cache_last_channel)
+        if row_index is not None and isinstance(cache_shape, list):
+            profile["cache_last_channel_batch_shape"] = cache_shape
+            profile["cache_last_channel_shape"] = (
+                [1, *cache_shape[1:]] if cache_shape else cache_shape
+            )
+        else:
+            profile["cache_last_channel_shape"] = cache_shape
+        profile["cache_last_channel_len"] = self._finalize_profile_tensor_value(
+            cache_last_channel_len,
+            index=row_index,
+        )
+        profile["att_context"] = (
+            list(self.att_context_size) if self.att_context_size is not None else None
+        )
+
+    def _finalize_profile_record_encoder_outputs(
+        self,
+        profile: Optional[dict[str, Any]],
+        result: Any,
+    ) -> None:
+        if profile is None:
+            return
+        if not isinstance(result, (tuple, list)) or len(result) < 2:
+            return
+        encoded = result[0]
+        encoded_len = result[1]
+        profile["encoded_shape"] = self._finalize_profile_shape(encoded)
+        encoded_len_values = self._finalize_profile_tensor_values(encoded_len)
+        if encoded_len_values is not None:
+            profile["encoded_len_values"] = encoded_len_values
+            profile["encoded_len"] = (
+                encoded_len_values[0]
+                if len(encoded_len_values) == 1
+                else encoded_len_values
+            )
+        if len(result) >= 5:
+            profile["cache_last_channel_out_shape"] = self._finalize_profile_shape(
+                result[2]
+            )
+            profile["cache_last_channel_len_out"] = self._finalize_profile_tensor_value(
+                result[4]
+            )
+
+    def _finalize_profile_set_model_wall(
+        self,
+        profile: Optional[dict[str, Any]],
+        wall_ms: float,
+    ) -> None:
+        if profile is None:
+            return
+        profile["model_wall_ms"] = wall_ms
+        encoder_ms = profile.get("encoder_wall_ms")
+        if isinstance(encoder_ms, (int, float)):
+            profile["decode_wall_ms"] = max(0.0, wall_ms - float(encoder_ms))
+
+    def _finalize_profile_copy_model_profile(
+        self,
+        dst: Optional[dict[str, Any]],
+        src: Optional[dict[str, Any]],
+        *,
+        row_index: int,
+    ) -> None:
+        if dst is None or src is None:
+            return
+        for key in (
+            "model_wall_ms",
+            "encoder_wall_ms",
+            "encoder_cuda_event_ms",
+            "encoder_invocations",
+            "decode_wall_ms",
+            "cuda_sync_ms",
+            "cuda_sync_invocations",
+        ):
+            dst[key] = src.get(key)
+
+        encoded_shape = src.get("encoded_shape")
+        if isinstance(encoded_shape, list):
+            dst["encoded_batch_shape"] = encoded_shape
+            dst["encoded_shape"] = [1, *encoded_shape[1:]] if encoded_shape else encoded_shape
+        values = src.get("encoded_len_values")
+        if isinstance(values, list) and row_index < len(values):
+            dst["encoded_len"] = values[row_index]
+
+    def _emit_finalize_profile_record(
+        self,
+        profile: Optional[dict[str, Any]],
+        *,
+        timing: Optional[dict[str, Any]],
+        final_text: Optional[str],
+        delta_text: Optional[str],
+        emitted_to_client: bool,
+        suppressed_reason: Optional[str],
+        should_flush: bool,
+    ) -> None:
+        if profile is None:
+            return
+
+        if timing is not None:
+            profile["lock_wait_ms"] = timing.get("inference_lock_acquire_wait_ms")
+            vad_stop = timing.get("vad_stop")
+            debounce_expiry = timing.get("debounce_expiry")
+            if vad_stop is not None and debounce_expiry is not None:
+                profile["debounce_wait_ms"] = max(
+                    0.0,
+                    (float(debounce_expiry) - float(vad_stop)) * 1000,
+                )
+            fork_start = timing.get("fork_flush_start")
+            fork_done = timing.get("fork_flush_done")
+            if fork_start is not None and fork_done is not None:
+                profile["fork_flush_wall_ms"] = max(
+                    0.0,
+                    (float(fork_done) - float(fork_start)) * 1000,
+                )
+
+        start_perf = profile.get("_start_perf")
+        if isinstance(start_perf, (int, float)):
+            profile["finalize_wall_ms"] = (time.perf_counter() - float(start_perf)) * 1000
+
+        profile["final_text_chars"] = len(final_text or "")
+        profile["delta_text_chars"] = len(delta_text or "")
+        profile["emitted_to_client"] = bool(emitted_to_client)
+        profile["suppressed_reason"] = suppressed_reason
+        profile["should_flush"] = bool(should_flush)
+        profile["bucket_key"] = {
+            "B": int(profile.get("B") or 0),
+            "T": int(profile.get("T") or 0),
+            "drop_extra": profile.get("drop_extra"),
+            "first": self._finalize_profile_first_key(profile.get("first")),
+        }
+
+        self._finalize_profile_records += 1
+        profile["record_index"] = self._finalize_profile_records
+        bucket = profile["bucket_key"]
+        hist_key = (
+            int(bucket["B"]),
+            int(bucket["T"]),
+            bucket["drop_extra"],
+            str(bucket["first"]),
+        )
+        self._finalize_profile_hist[hist_key] = (
+            self._finalize_profile_hist.get(hist_key, 0) + 1
+        )
+        b_value = int(bucket["B"])
+        self._finalize_profile_b_hist[b_value] = (
+            self._finalize_profile_b_hist.get(b_value, 0) + 1
+        )
+
+        public_record = {
+            key: value
+            for key, value in profile.items()
+            if not key.startswith("_") and key != "encoded_len_values"
+        }
+        logger.info(
+            "finalize_profile_record "
+            + json.dumps(public_record, sort_keys=True, default=str)
+        )
+
+        if self._finalize_profile_records % self._finalize_profile_hist_every == 0:
+            self._log_finalize_profile_histogram(reason="periodic")
+
+    def _log_finalize_profile_histogram(self, *, reason: str) -> None:
+        if not self.finalize_profile_enabled:
+            return
+        bucket_hist = [
+            {
+                "B": key[0],
+                "T": key[1],
+                "drop_extra": key[2],
+                "first": key[3],
+                "count": count,
+            }
+            for key, count in sorted(
+                self._finalize_profile_hist.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ]
+        payload = {
+            "reason": reason,
+            "records": self._finalize_profile_records,
+            "bucket_hist": bucket_hist,
+            "B_hist": {
+                str(key): value
+                for key, value in sorted(self._finalize_profile_b_hist.items())
+            },
+        }
+        logger.info(
+            "finalize_profile_histogram "
+            + json.dumps(payload, sort_keys=True, default=str)
+        )
+
+    @contextlib.contextmanager
+    def _finalize_profile_encoder_cache_step_installed(
+        self,
+        model: Any,
+        profile: Optional[dict[str, Any]],
+    ):
+        encoder = model.encoder
+        attr_name = "cache_aware_stream_step"
+        had_instance_attr = attr_name in vars(encoder)
+        original_instance_attr = vars(encoder).get(attr_name)
+        original_callable = getattr(encoder, attr_name)
+
+        def cache_aware_stream_step_wrapper(*args, **call_kwargs):
+            self._finalize_profile_cuda_synchronize(profile)
+            start_event = None
+            end_event = None
+            if torch.cuda.is_available():
+                try:
+                    start_event = torch.cuda.Event(enable_timing=True)
+                    end_event = torch.cuda.Event(enable_timing=True)
+                except Exception:
+                    start_event = None
+                    end_event = None
+
+            start = time.perf_counter()
+            if start_event is not None:
+                start_event.record()
+            result = original_callable(*args, **call_kwargs)
+            if end_event is not None:
+                end_event.record()
+            self._finalize_profile_cuda_synchronize(profile)
+            wall_ms = (time.perf_counter() - start) * 1000
+            profile["encoder_wall_ms"] = float(
+                profile.get("encoder_wall_ms") or 0.0
+            ) + wall_ms
+            profile["encoder_invocations"] = int(
+                profile.get("encoder_invocations") or 0
+            ) + 1
+            if start_event is not None and end_event is not None:
+                try:
+                    profile["encoder_cuda_event_ms"] = float(
+                        profile.get("encoder_cuda_event_ms") or 0.0
+                    ) + float(start_event.elapsed_time(end_event))
+                except Exception:
+                    pass
+            self._finalize_profile_record_encoder_outputs(profile, result)
+            return result
+
+        object.__setattr__(encoder, attr_name, cache_aware_stream_step_wrapper)
+        try:
+            yield
+        finally:
+            if had_instance_attr:
+                object.__setattr__(encoder, attr_name, original_instance_attr)
+            else:
+                object.__delattr__(encoder, attr_name)
+
+    def _conformer_stream_step(self, finalize_profile: Optional[dict[str, Any]] = None, **kwargs):
         """Call NeMo's stream step with optional encoder graph/compile swap."""
         model = self._current_inference_model()
         streaming_cfg = model.encoder.streaming_cfg
@@ -1954,6 +2416,13 @@ class ASRServer:
         saw_unwarmed_bucket = False
 
         try:
+            if finalize_profile is not None and kwargs.get("keep_all_outputs", False):
+                with self._finalize_profile_encoder_cache_step_installed(
+                    model,
+                    finalize_profile,
+                ):
+                    return model.conformer_stream_step(**kwargs)
+
             if cudagraph_bucket is not None and cudagraph_manager is not None:
                 if (
                     self._encoder_cudagraph_thread_id is not None
@@ -3663,6 +4132,9 @@ class ASRServer:
                             session,
                             reason=reason,
                             expected_generation=expected_generation,
+                            debounce_event_queued_perf=self._finalize_profile_event_queued_perf(
+                                event
+                            ),
                         )
                     )
 
@@ -4463,6 +4935,9 @@ class ASRServer:
             await self._scheduler_continuous_handle_debounce_expired_locked(
                 session,
                 stop_seq=event[1],
+                debounce_event_queued_perf=self._finalize_profile_event_queued_perf(
+                    event
+                ),
             )
         else:
             logger.warning(
@@ -4794,6 +5269,7 @@ class ASRServer:
         session: ASRSession,
         *,
         stop_seq: int,
+        debounce_event_queued_perf: Optional[float] = None,
     ) -> None:
         if (
             session.continuous_state != PENDING_FINALIZE
@@ -4817,7 +5293,11 @@ class ASRServer:
         )
         reason = "reset_then_debounce" if reset_seen else "debounce_expired"
         self._scheduler_invalidate_session_locked(session, reason=reason)
-        await self._scheduler_continuous_finalize_emit_locked(session, reason=reason)
+        await self._scheduler_continuous_finalize_emit_locked(
+            session,
+            reason=reason,
+            debounce_event_queued_perf=debounce_event_queued_perf,
+        )
         self._continuous_finish_speculative_finalize_locked(
             session,
             reason=reason,
@@ -4828,11 +5308,13 @@ class ASRServer:
         session: ASRSession,
         *,
         reason: str,
+        debounce_event_queued_perf: Optional[float] = None,
     ) -> None:
         await self._continuous_finalize_emit_locked(
             session,
             reason=reason,
             expected_generation=session.scheduler_generation,
+            debounce_event_queued_perf=debounce_event_queued_perf,
         )
 
     async def _scheduler_continuous_finalize_and_reset_locked(
@@ -4921,6 +5403,9 @@ class ASRServer:
                         await self._continuous_handle_debounce_expired_locked(
                             session,
                             stop_seq=event[1],
+                            debounce_event_queued_perf=self._finalize_profile_event_queued_perf(
+                                event
+                            ),
                         )
                     else:
                         logger.warning(
@@ -4998,7 +5483,12 @@ class ASRServer:
             session = self.sessions.get(session_id)
             if session is None or session.continuous_event_queue is None:
                 return
-            await session.continuous_event_queue.put(("debounce_expired", stop_seq))
+            if self.finalize_profile_enabled:
+                await session.continuous_event_queue.put(
+                    ("debounce_expired", stop_seq, time.perf_counter())
+                )
+            else:
+                await session.continuous_event_queue.put(("debounce_expired", stop_seq))
             self._wake_scheduler()
         except asyncio.CancelledError:
             pass
@@ -5253,6 +5743,7 @@ class ASRServer:
         session: ASRSession,
         *,
         stop_seq: int,
+        debounce_event_queued_perf: Optional[float] = None,
     ) -> None:
         if (
             session.continuous_state != PENDING_FINALIZE
@@ -5275,7 +5766,11 @@ class ASRServer:
             f"finalizing (reset_seen={reset_seen})"
         )
         reason = "reset_then_debounce" if reset_seen else "debounce_expired"
-        await self._continuous_finalize_emit_locked(session, reason=reason)
+        await self._continuous_finalize_emit_locked(
+            session,
+            reason=reason,
+            debounce_event_queued_perf=debounce_event_queued_perf,
+        )
         self._continuous_finish_speculative_finalize_locked(
             session,
             reason=reason,
@@ -5285,8 +5780,66 @@ class ASRServer:
         pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
         return bool(session.current_text) or session.total_audio_samples > 0 or pending_len > 0
 
-    def _build_continuous_finalize_fork(self, session: ASRSession) -> ASRSession:
+    def _build_continuous_finalize_fork(
+        self,
+        session: ASRSession,
+        finalize_profile: Optional[dict[str, Any]] = None,
+    ) -> ASRSession:
         """Create a disposable fork for final padding without touching parent state."""
+        if finalize_profile is None:
+            pending_audio = (
+                session.pending_audio.copy()
+                if session.pending_audio is not None
+                else np.array([], dtype=np.float32)
+            )
+            padding_samples = 0
+            if session.total_audio_samples > 0:
+                padding_samples = self.final_padding_frames * self.hop_samples
+                silence_padding = np.zeros(padding_samples, dtype=np.float32)
+                pending_audio = np.concatenate([pending_audio, silence_padding])
+
+            fork = ASRSession(
+                id=f"{session.id}:fork",
+                websocket=None,
+                target_lang=session.target_lang,
+            )
+            fork.pending_audio = pending_audio
+            fork.accumulated_audio = fork.pending_audio
+            fork.total_audio_samples = session.total_audio_samples + padding_samples
+            fork.synthetic_prefix_samples = session.synthetic_prefix_samples
+            fork.raw_audio_ring = (
+                session.raw_audio_ring.copy()
+                if session.raw_audio_ring is not None
+                else np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
+            )
+            fork.mel_frame_ring = clone_tree(session.mel_frame_ring)
+            fork.emitted_frames = session.emitted_frames
+            fork.cache_last_channel = (
+                tensor_clone(session.cache_last_channel)
+                if session.cache_last_channel is not None
+                else None
+            )
+            fork.cache_last_time = (
+                tensor_clone(session.cache_last_time)
+                if session.cache_last_time is not None
+                else None
+            )
+            fork.cache_last_channel_len = (
+                tensor_clone(session.cache_last_channel_len)
+                if session.cache_last_channel_len is not None
+                else None
+            )
+            fork.previous_hypotheses = clone_hypotheses_deep(session.previous_hypotheses)
+            fork.pred_out_stream = clone_tree(session.pred_out_stream)
+            fork.current_text = session.current_text
+            fork.last_emitted_text = session.last_emitted_text
+            fork.committed_text = session.committed_text
+            fork.continuous_emitted_text = session.continuous_emitted_text
+            return fork
+
+        total_start = time.perf_counter()
+
+        audio_start = time.perf_counter()
         pending_audio = (
             session.pending_audio.copy()
             if session.pending_audio is not None
@@ -5297,6 +5850,7 @@ class ASRServer:
             padding_samples = self.final_padding_frames * self.hop_samples
             silence_padding = np.zeros(padding_samples, dtype=np.float32)
             pending_audio = np.concatenate([pending_audio, silence_padding])
+        audio_ms = (time.perf_counter() - audio_start) * 1000
 
         fork = ASRSession(
             id=f"{session.id}:fork",
@@ -5307,11 +5861,16 @@ class ASRServer:
         fork.accumulated_audio = fork.pending_audio
         fork.total_audio_samples = session.total_audio_samples + padding_samples
         fork.synthetic_prefix_samples = session.synthetic_prefix_samples
+
+        audio_start = time.perf_counter()
         fork.raw_audio_ring = (
             session.raw_audio_ring.copy()
             if session.raw_audio_ring is not None
             else np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
         )
+        audio_ms += (time.perf_counter() - audio_start) * 1000
+
+        cache_start = time.perf_counter()
         fork.mel_frame_ring = clone_tree(session.mel_frame_ring)
         fork.emitted_frames = session.emitted_frames
         fork.cache_last_channel = (
@@ -5329,12 +5888,30 @@ class ASRServer:
             if session.cache_last_channel_len is not None
             else None
         )
+        cache_ms = (time.perf_counter() - cache_start) * 1000
+
+        hyps_start = time.perf_counter()
         fork.previous_hypotheses = clone_hypotheses_deep(session.previous_hypotheses)
+        hyps_ms = (time.perf_counter() - hyps_start) * 1000
+
+        pred_start = time.perf_counter()
         fork.pred_out_stream = clone_tree(session.pred_out_stream)
+        pred_ms = (time.perf_counter() - pred_start) * 1000
+
         fork.current_text = session.current_text
         fork.last_emitted_text = session.last_emitted_text
         fork.committed_text = session.committed_text
         fork.continuous_emitted_text = session.continuous_emitted_text
+
+        total_ms = (time.perf_counter() - total_start) * 1000
+        finalize_profile["fork_clone_audio_ms"] = audio_ms
+        finalize_profile["fork_clone_cache_ms"] = cache_ms
+        finalize_profile["fork_clone_hyps_ms"] = hyps_ms
+        finalize_profile["fork_clone_pred_ms"] = pred_ms
+        finalize_profile["fork_clone_other_ms"] = max(
+            0.0,
+            total_ms - audio_ms - cache_ms - hyps_ms - pred_ms,
+        )
         return fork
 
     def _snapshot_fork_assert_parent(self, session: ASRSession) -> dict[str, Any]:
@@ -5449,12 +6026,21 @@ class ASRServer:
         *,
         reason: str,
         expected_generation: int,
+        debounce_event_queued_perf: Optional[float] = None,
     ) -> SchedulerFinalizeItem:
         audio_samples = session.total_audio_samples
         audio_duration_ms = (audio_samples * 1000) // self.sample_rate
         pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
         held_len = len(session.continuous_post_stop_audio) // 2
         timing = self._continuous_finalize_timing(session, reason=reason)
+        finalize_profile = self._new_finalize_profile(
+            session,
+            reason=reason,
+            path="batch_finalize",
+            debounce_event_queued_perf=debounce_event_queued_perf,
+        )
+        if finalize_profile is not None:
+            finalize_profile["first"] = session.emitted_frames == 0
         logger.debug(
             f"Session {session.id} continuous finalize ({reason}): "
             f"audio={audio_samples} samples ({audio_duration_ms}ms), "
@@ -5478,8 +6064,16 @@ class ASRServer:
                 else None
             )
             fork_clone_start = time.perf_counter()
-            fork = self._build_continuous_finalize_fork(session)
+            if finalize_profile is not None:
+                fork = self._build_continuous_finalize_fork(
+                    session,
+                    finalize_profile=finalize_profile,
+                )
+            else:
+                fork = self._build_continuous_finalize_fork(session)
             fork_clone_ms = (time.perf_counter() - fork_clone_start) * 1000
+            if finalize_profile is not None:
+                finalize_profile["fork_clone_ms"] = fork_clone_ms
             if self.scheduler_enabled:
                 logger.info(
                     f"Session {session.id}: scheduler_b1 fork_clone_ms="
@@ -5496,6 +6090,7 @@ class ASRServer:
             final_text=final_text,
             should_flush=should_flush,
             fork_clone_ms=fork_clone_ms,
+            finalize_profile=finalize_profile,
         )
 
     @contextlib.asynccontextmanager
@@ -5647,6 +6242,15 @@ class ASRServer:
                 f"reason={reason} expected_gen={expected_generation} "
                 f"current_gen={session.scheduler_generation}"
             )
+            self._emit_finalize_profile_record(
+                item.finalize_profile,
+                timing=timing,
+                final_text=final_text,
+                delta_text="",
+                emitted_to_client=False,
+                suppressed_reason="stale_generation",
+                should_flush=item.should_flush,
+            )
             return
 
         session.committed_text = final_text
@@ -5677,11 +6281,29 @@ class ASRServer:
                     f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}', "
                     f"collector='{session.continuous_emitted_text[-50:]}')"
                 )
+            self._emit_finalize_profile_record(
+                item.finalize_profile,
+                timing=timing,
+                final_text=final_text,
+                delta_text=delta_text,
+                emitted_to_client=sent,
+                suppressed_reason=None if sent else "send_failed",
+                should_flush=item.should_flush,
+            )
         else:
             logger.debug(
                 f"Session {session.id}: suppressed empty/duplicate continuous final "
                 f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}', "
                 f"collector='{session.continuous_emitted_text[-50:]}')"
+            )
+            self._emit_finalize_profile_record(
+                item.finalize_profile,
+                timing=timing,
+                final_text=final_text,
+                delta_text="",
+                emitted_to_client=False,
+                suppressed_reason="empty_or_duplicate",
+                should_flush=item.should_flush,
             )
 
     def _prepare_final_fork_batch_row(
@@ -5706,6 +6328,8 @@ class ASRServer:
 
         if remaining_frames <= 0:
             logger.warning(f"Session {session.id}: No remaining frames to process!")
+            if item.finalize_profile is not None:
+                item.finalize_profile["model_skipped_reason"] = "no_remaining_frames"
             return None
 
         pending = session.pending_audio
@@ -5723,7 +6347,17 @@ class ASRServer:
                 raw_ring,
                 new_audio,
             )
-            mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+            if item.finalize_profile is not None:
+                self._finalize_profile_cuda_synchronize(item.finalize_profile)
+                pre_start = time.perf_counter()
+                mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+                self._finalize_profile_cuda_synchronize(item.finalize_profile)
+                self._finalize_profile_add_preproc(
+                    item.finalize_profile,
+                    (time.perf_counter() - pre_start) * 1000,
+                )
+            else:
+                mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
             start = self.first_preprocess_mel_frame
             new_mels.append(mel[:, :, start : start + frames_this_call])
 
@@ -5848,6 +6482,8 @@ class ASRServer:
 
             if remaining_frames <= 0:
                 logger.warning(f"Session {session.id}: No remaining frames to process!")
+                if item.finalize_profile is not None:
+                    item.finalize_profile["model_skipped_reason"] = "no_remaining_frames"
                 continue
 
             states.append(
@@ -5898,11 +6534,44 @@ class ASRServer:
                         fixed_audios = [entry[1] for entry in batch_group]
                         valid_samples = [entry[2] for entry in batch_group]
                         try:
+                            profiles = [
+                                entry[0].item.finalize_profile
+                                for entry in batch_group
+                                if entry[0].item.finalize_profile is not None
+                            ]
+                            if profiles:
+                                sync_ms = self._finalize_profile_cuda_synchronize(
+                                    profiles[0]
+                                )
+                                for profile in profiles[1:]:
+                                    self._finalize_profile_add_cuda_sync_observed(
+                                        profile,
+                                        sync_ms,
+                                    )
+                                pre_start = time.perf_counter()
+                            else:
+                                pre_start = 0.0
                             mels = self._preprocess_final_fixed_audio_batch(
                                 fixed_audios,
                                 valid_samples,
                                 frames_this_call,
                             )
+                            if profiles:
+                                sync_ms = self._finalize_profile_cuda_synchronize(
+                                    profiles[0]
+                                )
+                                for profile in profiles[1:]:
+                                    self._finalize_profile_add_cuda_sync_observed(
+                                        profile,
+                                        sync_ms,
+                                    )
+                                pre_ms = (time.perf_counter() - pre_start) * 1000
+                                if mels is not None:
+                                    for profile in profiles:
+                                        self._finalize_profile_add_preproc(
+                                            profile,
+                                            pre_ms,
+                                        )
                         except Exception as e:
                             logger.warning(
                                 "scheduler_finalize_preproc_batch_fallback "
@@ -5916,10 +6585,20 @@ class ASRServer:
                     if mels is None:
                         mels = []
                         for _state, fixed_audio, valid_samples, _frames in batch_group:
+                            profile = _state.item.finalize_profile
+                            if profile is not None:
+                                self._finalize_profile_cuda_synchronize(profile)
+                                pre_start = time.perf_counter()
                             mel, _mel_len = self._preprocess_fixed_audio(
                                 fixed_audio,
                                 valid_samples,
                             )
+                            if profile is not None:
+                                self._finalize_profile_cuda_synchronize(profile)
+                                self._finalize_profile_add_preproc(
+                                    profile,
+                                    (time.perf_counter() - pre_start) * 1000,
+                                )
                             mel_start = self.first_preprocess_mel_frame
                             mels.append(
                                 mel[:, :, mel_start : mel_start + frames_this_call]
@@ -6025,7 +6704,12 @@ class ASRServer:
                 item.session.id: item.final_text for item in items
             }
             with torch.inference_mode():
-                self._cuda_synchronize_for_current_model_lane()
+                if self.finalize_profile_enabled:
+                    self._finalize_profile_cuda_synchronize_many(
+                        [item.finalize_profile for item in items]
+                    )
+                else:
+                    self._cuda_synchronize_for_current_model_lane()
                 live_items: list[SchedulerFinalizeItem] = []
                 for item in items:
                     if item.expected_generation != item.session.scheduler_generation:
@@ -6061,7 +6745,12 @@ class ASRServer:
                         batch_rows = group_rows[start : start + self.batch_max_size]
                         texts.update(self._process_final_batch_rows(batch_rows, key))
 
-                self._cuda_synchronize_for_current_model_lane()
+                if self.finalize_profile_enabled:
+                    self._finalize_profile_cuda_synchronize_many(
+                        [item.finalize_profile for item in live_items]
+                    )
+                else:
+                    self._cuda_synchronize_for_current_model_lane()
                 return texts
         except Exception as e:
             session_ids = ",".join(item.session.id for item in items)
@@ -6111,6 +6800,16 @@ class ASRServer:
         if self.prompted_model:
             self._apply_inference_prompt(rows[0].item.fork)
 
+        model_profile: Optional[dict[str, Any]] = None
+        if self.finalize_profile_enabled and any(
+            row.item.finalize_profile is not None for row in rows
+        ):
+            model_profile = {
+                "cuda_sync_ms": 0.0,
+                "cuda_sync_invocations": 0,
+                "encoder_invocations": 0,
+            }
+            self._finalize_profile_cuda_synchronize(model_profile)
         model_start = time.perf_counter()
         (
             pred_out_stream,
@@ -6130,9 +6829,14 @@ class ASRServer:
             previous_pred_out=flat_pred_out,
             drop_extra_pre_encoded=rows[0].drop_extra,
             return_transcription=True,
+            finalize_profile=model_profile,
         )
-        self._cuda_synchronize_for_current_model_lane()
+        if model_profile is not None:
+            self._finalize_profile_cuda_synchronize(model_profile)
+        else:
+            self._cuda_synchronize_for_current_model_lane()
         model_ms = (time.perf_counter() - model_start) * 1000.0
+        self._finalize_profile_set_model_wall(model_profile, model_ms)
 
         batch_size = len(rows)
         scatter_start = time.perf_counter()
@@ -6159,6 +6863,28 @@ class ASRServer:
                 fork.cache_last_channel = row_cache[0]
                 fork.cache_last_time = row_cache[1]
                 fork.cache_last_channel_len = row_cache[2]
+                if row.item.finalize_profile is not None:
+                    self._finalize_profile_set_model_inputs(
+                        row.item.finalize_profile,
+                        processed_signal=processed_signal,
+                        processed_signal_length=processed_signal_length,
+                        cache_last_channel=cache_last_channel,
+                        cache_last_channel_len=cache_last_channel_len,
+                        drop_extra=rows[0].drop_extra,
+                        first=(fork.emitted_frames == 0),
+                        row_index=index,
+                    )
+                    self._finalize_profile_copy_model_profile(
+                        row.item.finalize_profile,
+                        model_profile,
+                        row_index=index,
+                    )
+                    row.item.finalize_profile["cache_last_channel_out_shape"] = (
+                        self._finalize_profile_shape(row_cache[0])
+                    )
+                    row.item.finalize_profile["cache_last_channel_len_out"] = (
+                        self._finalize_profile_tensor_value(row_cache[2])
+                    )
                 text = row.item.final_text
                 if (
                     transcribed_texts
@@ -6184,8 +6910,16 @@ class ASRServer:
                 )
             raise
 
-        self._cuda_synchronize_for_current_model_lane()
+        if self.finalize_profile_enabled:
+            self._finalize_profile_cuda_synchronize_many(
+                [row.item.finalize_profile for row in rows]
+            )
+        else:
+            self._cuda_synchronize_for_current_model_lane()
         scatter_ms = (time.perf_counter() - scatter_start) * 1000.0
+        for row in rows:
+            if row.item.finalize_profile is not None:
+                row.item.finalize_profile["scatter_ms"] = scatter_ms
         self._record_finalize_batch_telemetry(
             batch_size=batch_size,
             key=key,
@@ -6211,7 +6945,13 @@ class ASRServer:
         )
         texts: dict[str, Optional[str]] = {}
         for row in rows:
-            text = self._process_final_chunk(row.item.fork)
+            if row.item.finalize_profile is not None:
+                text = self._process_final_chunk(
+                    row.item.fork,
+                    row.item.finalize_profile,
+                )
+            else:
+                text = self._process_final_chunk(row.item.fork)
             texts[row.item.session.id] = text
         return texts
 
@@ -6221,8 +6961,17 @@ class ASRServer:
         *,
         reason: str,
         expected_generation: Optional[int] = None,
+        debounce_event_queued_perf: Optional[float] = None,
     ) -> None:
         """Finalize once on a disposable fork and emit one incremental delta."""
+        finalize_profile = self._new_finalize_profile(
+            session,
+            reason=reason,
+            path="serial_finalize",
+            debounce_event_queued_perf=debounce_event_queued_perf,
+        )
+        if finalize_profile is not None:
+            finalize_profile["first"] = session.emitted_frames == 0
         if (
             expected_generation is not None
             and expected_generation != session.scheduler_generation
@@ -6231,6 +6980,15 @@ class ASRServer:
                 f"Session {session.id}: skipped stale continuous finalize "
                 f"reason={reason} expected_gen={expected_generation} "
                 f"current_gen={session.scheduler_generation}"
+            )
+            self._emit_finalize_profile_record(
+                finalize_profile,
+                timing=self._continuous_finalize_timing(session, reason=reason),
+                final_text=session.current_text,
+                delta_text="",
+                emitted_to_client=False,
+                suppressed_reason="stale_generation_pre",
+                should_flush=False,
             )
             return
 
@@ -6268,8 +7026,16 @@ class ASRServer:
                 else None
             )
             fork_clone_start = time.perf_counter()
-            fork = self._build_continuous_finalize_fork(session)
+            if finalize_profile is not None:
+                fork = self._build_continuous_finalize_fork(
+                    session,
+                    finalize_profile=finalize_profile,
+                )
+            else:
+                fork = self._build_continuous_finalize_fork(session)
             fork_clone_ms = (time.perf_counter() - fork_clone_start) * 1000
+            if finalize_profile is not None:
+                finalize_profile["fork_clone_ms"] = fork_clone_ms
             if self.scheduler_enabled:
                 logger.info(
                     f"Session {session.id}: scheduler_b1 fork_clone_ms="
@@ -6299,15 +7065,32 @@ class ASRServer:
                                     f"reason={reason} expected_gen={expected_generation} "
                                     f"current_gen={session.scheduler_generation}"
                                 )
+                                self._emit_finalize_profile_record(
+                                    finalize_profile,
+                                    timing=timing,
+                                    final_text=final_text,
+                                    delta_text="",
+                                    emitted_to_client=False,
+                                    suppressed_reason="stale_generation_before_model",
+                                    should_flush=should_flush,
+                                )
                                 return
                             timing["inference_lock_acquire_wait_ms"] = (
                                 time.perf_counter() - lock_wait_start
                             ) * 1000
-                            text = await self._run_scheduler_model_lane_call(
-                                reserved_lane_id,
-                                self._process_final_chunk,
-                                fork,
-                            )
+                            if finalize_profile is not None:
+                                text = await self._run_scheduler_model_lane_call(
+                                    reserved_lane_id,
+                                    self._process_final_chunk,
+                                    fork,
+                                    finalize_profile,
+                                )
+                            else:
+                                text = await self._run_scheduler_model_lane_call(
+                                    reserved_lane_id,
+                                    self._process_final_chunk,
+                                    fork,
+                                )
                             if text is not None:
                                 final_text = text
                     else:
@@ -6322,15 +7105,32 @@ class ASRServer:
                                         f"reason={reason} expected_gen={expected_generation} "
                                         f"current_gen={session.scheduler_generation}"
                                     )
+                                    self._emit_finalize_profile_record(
+                                        finalize_profile,
+                                        timing=timing,
+                                        final_text=final_text,
+                                        delta_text="",
+                                        emitted_to_client=False,
+                                        suppressed_reason="stale_generation_before_model",
+                                        should_flush=should_flush,
+                                    )
                                     return
                                 timing["inference_lock_acquire_wait_ms"] = (
                                     time.perf_counter() - lock_wait_start
                                 ) * 1000
-                                text = await self._run_scheduler_exclusive_inference_call(
-                                    self._process_final_chunk,
-                                    fork,
-                                    lane_id=lane_id,
-                                )
+                                if finalize_profile is not None:
+                                    text = await self._run_scheduler_exclusive_inference_call(
+                                        self._process_final_chunk,
+                                        fork,
+                                        finalize_profile,
+                                        lane_id=lane_id,
+                                    )
+                                else:
+                                    text = await self._run_scheduler_exclusive_inference_call(
+                                        self._process_final_chunk,
+                                        fork,
+                                        lane_id=lane_id,
+                                    )
                                 if text is not None:
                                     final_text = text
                 else:
@@ -6344,11 +7144,30 @@ class ASRServer:
                                 f"reason={reason} expected_gen={expected_generation} "
                                 f"current_gen={session.scheduler_generation}"
                             )
+                            self._emit_finalize_profile_record(
+                                finalize_profile,
+                                timing=timing,
+                                final_text=final_text,
+                                delta_text="",
+                                emitted_to_client=False,
+                                suppressed_reason="stale_generation_before_model",
+                                should_flush=should_flush,
+                            )
                             return
                         timing["inference_lock_acquire_wait_ms"] = (
                             time.perf_counter() - lock_wait_start
                         ) * 1000
-                        text = await self._run_inference_call(self._process_final_chunk, fork)
+                        if finalize_profile is not None:
+                            text = await self._run_inference_call(
+                                self._process_final_chunk,
+                                fork,
+                                finalize_profile,
+                            )
+                        else:
+                            text = await self._run_inference_call(
+                                self._process_final_chunk,
+                                fork,
+                            )
                         if text is not None:
                             final_text = text
             if parent_snapshot is not None:
@@ -6381,6 +7200,15 @@ class ASRServer:
                 f"reason={reason} expected_gen={expected_generation} "
                 f"current_gen={session.scheduler_generation}"
             )
+            self._emit_finalize_profile_record(
+                finalize_profile,
+                timing=timing,
+                final_text=final_text,
+                delta_text="",
+                emitted_to_client=False,
+                suppressed_reason="stale_generation",
+                should_flush=should_flush,
+            )
             return
 
         session.committed_text = final_text
@@ -6411,11 +7239,29 @@ class ASRServer:
                     f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}', "
                     f"collector='{session.continuous_emitted_text[-50:]}')"
                 )
+            self._emit_finalize_profile_record(
+                finalize_profile,
+                timing=timing,
+                final_text=final_text,
+                delta_text=delta_text,
+                emitted_to_client=sent,
+                suppressed_reason=None if sent else "send_failed",
+                should_flush=should_flush,
+            )
         else:
             logger.debug(
                 f"Session {session.id}: suppressed empty/duplicate continuous final "
                 f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}', "
                 f"collector='{session.continuous_emitted_text[-50:]}')"
+            )
+            self._emit_finalize_profile_record(
+                finalize_profile,
+                timing=timing,
+                final_text=final_text,
+                delta_text="",
+                emitted_to_client=False,
+                suppressed_reason="empty_or_duplicate",
+                should_flush=should_flush,
             )
 
     def _continuous_finish_speculative_finalize_locked(
@@ -7223,10 +8069,16 @@ class ASRServer:
         )
         self._log_retained_cache_telemetry("hard_reset")
 
-    def _process_final_chunk(self, session: ASRSession) -> Optional[str]:
+    def _process_final_chunk(
+        self,
+        session: ASRSession,
+        finalize_profile: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Process remaining pending audio with fixed-plan preprocessing."""
         try:
             if len(session.pending_audio) == 0:
+                if finalize_profile is not None:
+                    finalize_profile["model_skipped_reason"] = "no_pending_audio"
                 return session.current_text
 
             with torch.inference_mode():
@@ -7245,6 +8097,8 @@ class ASRServer:
 
                 if remaining_frames <= 0:
                     logger.warning(f"Session {session.id}: No remaining frames to process!")
+                    if finalize_profile is not None:
+                        finalize_profile["model_skipped_reason"] = "no_remaining_frames"
                     return session.current_text
 
                 pending = session.pending_audio
@@ -7262,7 +8116,23 @@ class ASRServer:
                         raw_ring,
                         new_audio,
                     )
-                    mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+                    if finalize_profile is not None:
+                        self._finalize_profile_cuda_synchronize(finalize_profile)
+                        pre_start = time.perf_counter()
+                        mel, _mel_len = self._preprocess_fixed_audio(
+                            fixed_audio,
+                            valid_samples,
+                        )
+                        self._finalize_profile_cuda_synchronize(finalize_profile)
+                        self._finalize_profile_add_preproc(
+                            finalize_profile,
+                            (time.perf_counter() - pre_start) * 1000,
+                        )
+                    else:
+                        mel, _mel_len = self._preprocess_fixed_audio(
+                            fixed_audio,
+                            valid_samples,
+                        )
                     start = self.first_preprocess_mel_frame
                     new_mels.append(mel[:, :, start : start + frames_this_call])
 
@@ -7294,6 +8164,25 @@ class ASRServer:
 
                 if self.prompted_model:
                     self._apply_inference_prompt(session)
+                if finalize_profile is not None:
+                    input_cache_last_channel = session.cache_last_channel
+                    input_cache_last_time = session.cache_last_time
+                    input_cache_last_channel_len = session.cache_last_channel_len
+                    self._finalize_profile_set_model_inputs(
+                        finalize_profile,
+                        processed_signal=chunk_mel,
+                        processed_signal_length=chunk_len,
+                        cache_last_channel=input_cache_last_channel,
+                        cache_last_channel_len=input_cache_last_channel_len,
+                        drop_extra=drop_extra,
+                        first=(session.emitted_frames == 0),
+                    )
+                    self._finalize_profile_cuda_synchronize(finalize_profile)
+                    model_start = time.perf_counter()
+                else:
+                    input_cache_last_channel = session.cache_last_channel
+                    input_cache_last_time = session.cache_last_time
+                    input_cache_last_channel_len = session.cache_last_channel_len
                 (
                     session.pred_out_stream,
                     transcribed_texts,
@@ -7304,15 +8193,30 @@ class ASRServer:
                 ) = self._conformer_stream_step(
                     processed_signal=chunk_mel,
                     processed_signal_length=chunk_len,
-                    cache_last_channel=session.cache_last_channel,
-                    cache_last_time=session.cache_last_time,
-                    cache_last_channel_len=session.cache_last_channel_len,
+                    cache_last_channel=input_cache_last_channel,
+                    cache_last_time=input_cache_last_time,
+                    cache_last_channel_len=input_cache_last_channel_len,
                     keep_all_outputs=True,  # Final chunk - output all remaining
                     previous_hypotheses=session.previous_hypotheses,
                     previous_pred_out=session.pred_out_stream,
                     drop_extra_pre_encoded=drop_extra,
                     return_transcription=True,
+                    finalize_profile=finalize_profile,
                 )
+                if finalize_profile is not None:
+                    self._finalize_profile_cuda_synchronize(finalize_profile)
+                    self._finalize_profile_set_model_wall(
+                        finalize_profile,
+                        (time.perf_counter() - model_start) * 1000,
+                    )
+                    finalize_profile["cache_last_channel_out_shape"] = (
+                        self._finalize_profile_shape(session.cache_last_channel)
+                    )
+                    finalize_profile["cache_last_channel_len_out"] = (
+                        self._finalize_profile_tensor_value(
+                            session.cache_last_channel_len
+                        )
+                    )
 
                 if transcribed_texts and transcribed_texts[0]:
                     final_text = self._extract_hypothesis_text(transcribed_texts[0])
@@ -7358,7 +8262,10 @@ class ASRServer:
 
         logger.info(f"ASR server listening on ws://{self.host}:{self.port}")
         logger.info(f"Health check available at http://{self.host}:{self.port}/health")
-        await asyncio.Future()  # Run forever
+        try:
+            await asyncio.Future()  # Run forever
+        finally:
+            self._log_finalize_profile_histogram(reason="shutdown")
 
 
 def main():
