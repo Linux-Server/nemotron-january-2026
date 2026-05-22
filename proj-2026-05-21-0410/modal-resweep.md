@@ -74,3 +74,15 @@ Stopped apps:
 
 Final `modal app list` checks showed no running `nemotron-asr-bench-t4` or
 `nemotron-asr-bench-l4` entries.
+
+## Step 10b Note: Encoder Compile On Cloud
+
+Run timestamp: 2026-05-21 18:47-18:57 PDT. I attempted the compile-only cloud check on the cheap subset
+with batching and scheduler off: `NEMOTRON_ENCODER_COMPILE=1`, greedy decoder, TF32 defaults on.
+
+Result: no valid knee. T4 and L4 both reached the correct startup flags (`encoder_compile_enabled=True`,
+`batch_enabled=False`, `scheduler_enabled=False`, `decoder_strategy=greedy`) but neither logged
+`encoder_compile_warmup_complete`; no warmed buckets or post-warmup `recapture_counter=0` state was confirmed.
+T4 smoke timed out during WebSocket opening, and L4 never returned ready during a bounded long-open health wait.
+Both apps were stopped, so this is a failed engagement gate rather than evidence for or against a cloud knee
+lift from CUDA graphs.

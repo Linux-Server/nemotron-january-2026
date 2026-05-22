@@ -149,6 +149,30 @@ Smoke: both GPUs produced sane English transcripts with no tag leakage or loopin
 N=8 smoke was not exact (T4 3/8, L4 4/8) while already well beyond the realtime knee, so this re-sweep should
 be read as a throughput/cost result plus smoke sanity, not a full cloud strict-byte signoff.
 
+### Step 10b cloud encoder-compile, cheap subset only (T4 + L4)
+
+Run timestamp: 2026-05-21 18:47-18:57 PDT (Modal logs are 2026-05-22 UTC). Config targeted a clean
+A/B against the batch=1 baseline: `NEMOTRON_CONTINUOUS=1`, `NEMOTRON_FINALIZE_SILENCE_MS=0`,
+`NEMOTRON_WARMUP_MS=200`, `NEMOTRON_ENCODER_COMPILE=1`; scheduler and batching off, greedy decoder,
+TF32 defaults left on. ASR and attempted loadgen/startup were in `us-east-1`. T4 was stopped before L4.
+
+Headline: **no cloud knee was measurable because torch.compile did not pass the engagement gate on either
+cheap GPU under the cost-controlled startup window.** Both deployments reached the correct startup flags and
+set `encoder_compile_enabled=True`, but neither completed `encoder_compile_warmup_complete`; no static buckets
+were confirmed warmed and no post-warmup `recapture_counter=0` state was reached. The apps never became healthy
+enough for a valid smoke or sweep.
+
+| GPU | compile startup state | warmup / CUDA-graph engagement | smoke | compile knee | $/stream-hr | vs batch=1 baseline | vs Step-10 batched | client-bound? |
+|-----|-----------------------|--------------------------------|-------|--------------|-------------|---------------------|--------------------|---------------|
+| T4 | `scheduler_enabled=False`, `batch_enabled=False`, `decoder_strategy=greedy`, `encoder_compile_enabled=True` | **failed gate**: no `encoder_compile_warmup_complete`; no warmed buckets; no recapture=0 confirmation. Last compile-related log was TorchInductor `Not enough SMs to use max_autotune_gemm mode`. | 8 strict baselines + N=2 attempt all timed out during WebSocket opening; 0 transcripts | n/a | n/a | n/a vs ~5 / ~$0.12 | n/a vs 4 / ~$0.15 | n/a |
+| L4 | same compile-only startup flags, `encoder_compile_enabled=True` | **failed gate**: no `encoder_compile_warmup_complete` after ~6 minutes from warmup start; no warmed buckets; no recapture=0 confirmation. Same TorchInductor warning; no traceback. | not run after failed health gate; local long-open wait never received ready | n/a | n/a | n/a vs ~5 / ~$0.16 | n/a vs 6 / ~$0.13 | n/a |
+
+Interpretation: this run does **not** disprove the CUDA-graph hypothesis; it says the current
+`torch.compile(mode="reduce-overhead")` encoder path is not usable as a cloud cost lever on Modal T4/L4
+without first fixing or bounding the compile warmup path. Because graph engagement was never confirmed, no
+knee sweep was run and no instance-noise disambiguation was applicable. Both ASR apps were stopped immediately
+after the failed health gates.
+
 ## SYNTHESIS — answer to "why Modal ~5 vs local 5090 ~16-18?"
 
 **It is host-side kernel-LAUNCH/DISPATCH overhead, bound by CPU single-thread speed — NOT the GPU and

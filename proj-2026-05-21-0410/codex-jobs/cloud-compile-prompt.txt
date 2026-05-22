@@ -1,0 +1,66 @@
+<task>
+BILLABLE Modal test (cost-conscious): measure whether the encoder CUDA-graph (`NEMOTRON_ENCODER_COMPILE=1`)
+raises the cloud realtime knee on the cheap subset (T4 + L4), isolating the cheaper-call lever (compile ON,
+BATCHING OFF — batching was just shown not to help the cloud). This is the cloud version of the local Step-4
+1.5x result; the cloud is more launch-bound (46-68% launch-gaps) so a bigger collapse is plausible. Write
+results into the cloud summary doc `proj-2026-05-20-modal-cost/RESULTS.md` (add a "Step 10b: cloud
+encoder-compile" subsection) + a short note in `proj-2026-05-21-0410/modal-resweep.md`. No commits (orchestrator
+commits). Cost controls: smoke before sweep, STOP each app immediately after, minimal runtime, T4+L4 ONLY.
+
+CONFIG (clean A/B vs the batch=1 baseline — change ONLY the compile flag): continuous silence0_warm200, English
+checkpoint, rc1, **greedy** decoder, **TF32 on** (defaults), `NEMOTRON_ENCODER_COMPILE=1`, batching OFF
+(no NEMOTRON_BATCH_SCHED), scheduler off. i.e.
+`NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 NEMOTRON_ENCODER_COMPILE=1`.
+Use the existing `asr_bench_modal.py` deploy + the in-region co-located load-gen (`coloc_loadgen.py`), same as
+Step 10.
+
+PER GPU (T4 first, then L4 — STOP T4 before L4):
+1. Deploy + wait healthy. CONFIRM from startup logs: `encoder_compile_enabled=True`, the static buckets warmed,
+   and **recapture counter = 0** after warmup (verify torch.compile CUDA-graphs actually ENGAGE on this GPU —
+   T4 is Turing sm_75, L4 is Ada; CUDA-graphs are supported on both, but confirm no recapture/errors and that
+   the warmup completed; Modal torch is 2.12). If compile fails to engage / errors, report it and fall back to
+   documenting that (don't burn hours).
+2. SMOKE (cheap): ~8 clips → sane English, no looping/garbage, no tag leak (compile shouldn't change output;
+   transcript should match the non-compile output — spot-check a couple against the known baseline texts).
+3. KNEE SWEEP (co-located load-gen): bracket the batch=1 baseline (~5). Sweep N = 2/4/5/6/8/10/12. Find the
+   strict realtime keep-up knee (proc-lag/TTFS p95 <500ms, final <400ms). Report per-N: keep-up, TTFS/proc-lag
+   p95, send-overrun (client-bound flag).
+4. DISAMBIGUATE NOISE: the baseline knee ~5 has +/-1-2 instance noise. If the compile knee comes out only ~5-6,
+   do a quick SAME-INSTANCE no-compile check (redeploy compile-off on the same GPU, N=4/5/6) so the compile
+   delta isn't confounded by instance noise. If compile knee is clearly higher (>=8), note that's beyond noise.
+5. STOP the app. Record compile knee + $/stream-hr vs the batch=1 baseline (T4 $0.59 ~5 $0.12; L4 $0.80 ~5
+   $0.16) and vs the Step-10 batched result (T4 0.8x, L4 1.2x).
+
+REPORT (RESULTS.md "Step 10b" + modal-resweep.md note): per-GPU compile knee, improvement vs batch=1 + vs
+batched, $/stream-hr, whether CUDA-graphs engaged (recapture=0) on Turing/Ada, the headline (does the
+cheaper-call lever lift the cloud knee where batching couldn't), client-bound flags. CLEANUP: confirm BOTH apps
+stopped (`modal app list`), report state — nothing should keep billing.
+</task>
+
+<context>
+Read proj-2026-05-20-modal-cost/RESULTS.md (batch=1 baseline T4/L4 ~5; Step-10 batched section showing batching
+no-op), proj-2026-05-21-0410/SUMMARY.md (the lane analysis: cloud is launch-bound, the cheaper-call lever =
+CUDA-graphs is the predicted cloud win; local encoder compile = 1.5x), the deploy infra (`asr_bench_modal.py`
+env ASR_GPU/REGION; `coloc_loadgen.py`), and server.py Step-4 encoder compile (NEMOTRON_ENCODER_COMPILE,
+_configure_encoder_compile, the static-bucket warmup, recapture telemetry). Hypothesis: collapsing the cloud's
+46-68% launch-gaps could give a bigger-than-local multiplier on the single-stream call -> higher B=1 knee.
+Modal $/hr: T4 0.59, L4 0.80. Stop apps between (cost).
+</context>
+
+<verification_loop>
+Confirm compile actually ENGAGED on each GPU (encoder_compile_enabled=True, buckets warmed, recapture=0) BEFORE
+trusting the knee — if torch.compile silently fell back to eager on Turing/Ada, the "knee" would just be the
+baseline. Smoke for correctness before the sweep. Disambiguate small deltas from instance noise with a
+same-instance no-compile check.
+</verification_loop>
+
+<action_safety>
+BILLABLE + cost-sensitive: T4+L4 only, smoke before sweep, stop each app immediately after, minimal runtime.
+May use asr_bench_modal.py/coloc_loadgen.py; NO server.py edits; no commits. Final check: both apps stopped.
+</action_safety>
+
+<compact_output_contract>
+Report: per-GPU (T4, L4) compile knee + did-CUDA-graphs-engage (recapture=0?) + improvement vs batch=1 and vs
+batched + $/stream-hr + client-bound flags; the headline (does encoder compile lift the cloud knee); both apps
+stopped.
+</compact_output_contract>

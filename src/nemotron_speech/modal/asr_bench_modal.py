@@ -33,6 +33,8 @@ RIGHT_CONTEXT = os.environ.get("ASR_RC", "1")          # English low-latency def
 MAX_INPUTS = int(os.environ.get("ASR_CONCURRENT", "64"))  # concurrent WS streams / container
 REGION = os.environ.get("ASR_REGION") or None          # pin region (e.g. us-east-1 for co-loc tests)
 PROFILE = os.environ.get("ASR_PROFILE") or ""          # baked at deploy time -> NEMOTRON_PROFILE_CHUNK
+ENABLE_BATCHING = os.environ.get("ASR_ENABLE_BATCHING", "1") == "1"
+ENCODER_COMPILE = os.environ.get("ASR_ENCODER_COMPILE", "") == "1"
 
 app = modal.App(APP_NAME)
 
@@ -72,6 +74,8 @@ image = (
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "HF_HOME": CACHE_PATH,
             "TORCH_HOME": CACHE_PATH,
+            "ASR_ENABLE_BATCHING": "1" if ENABLE_BATCHING else "0",
+            "ASR_ENCODER_COMPILE": "1" if ENCODER_COMPILE else "0",
         }
     )
 )
@@ -112,14 +116,21 @@ def asr():
     env.update(
         {
             "NEMOTRON_CONTINUOUS": "1",
-            "NEMOTRON_SCHEDULER_B1": "1",
-            "NEMOTRON_BATCH_SCHED": "1",
             "NEMOTRON_FINALIZE_SILENCE_MS": "0",
             "NEMOTRON_WARMUP_MS": "200",
-            "NEMOTRON_BATCH_MAX_SIZE": "32",
-            "NEMOTRON_BATCH_MAX_WAIT_MS": "8",
         }
     )
+    if ENABLE_BATCHING:
+        env.update(
+            {
+                "NEMOTRON_SCHEDULER_B1": "1",
+                "NEMOTRON_BATCH_SCHED": "1",
+                "NEMOTRON_BATCH_MAX_SIZE": "32",
+                "NEMOTRON_BATCH_MAX_WAIT_MS": "8",
+            }
+        )
+    if ENCODER_COMPILE:
+        env["NEMOTRON_ENCODER_COMPILE"] = "1"
     # NEMOTRON_PROFILE_CHUNK is baked into the image env at deploy (see below) so it
     # survives the container's module re-import; server.py inherits it via os.environ.copy().
     # non-blocking: start the server, return so Modal can poll the port
