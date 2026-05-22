@@ -1,0 +1,81 @@
+<task>
+PROTOTYPE (server.py, flag-gated, default OFF, local; NO commits — orchestrator reviews+commits): turn the
+scheduler's SINGLE serial model-call lane into N concurrent lanes, to realize the ~1.4× local speedup the
+feasibility probe predicted (`proj-2026-05-21-0410/parallel-lane-feasibility.md`: K=4 threads = 2.75× CPU-in-wall,
+but ~70% GPU-active serial floor → ~1.4× end-to-end). Add a short test + update the probe doc with the
+end-to-end measured number. Modify `src/nemotron_speech/server.py` only (+ a test file).
+
+NEW FLAG: `NEMOTRON_MODEL_LANES` (int, default 1). 1 = TODAY'S EXACT behavior (single lane, byte-identical,
+rollback-safe). >1 (prototype N=2) = up to N model calls in flight concurrently, each on its own
+`torch.cuda.Stream` + its own worker thread. Only meaningful with the scheduler/batching on
+(`NEMOTRON_SCHEDULER_B1=1`); if lanes>1 but scheduler off, log + fall back to lanes=1.
+
+DESIGN (conservative, correctness first):
+- Today the scheduler forms a ready-batch and runs ONE `conformer_stream_step(B)` at a time (the serial lane).
+  Change: allow up to N such batches to be DISPATCHED concurrently to N lanes (worker threads), each lane with
+  its own CUDA stream; the scheduler keeps forming batches and hands each to a free lane.
+- HARD HAZARD #1 — the GLOBAL `encoder.streaming_cfg.drop_extra_pre_encoded`. NeMo mutates this shared field
+  per call (see `conformer_stream_step_restoring_drop_extra` in batch_primitives.py). Two lanes with DIFFERENT
+  drop_extra racing on the global = corruption. GUARD: steady-state chunks all share drop_extra=2, so concurrent
+  STEADY batches are safe; route any NON-steady call (first-chunk warmup, the vad_stop finalize/barrier-drain,
+  any drop_extra≠steady) to a SERIALIZED exclusive path (lane 0 only, no other lane in flight). Simplest correct
+  rule: only batches with the SAME drop_extra may run concurrently; otherwise serialize. Document the rule you
+  pick.
+- HARD HAZARD #2 — a session must NEVER be in two lanes at once (its cache/hyps would corrupt). The scheduler
+  must not dispatch a session to lane B while it's still in flight on lane A. Track in-flight session IDs;
+  hold a session out of batch-forming until its lane completes + scatters.
+- HARD HAZARD #3 — CUDA-stream correctness: each lane runs on its own stream; the scatter / state read-back
+  must `stream.synchronize()` (or event-wait) BEFORE copying state back to the session, or you read stale GPU
+  memory. The owned-clone scatter stays.
+- Keep `inference_lock` semantics where they protect shared mutable model state; the point is to overlap the
+  HOST dispatch of independent lanes, not to remove necessary synchronization. Per-session state_lock + the
+  generation-token guard still apply.
+
+GATES (the byte-exact one is non-negotiable):
+  (1) BYTE-EXACT: with NEMOTRON_MODEL_LANES=2 + scheduler/batching on, the per-stream transcripts must be
+      byte-IDENTICAL to NEMOTRON_MODEL_LANES=1 (and to the established single-lane baseline) on a fixed clip set
+      (≥20 streams, run them through both configs, diff transcripts; print every mismatch). Lanes must not
+      perturb output AT ALL. Hard gate — if any diff, it's a NO-GO; diagnose the race.
+  (2) FORK_ASSERT clean (NEMOTRON_FORK_ASSERT=1), no illegal-memory / stream errors over a multi-minute run.
+  (3) DEFAULT-OFF identity: NEMOTRON_MODEL_LANES=1 (or unset) is byte-identical to the pre-change server (the
+      lane code is fully bypassed when lanes=1).
+  (4) THROUGHPUT (the measurement): a quick keep-up sweep at lanes=2 vs lanes=1 (scheduler+batching on) — report
+      the realtime knee for each. Expect lanes=2 ≈ 1.3-1.5× the lanes=1 knee. NOTE: a manual-CUDA-graph probe
+      may share this GPU concurrently — if so the knee timing is noisy + GPU memory is shared (keep batch sizes
+      modest, be memory-aware, ~2-3GB held by the other process); flag timing as approximate. Byte-exact (1) and
+      default-off identity (3) are the robust gates regardless of contention.
+
+REPORT: the lane design + the drop_extra rule you chose; byte-exact result (N streams, any diffs); FORK_ASSERT;
+default-off identity; lanes=2 vs lanes=1 knee (approx, note contention); VERDICT: does the parallel-lane
+prototype realize the predicted ~1.4× byte-exactly, flag-gated + rollback-safe? Update parallel-lane-feasibility.md
+with the END-TO-END measured number. CLEANUP: kill servers, free GPU, remove scratch rows/__pycache__.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/SUMMARY.md (the lane analysis: single serial inference lane = the bottleneck; ~70%
+GPU-active serial floor → ~1.4× ceiling for lanes), parallel-lane-feasibility.md (the probe: not a GIL wall,
+Amdahl-bounded, drop_extra shared-mutation caveat), and in server.py the scheduler path (the `_scheduler_*`
+methods, `_process_ready_batch`, the model-call dispatch, `inference_lock`) + batch_primitives.py
+(`conformer_stream_step_restoring_drop_extra`, the owned-clone scatter). This is the realtime overlap lever
+(partial substitute for CUDA-graphs). Default off must be byte-identical to today.
+</context>
+
+<verification_loop>
+Byte-exact (lanes=2 == lanes=1 == baseline) is the hard gate — the whole risk is a cross-lane race corrupting
+cache-aware state or the global drop_extra. If ANY transcript differs, diagnose the race (drop_extra clobber?
+session-in-two-lanes? missing stream sync?) before reporting. Confirm default-off (lanes=1) is a true no-op.
+Run FORK_ASSERT on. If the GPU is contended by a parallel probe, flag the knee as approximate but still prove
+byte-exactness.
+</verification_loop>
+
+<action_safety>
+Modify ONLY src/nemotron_speech/server.py (+ a test). Flag-gated, default off = byte-identical to today. No NeMo
+edits, no commits. Another GPU process (manual-capture probe) may be running — be memory-aware, keep batches
+modest. Kill servers + free GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report: lane design + drop_extra rule; byte-exact (lanes=2 vs lanes=1 vs baseline, any diffs); FORK_ASSERT;
+default-off identity; lanes=2 vs lanes=1 knee (approx + contention note); VERDICT on the parallel-lane prototype;
+feasibility doc updated; cleanup.
+</compact_output_contract>

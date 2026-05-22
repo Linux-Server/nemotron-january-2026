@@ -496,6 +496,7 @@ class ASRServer:
         self.port = port
         self.right_context = right_context
         self.model = None
+        self._decoding_cfg_for_lane_models = None
         self.prompted_model = False
         self.prompt_dictionary: dict[str, Any] = {}
         self.target_lang = os.environ.get("NEMOTRON_TARGET_LANG", "en-US").strip() or "en-US"
@@ -518,6 +519,10 @@ class ASRServer:
         self.batch_requested = os.environ.get("NEMOTRON_BATCH_SCHED", "") == "1"
         self.batch_enabled = self.batch_requested
         self.batch_fallback_reason: Optional[str] = None
+        self.model_lanes_requested = _env_int("NEMOTRON_MODEL_LANES", 1)
+        if self.model_lanes_requested <= 0:
+            raise ValueError("NEMOTRON_MODEL_LANES must be >= 1")
+        self.model_lanes = self.model_lanes_requested
         self.requested_decoder_strategy = (
             os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower() or "greedy"
         )
@@ -538,6 +543,26 @@ class ASRServer:
             )
         if self.batch_enabled and self.eou_probe_enabled:
             self._disable_batching("eou_probe_preserve_alignments_unprobed")
+        if self.model_lanes > 1 and not self.scheduler_enabled:
+            logger.warning(
+                "model_lanes_disabled "
+                f"requested={self.model_lanes_requested} reason=scheduler_off "
+                "fallback_to_lanes=1"
+            )
+            self.model_lanes = 1
+        elif self.model_lanes > 1 and not self.batch_enabled:
+            logger.warning(
+                "model_lanes_disabled "
+                f"requested={self.model_lanes_requested} reason=batch_scheduler_off "
+                "fallback_to_lanes=1"
+            )
+            self.model_lanes = 1
+        elif self.model_lanes > 1:
+            logger.info(
+                "model_lanes_enabled "
+                f"requested={self.model_lanes_requested} effective={self.model_lanes} "
+                "drop_extra_rule=steady_drop_extra_only_else_exclusive_session_lane"
+            )
         if self.batch_enabled:
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
@@ -591,6 +616,19 @@ class ASRServer:
         self._scheduler_chunks = 0
         self._scheduler_lane_wait_ms_total = 0.0
         self._scheduler_lane_wait_ms_max = 0.0
+        self._scheduler_model_lane_executors: list[concurrent.futures.ThreadPoolExecutor] = []
+        self._scheduler_model_lane_streams: list[Any] = []
+        self._scheduler_model_lane_models: list[Any] = []
+        self._scheduler_model_lane_tls = threading.local()
+        self._scheduler_model_lane_condition: Optional[asyncio.Condition] = None
+        self._scheduler_model_lane_exclusive_active = False
+        self._scheduler_model_lane_active_key: Optional[tuple[Any, int]] = None
+        self._scheduler_available_model_lanes: set[int] = (
+            set(range(self.model_lanes)) if self.model_lanes > 1 else set()
+        )
+        self._scheduler_inflight_model_lane_tasks: set[asyncio.Task] = set()
+        self._scheduler_inflight_sessions: set[str] = set()
+        self._scheduler_session_model_lane_affinity: dict[str, int] = {}
         self.decoder_strategy = (
             "greedy_batch" if self.batch_enabled else self.requested_decoder_strategy
         )
@@ -940,7 +978,7 @@ class ASRServer:
         )
 
     def _estimate_batch_extra_row_bytes(self) -> int:
-        cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+        cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
         cache_bytes = sum(
             self._tensor_tree_storage_nbytes(tensor)
             for tensor in cache
@@ -1070,7 +1108,9 @@ class ASRServer:
 
     def _apply_inference_prompt(self, session: ASRSession) -> None:
         if self.prompted_model:
-            self.model.set_inference_prompt(self._ensure_session_target_lang(session))
+            self._current_inference_model().set_inference_prompt(
+                self._ensure_session_target_lang(session)
+            )
 
     def _read_prompt_dictionary(self) -> dict[str, Any]:
         prompt_dictionary_paths = (
@@ -1282,6 +1322,7 @@ class ASRServer:
                     'alpha': 0.5,
                     'entropy_norm': 'exp',
                 }
+        self._decoding_cfg_for_lane_models = _decoding_cfg
         self.model.change_decoding_strategy(decoding_cfg=_decoding_cfg)
         self.model.eval()
         self._assert_batch_decoder_blackwell_safe()
@@ -1381,12 +1422,16 @@ class ASRServer:
             f"batch_fallback_reason={self.batch_fallback_reason or 'none'} "
             f"decoder_strategy={self.decoder_strategy} "
             f"encoder_compile_enabled={self.encoder_compile_enabled} "
+            f"model_lanes_requested={self.model_lanes_requested} "
+            f"model_lanes={self.model_lanes} "
             f"batch_max_size={self.batch_max_size}"
         )
 
         # Warmup inference to ensure model is fully loaded on GPU
         # This prevents GPU memory issues when LLM starts later
         self._warmup()
+        if self.model_lanes > 1:
+            self._ensure_scheduler_model_lane_resources()
         self._configure_batch_memory_cap()
 
     def _configure_encoder_compile(self) -> None:
@@ -1501,14 +1546,19 @@ class ASRServer:
 
     def _conformer_stream_step(self, **kwargs):
         """Call NeMo's stream step with drop-extra restoration and optional compiled encoder."""
-        streaming_cfg = self.model.encoder.streaming_cfg
+        model = self._current_inference_model()
+        streaming_cfg = model.encoder.streaming_cfg
         original_drop_extra = streaming_cfg.drop_extra_pre_encoded
-        bucket = self._encoder_compile_bucket_for_call(kwargs)
+        bucket = (
+            self._encoder_compile_bucket_for_call(kwargs)
+            if model is self.model
+            else None
+        )
         saw_unwarmed_bucket = False
 
         try:
             if bucket is None:
-                return self.model.conformer_stream_step(**kwargs)
+                return model.conformer_stream_step(**kwargs)
 
             self._encoder_compile_calls += 1
             if (
@@ -1538,7 +1588,7 @@ class ASRServer:
             if mark_step_begin is not None:
                 mark_step_begin()
             with self._compiled_encoder_cache_step_installed():
-                result = self.model.conformer_stream_step(**kwargs)
+                result = model.conformer_stream_step(**kwargs)
             result_list = list(result)
             for result_index in (2, 3, 4):
                 if result_index < len(result_list) and torch.is_tensor(result_list[result_index]):
@@ -1580,6 +1630,331 @@ class ASRServer:
     async def _run_inference_call(self, fn, *args):
         executor = self._encoder_compile_executor if self.encoder_compile_enabled else None
         return await asyncio.get_event_loop().run_in_executor(executor, fn, *args)
+
+    def _current_inference_model(self):
+        if self.model_lanes > 1:
+            lane_model = getattr(self._scheduler_model_lane_tls, "model", None)
+            if lane_model is not None:
+                return lane_model
+        return self.model
+
+    def _scheduler_model_lane_condition_obj(self) -> asyncio.Condition:
+        if self._scheduler_model_lane_condition is None:
+            self._scheduler_model_lane_condition = asyncio.Condition()
+        return self._scheduler_model_lane_condition
+
+    def _load_scheduler_model_lane_model(self, lane_id: int):
+        import nemo.collections.asr as nemo_asr
+
+        is_local_file = (
+            self.model_name_or_path.endswith(".nemo")
+            or os.path.exists(self.model_name_or_path)
+        )
+        if is_local_file:
+            logger.info(
+                f"model_lane_restore_start lane={lane_id} source=local_file"
+            )
+            lane_model = nemo_asr.models.ASRModel.restore_from(
+                self.model_name_or_path,
+                map_location="cpu",
+            )
+        else:
+            logger.info(f"model_lane_restore_start lane={lane_id} source=hf")
+            lane_model = nemo_asr.models.ASRModel.from_pretrained(
+                self.model_name_or_path,
+                map_location="cpu",
+            )
+        lane_model = lane_model.cuda()
+        if hasattr(lane_model, "encoder"):
+            lane_model.encoder.set_default_att_context_size(self.att_context_size)
+        if self._decoding_cfg_for_lane_models is not None:
+            lane_model.change_decoding_strategy(
+                decoding_cfg=copy.deepcopy(self._decoding_cfg_for_lane_models)
+            )
+        lane_model.eval()
+        try:
+            lane_model.preprocessor.featurizer.dither = 0.0
+        except Exception:
+            pass
+        logger.info(f"model_lane_restore_complete lane={lane_id}")
+        return lane_model
+
+    def _ensure_scheduler_model_lane_resources(self) -> None:
+        if self.model_lanes <= 1:
+            return
+        while len(self._scheduler_model_lane_executors) < self.model_lanes:
+            lane_id = len(self._scheduler_model_lane_executors)
+            if lane_id == 0:
+                lane_model = self.model
+            else:
+                lane_model = self._load_scheduler_model_lane_model(lane_id)
+            self._scheduler_model_lane_models.append(lane_model)
+            self._scheduler_model_lane_executors.append(
+                concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix=f"nemotron-model-lane-{lane_id}",
+                )
+            )
+            self._scheduler_model_lane_streams.append(
+                torch.cuda.Stream() if torch.cuda.is_available() else None
+            )
+
+    def _run_scheduler_model_lane_call_sync(self, lane_id: int, fn, args: tuple):
+        stream = self._scheduler_model_lane_streams[lane_id]
+        model = self._scheduler_model_lane_models[lane_id]
+        previous_stream = getattr(self._scheduler_model_lane_tls, "stream", None)
+        previous_model = getattr(self._scheduler_model_lane_tls, "model", None)
+        self._scheduler_model_lane_tls.stream = stream
+        self._scheduler_model_lane_tls.model = model
+        try:
+            if stream is None:
+                return fn(*args)
+            with torch.cuda.stream(stream):
+                result = fn(*args)
+            stream.synchronize()
+            return result
+        finally:
+            self._scheduler_model_lane_tls.stream = previous_stream
+            self._scheduler_model_lane_tls.model = previous_model
+
+    async def _run_scheduler_model_lane_call(self, lane_id: int, fn, *args):
+        self._ensure_scheduler_model_lane_resources()
+        executor = self._scheduler_model_lane_executors[lane_id]
+        return await asyncio.get_event_loop().run_in_executor(
+            executor,
+            self._run_scheduler_model_lane_call_sync,
+            lane_id,
+            fn,
+            args,
+        )
+
+    async def _run_scheduler_exclusive_inference_call(
+        self,
+        fn,
+        *args,
+        lane_id: int = 0,
+    ):
+        if self.model_lanes <= 1:
+            return await self._run_inference_call(fn, *args)
+        return await self._run_scheduler_model_lane_call(lane_id, fn, *args)
+
+    def _cuda_synchronize_for_current_model_lane(self) -> None:
+        if not torch.cuda.is_available():
+            return
+        stream = getattr(self._scheduler_model_lane_tls, "stream", None)
+        if stream is None:
+            torch.cuda.synchronize()
+        else:
+            stream.synchronize()
+
+    @contextlib.asynccontextmanager
+    async def _scheduler_exclusive_model_path(self, reason: str):
+        if self.model_lanes <= 1:
+            yield
+            return
+
+        condition = self._scheduler_model_lane_condition_obj()
+        async with condition:
+            while (
+                self._scheduler_inflight_model_lane_tasks
+                or self._scheduler_model_lane_exclusive_active
+            ):
+                await condition.wait()
+            self._scheduler_model_lane_exclusive_active = True
+        try:
+            yield
+        finally:
+            async with condition:
+                self._scheduler_model_lane_exclusive_active = False
+                condition.notify_all()
+            self._wake_scheduler()
+
+    @staticmethod
+    def _scheduler_batch_key_drop_extra(key: tuple) -> Optional[int]:
+        try:
+            return int(key[2])
+        except Exception:
+            return None
+
+    def _scheduler_batch_key_parallel_lane_key(self, key: tuple) -> Optional[tuple[Any, int]]:
+        """Return the compatibility key for concurrent steady batches.
+
+        Only steady normal chunks may share lanes. First chunks, barrier drains,
+        finalization, and any other drop/chunk geometry use the session's pinned
+        lane exclusively after all in-flight lanes have completed.
+        """
+        drop_extra = self._scheduler_batch_key_drop_extra(key)
+        if drop_extra is None:
+            return None
+        keep_all_outputs = bool(key[1]) if len(key) > 1 else True
+        chunk_t = int(key[3]) if len(key) > 3 else -1
+        steady_t = int(self.pre_encode_cache_size + self.shift_frames)
+        if (
+            not keep_all_outputs
+            and chunk_t == steady_t
+            and drop_extra == int(self.drop_extra)
+        ):
+            prompt_key = key[0] if self.prompted_model else None
+            return (prompt_key, drop_extra)
+        return None
+
+    def _scheduler_model_lane_key_can_dispatch(self, key: tuple) -> bool:
+        if self.model_lanes <= 1:
+            return True
+        if self._scheduler_model_lane_exclusive_active:
+            return False
+        parallel_key = self._scheduler_batch_key_parallel_lane_key(key)
+        if parallel_key is None:
+            return (
+                not self._scheduler_inflight_model_lane_tasks
+                and bool(self._scheduler_available_model_lanes)
+            )
+        return (
+            bool(self._scheduler_available_model_lanes)
+            and (
+                self._scheduler_model_lane_active_key is None
+                or self._scheduler_model_lane_active_key == parallel_key
+            )
+        )
+
+    def _scheduler_session_affinity_allows_dispatch(
+        self,
+        session: ASRSession,
+        key: tuple,
+    ) -> bool:
+        if self.model_lanes <= 1:
+            return True
+        lane_id = self._scheduler_session_model_lane_affinity.get(session.id)
+        return lane_id is None or lane_id in self._scheduler_available_model_lanes
+
+    def _scheduler_assign_session_model_lane(self, session: ASRSession) -> int:
+        if self.model_lanes <= 1:
+            return 0
+        pinned_lane = self._scheduler_session_model_lane_affinity.get(session.id)
+        if pinned_lane is not None:
+            return pinned_lane
+
+        counts = {lane_id: 0 for lane_id in range(self.model_lanes)}
+        for session_id, lane_id in self._scheduler_session_model_lane_affinity.items():
+            if session_id in self.sessions and lane_id in counts:
+                counts[lane_id] += 1
+        lane_id = min(counts, key=lambda candidate: (counts[candidate], candidate))
+        self._scheduler_session_model_lane_affinity[session.id] = lane_id
+        return lane_id
+
+    def _scheduler_ready_has_model_lane_compatible_key(self) -> bool:
+        if self.model_lanes <= 1:
+            return True
+        for session_id in list(self._scheduler_ready):
+            if session_id in self._scheduler_inflight_sessions:
+                continue
+            session = self.sessions.get(session_id)
+            if session is None:
+                continue
+            key = self._scheduler_batch_group_key_for_session(session)
+            if (
+                self._scheduler_model_lane_key_can_dispatch(key)
+                and self._scheduler_session_affinity_allows_dispatch(session, key)
+            ):
+                return True
+        return False
+
+    def _scheduler_preferred_lane_for_sessions(
+        self,
+        sessions: list[ASRSession],
+    ) -> Optional[int]:
+        lanes = {
+            self._scheduler_session_model_lane_affinity[session.id]
+            for session in sessions
+            if session.id in self._scheduler_session_model_lane_affinity
+        }
+        if len(lanes) == 1:
+            return next(iter(lanes))
+        return None
+
+    def _scheduler_select_lane_affine_sessions(
+        self,
+        key: tuple,
+        sessions: list[ASRSession],
+    ) -> list[ASRSession]:
+        if self.model_lanes <= 1:
+            return sessions
+        available = self._scheduler_available_model_lanes
+        if not available:
+            return []
+
+        pinned: dict[int, list[ASRSession]] = {}
+        unpinned: list[ASRSession] = []
+        for session in sessions:
+            lane_id = self._scheduler_session_model_lane_affinity.get(session.id)
+            if lane_id is None:
+                unpinned.append(session)
+            elif lane_id in available:
+                pinned.setdefault(lane_id, []).append(session)
+
+        if pinned:
+            lane_id = max(
+                sorted(pinned),
+                key=lambda candidate: len(pinned[candidate]),
+            )
+            selected = pinned[lane_id] + unpinned
+        else:
+            selected = unpinned
+        return selected[: self.batch_max_size]
+
+    def _scheduler_reserve_model_lane_for_key(
+        self,
+        key: tuple,
+        *,
+        preferred_lane: Optional[int] = None,
+    ) -> Optional[tuple[int, bool]]:
+        if self.model_lanes <= 1:
+            return None
+        if not self._scheduler_model_lane_key_can_dispatch(key):
+            return None
+
+        parallel_key = self._scheduler_batch_key_parallel_lane_key(key)
+        if parallel_key is None:
+            if preferred_lane is not None:
+                if preferred_lane not in self._scheduler_available_model_lanes:
+                    return None
+                lane_id = preferred_lane
+            else:
+                lane_id = min(self._scheduler_available_model_lanes)
+            self._scheduler_available_model_lanes.remove(lane_id)
+            self._scheduler_model_lane_exclusive_active = True
+            return lane_id, True
+
+        if preferred_lane is not None:
+            if preferred_lane not in self._scheduler_available_model_lanes:
+                return None
+            lane_id = preferred_lane
+        else:
+            lane_id = min(self._scheduler_available_model_lanes)
+        self._scheduler_available_model_lanes.remove(lane_id)
+        self._scheduler_model_lane_active_key = parallel_key
+        return lane_id, False
+
+    async def _scheduler_release_model_lane(
+        self,
+        *,
+        lane_id: int,
+        exclusive_lane: bool,
+        task: Optional[asyncio.Task],
+        session_ids: set[str],
+    ) -> None:
+        condition = self._scheduler_model_lane_condition_obj()
+        async with condition:
+            self._scheduler_available_model_lanes.add(lane_id)
+            if task is not None:
+                self._scheduler_inflight_model_lane_tasks.discard(task)
+            self._scheduler_inflight_sessions.difference_update(session_ids)
+            if exclusive_lane:
+                self._scheduler_model_lane_exclusive_active = False
+            if not self._scheduler_inflight_model_lane_tasks:
+                self._scheduler_model_lane_active_key = None
+            condition.notify_all()
+        self._wake_scheduler()
 
     def _warm_encoder_compile_static_buckets(
         self,
@@ -1662,7 +2037,7 @@ class ASRServer:
 
     def _init_session_without_synthetic_warmup(self, session: ASRSession) -> None:
         self._ensure_session_target_lang(session)
-        cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+        cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
         session.cache_last_channel = cache[0]
         session.cache_last_time = cache[1]
         session.cache_last_channel_len = cache[2]
@@ -1704,7 +2079,7 @@ class ASRServer:
             mel, mel_len = self._preprocess_fixed_audio(warmup_audio, len(warmup_audio))
 
             # Get initial cache
-            cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+            cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
             warmup_session = ASRSession(
                 id="warmup",
                 websocket=None,
@@ -1741,7 +2116,7 @@ class ASRServer:
         self._ensure_session_target_lang(session)
 
         # Initialize encoder cache
-        cache = self.model.encoder.get_initial_cache_state(batch_size=1)
+        cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
         session.cache_last_channel = cache[0]
         session.cache_last_time = cache[1]
         session.cache_last_channel_len = cache[2]
@@ -1870,7 +2245,10 @@ class ASRServer:
             )
         audio_tensor = torch.from_numpy(np.ascontiguousarray(audio)).unsqueeze(0).cuda()
         audio_len = torch.tensor([valid_samples], device='cuda', dtype=torch.long)
-        return self.model.preprocessor(input_signal=audio_tensor, length=audio_len)
+        return self._current_inference_model().preprocessor(
+            input_signal=audio_tensor,
+            length=audio_len,
+        )
 
     def _build_fixed_preprocess_audio(
         self,
@@ -2324,12 +2702,22 @@ class ASRServer:
             target_lang=session_target_lang,
         )
         self.sessions[session_id] = session
+        session_model_lane = self._scheduler_assign_session_model_lane(session)
 
         logger.info(f"Client {session_id} connected")
 
         try:
-            async with self.inference_lock:
-                await self._run_inference_call(self._init_session, session)
+            if self.model_lanes > 1:
+                async with self._scheduler_exclusive_model_path("session_init"):
+                    async with self.inference_lock:
+                        await self._run_scheduler_exclusive_inference_call(
+                            self._init_session,
+                            session,
+                            lane_id=session_model_lane,
+                        )
+            else:
+                async with self.inference_lock:
+                    await self._run_inference_call(self._init_session, session)
 
             if self.continuous_context:
                 self._start_continuous_session(session)
@@ -2389,6 +2777,7 @@ class ASRServer:
             self._flush_eou_snapshot_audio(session)
             if session_id in self.sessions:
                 del self.sessions[session_id]
+            self._scheduler_session_model_lane_affinity.pop(session_id, None)
             self._log_retained_cache_telemetry("session_removed")
 
         return ws
@@ -2452,6 +2841,7 @@ class ASRServer:
                 "scheduler_b1_started "
                 f"queue_maxsize={self.scheduler_queue_maxsize} "
                 f"batch_enabled={self.batch_enabled} "
+                f"model_lanes={self.model_lanes} "
                 f"batch_max_wait_ms={self.batch_max_wait_ms} "
                 f"batch_max_size={self.batch_max_size}"
             )
@@ -2510,7 +2900,27 @@ class ASRServer:
             return None
         if not self._scheduler_batch_first_ready:
             return None
-        return min(self._scheduler_batch_first_ready.values())
+        if self.model_lanes <= 1:
+            return min(self._scheduler_batch_first_ready.values())
+        compatible_deadlines = []
+        for key, deadline in self._scheduler_batch_first_ready.items():
+            if not self._scheduler_model_lane_key_can_dispatch(key):
+                continue
+            for session_id in list(self._scheduler_ready):
+                if session_id in self._scheduler_inflight_sessions:
+                    continue
+                session = self.sessions.get(session_id)
+                if session is None:
+                    continue
+                if (
+                    self._scheduler_batch_group_key_for_session(session) == key
+                    and self._scheduler_session_affinity_allows_dispatch(session, key)
+                ):
+                    compatible_deadlines.append(deadline)
+                    break
+        if not compatible_deadlines:
+            return None
+        return min(compatible_deadlines)
 
     def _scheduler_wait_timeout(self) -> Optional[float]:
         deadline = self._scheduler_next_batch_deadline()
@@ -2520,6 +2930,11 @@ class ASRServer:
 
     def _scheduler_has_queued_events(self) -> bool:
         for session in list(self.sessions.values()):
+            if (
+                self.model_lanes > 1
+                and session.id in self._scheduler_inflight_sessions
+            ):
+                continue
             queue = session.continuous_event_queue
             if queue is not None and not queue.empty():
                 return True
@@ -2531,6 +2946,11 @@ class ASRServer:
         if self._scheduler_ready:
             if not self.batch_enabled:
                 return True
+            if (
+                self.model_lanes > 1
+                and not self._scheduler_ready_has_model_lane_compatible_key()
+            ):
+                return False
             deadline = self._scheduler_next_batch_deadline()
             if deadline is None or time.monotonic() >= deadline:
                 return True
@@ -2540,6 +2960,7 @@ class ASRServer:
         logger.info(
             "scheduler_b1_loop_running "
             f"batch_enabled={self.batch_enabled} "
+            f"model_lanes={self.model_lanes} "
             f"batch_max_wait_ms={self.batch_max_wait_ms} "
             f"batch_max_size={self.batch_max_size}"
         )
@@ -2574,6 +2995,8 @@ class ASRServer:
     async def _scheduler_drain_once(self) -> bool:
         progressed = False
         for session in list(self.sessions.values()):
+            if session.id in self._scheduler_inflight_sessions:
+                continue
             queue = session.continuous_event_queue
             if queue is None:
                 continue
@@ -2608,6 +3031,9 @@ class ASRServer:
         )
 
     def _scheduler_mark_ready_if_ready_locked(self, session: ASRSession) -> None:
+        if session.id in self._scheduler_inflight_sessions:
+            self._scheduler_ready.discard(session.id)
+            return
         if self._scheduler_session_ready(session):
             if session.id not in self._scheduler_ready:
                 session.scheduler_ready_since = time.monotonic()
@@ -2665,6 +3091,8 @@ class ASRServer:
         )
 
     def _scheduler_batch_session_eligible_for_key(self, session: ASRSession, key: tuple) -> bool:
+        if session.id in self._scheduler_inflight_sessions:
+            return False
         if session.scheduler_closed or session.continuous_event_queue is None:
             return False
         if self._scheduler_batch_group_key_for_session(session) != key:
@@ -2685,6 +3113,9 @@ class ASRServer:
         ready_groups: dict[tuple, list[ASRSession]] = {}
         now = time.monotonic()
         for session_id in list(self._scheduler_ready):
+            if session_id in self._scheduler_inflight_sessions:
+                self._scheduler_ready.discard(session_id)
+                continue
             session = self.sessions.get(session_id)
             if session is None:
                 self._scheduler_ready.discard(session_id)
@@ -2731,14 +3162,29 @@ class ASRServer:
             else:
                 continue
 
-            safe_size = min(ready_count, self.batch_max_size)
+            if (
+                self.model_lanes > 1
+                and not self._scheduler_model_lane_key_can_dispatch(key)
+            ):
+                continue
+
+            selected_sessions = sessions[: min(ready_count, self.batch_max_size)]
+            if self.model_lanes > 1:
+                selected_sessions = self._scheduler_select_lane_affine_sessions(
+                    key,
+                    selected_sessions,
+                )
+                if not selected_sessions:
+                    continue
+
+            safe_size = len(selected_sessions)
             candidates.append(
                 (
                     -safe_size,
                     deadline,
                     str(key),
                     key,
-                    sessions[:safe_size],
+                    selected_sessions,
                     reason,
                     ready_count,
                     active_count,
@@ -2778,6 +3224,14 @@ class ASRServer:
     ) -> bool:
         if not sessions:
             return False
+        if self.model_lanes > 1:
+            return await self._scheduler_dispatch_ready_batch_to_model_lane(
+                key,
+                sessions,
+                reason=reason,
+                ready_count=ready_count,
+                eligible_count=eligible_count,
+            )
 
         async with contextlib.AsyncExitStack() as stack:
             for session in sorted(sessions, key=lambda s: s.id):
@@ -2888,6 +3342,224 @@ class ASRServer:
             )
             return progressed
 
+    def _scheduler_log_model_lane_task_failure(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"scheduler_model_lane_task_error: {exc}")
+            import traceback
+            logger.error("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+
+    async def _scheduler_dispatch_ready_batch_to_model_lane(
+        self,
+        key: tuple,
+        sessions: list[ASRSession],
+        *,
+        reason: str,
+        ready_count: int,
+        eligible_count: int,
+    ) -> bool:
+        async with contextlib.AsyncExitStack() as stack:
+            for session in sorted(sessions, key=lambda s: s.id):
+                await stack.enter_async_context(session.state_lock)
+
+            valid_sessions: list[ASRSession] = []
+            for session in sessions:
+                if (
+                    session.id not in self._scheduler_inflight_sessions
+                    and not session.scheduler_closed
+                    and self._scheduler_session_ready(session)
+                    and self._scheduler_batch_group_key_for_session(session) == key
+                ):
+                    valid_sessions.append(session)
+                else:
+                    self._scheduler_ready.discard(session.id)
+                    session.scheduler_ready_since = None
+
+            if not valid_sessions:
+                return False
+            if len(valid_sessions) > self.batch_max_size:
+                valid_sessions = valid_sessions[: self.batch_max_size]
+
+            preferred_lane = self._scheduler_preferred_lane_for_sessions(valid_sessions)
+            reservation = self._scheduler_reserve_model_lane_for_key(
+                key,
+                preferred_lane=preferred_lane,
+            )
+            if reservation is None:
+                return False
+            lane_id, exclusive_lane = reservation
+
+            try:
+                for session in valid_sessions:
+                    pinned_lane = self._scheduler_session_model_lane_affinity.get(
+                        session.id
+                    )
+                    if pinned_lane is not None and pinned_lane != lane_id:
+                        raise RuntimeError(
+                            "scheduler_model_lane_affinity_violation "
+                            f"session={session.id} pinned={pinned_lane} "
+                            f"dispatch={lane_id}"
+                        )
+                    self._scheduler_session_model_lane_affinity[session.id] = lane_id
+
+                for session in valid_sessions:
+                    self._scheduler_ready.discard(session.id)
+                    session.scheduler_inflight_generation = session.scheduler_generation
+                    self._scheduler_inflight_sessions.add(session.id)
+
+                generations = {
+                    session.id: session.scheduler_generation for session in valid_sessions
+                }
+                dispatch_start = time.monotonic()
+                lane_wait_start = time.perf_counter()
+                task = asyncio.create_task(
+                    self._scheduler_complete_model_lane_batch(
+                        lane_id,
+                        exclusive_lane,
+                        key,
+                        valid_sessions,
+                        generations,
+                        reason=reason,
+                        ready_count=ready_count,
+                        eligible_count=eligible_count,
+                        dispatch_start=dispatch_start,
+                        lane_wait_start=lane_wait_start,
+                    ),
+                    name=f"nemotron-model-lane-{lane_id}-batch",
+                )
+                self._scheduler_inflight_model_lane_tasks.add(task)
+                task.add_done_callback(self._scheduler_log_model_lane_task_failure)
+                return True
+            except Exception:
+                for session in valid_sessions:
+                    session.scheduler_inflight_generation = None
+                self._scheduler_inflight_sessions.difference_update(
+                    {session.id for session in valid_sessions}
+                )
+                await self._scheduler_release_model_lane(
+                    lane_id=lane_id,
+                    exclusive_lane=exclusive_lane,
+                    task=None,
+                    session_ids=set(),
+                )
+                raise
+
+    async def _scheduler_complete_model_lane_batch(
+        self,
+        lane_id: int,
+        exclusive_lane: bool,
+        key: tuple,
+        valid_sessions: list[ASRSession],
+        generations: dict[str, int],
+        *,
+        reason: str,
+        ready_count: int,
+        eligible_count: int,
+        dispatch_start: float,
+        lane_wait_start: float,
+    ) -> None:
+        task = asyncio.current_task()
+        session_ids = {session.id for session in valid_sessions}
+        lane_wait_ms = 0.0
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                for session in sorted(valid_sessions, key=lambda s: s.id):
+                    await stack.enter_async_context(session.state_lock)
+
+                texts: dict[str, Optional[str]] = {}
+                try:
+                    lane_wait_ms = (time.perf_counter() - lane_wait_start) * 1000.0
+                    live_sessions = [
+                        session
+                        for session in valid_sessions
+                        if (
+                            generations[session.id] == session.scheduler_generation
+                            and not session.scheduler_closed
+                        )
+                    ]
+                    if live_sessions:
+                        texts = await self._run_scheduler_model_lane_call(
+                            lane_id,
+                            self._process_ready_batch,
+                            live_sessions,
+                        )
+                finally:
+                    for session in valid_sessions:
+                        session.scheduler_inflight_generation = None
+
+                progressed = False
+                sent_count = 0
+                ready_requeue_sessions: list[ASRSession] = []
+                for session in valid_sessions:
+                    generation = generations[session.id]
+                    if generation != session.scheduler_generation or session.scheduler_closed:
+                        logger.debug(
+                            f"Session {session.id}: suppressed stale scheduler batch output "
+                            f"reason={reason} gen={generation} current={session.scheduler_generation}"
+                        )
+                        continue
+
+                    text = texts.get(session.id)
+                    if text is not None and text != session.current_text:
+                        session.current_text = text
+                        logger.debug(
+                            f"Session {session.id} interim: "
+                            f"{text[-50:] if len(text) > 50 else text}"
+                        )
+                        await self._send_json_locked(
+                            session,
+                            {
+                                "type": "transcript",
+                                "text": text,
+                                "is_final": False,
+                            },
+                            tolerate_closed=True,
+                            description="scheduler batch interim transcript",
+                        )
+                        sent_count += 1
+
+                    queue_wait_ms = 0.0
+                    if session.scheduler_ready_since is not None:
+                        queue_wait_ms = (
+                            dispatch_start - session.scheduler_ready_since
+                        ) * 1000.0
+                    session.scheduler_ready_since = None
+                    self._scheduler_record_batch_row_telemetry(
+                        session,
+                        batch_size=len(valid_sessions),
+                        lane_wait_ms=lane_wait_ms,
+                        queue_wait_ms=queue_wait_ms,
+                        reason=f"{reason}:lane{lane_id}",
+                    )
+                    ready_requeue_sessions.append(session)
+                    progressed = True
+
+                self._scheduler_record_batch_telemetry(
+                    batch_size=len(valid_sessions),
+                    reason=f"{reason}:lane{lane_id}",
+                    sent_count=sent_count,
+                    key=key,
+                    ready_count=ready_count,
+                    eligible_count=eligible_count,
+                )
+                self._scheduler_inflight_sessions.difference_update(session_ids)
+                for session in ready_requeue_sessions:
+                    self._scheduler_mark_ready_if_ready_locked(session)
+                if not progressed:
+                    logger.debug(
+                        f"scheduler_model_lane_no_progress lane={lane_id} "
+                        f"sessions={','.join(sorted(session_ids))} reason={reason}"
+                    )
+        finally:
+            await self._scheduler_release_model_lane(
+                lane_id=lane_id,
+                exclusive_lane=exclusive_lane,
+                task=task,
+                session_ids=session_ids,
+            )
+
     async def _scheduler_process_one_ready_chunk_locked(
         self,
         session: ASRSession,
@@ -2908,15 +3580,32 @@ class ASRServer:
         lane_wait_ms = 0.0
         text: Optional[str] = None
         try:
-            async with self.inference_lock:
-                lane_wait_ms = (time.perf_counter() - lane_wait_start) * 1000.0
-                if generation != session.scheduler_generation or session.scheduler_closed:
-                    logger.debug(
-                        f"Session {session.id}: skipped stale scheduler chunk "
-                        f"reason={reason} gen={generation} current={session.scheduler_generation}"
-                    )
-                    return False
-                text = await self._run_inference_call(self._process_chunk, session)
+            if self.model_lanes > 1:
+                lane_id = self._scheduler_assign_session_model_lane(session)
+                async with self._scheduler_exclusive_model_path(reason):
+                    async with self.inference_lock:
+                        lane_wait_ms = (time.perf_counter() - lane_wait_start) * 1000.0
+                        if generation != session.scheduler_generation or session.scheduler_closed:
+                            logger.debug(
+                                f"Session {session.id}: skipped stale scheduler chunk "
+                                f"reason={reason} gen={generation} current={session.scheduler_generation}"
+                            )
+                            return False
+                        text = await self._run_scheduler_exclusive_inference_call(
+                            self._process_chunk,
+                            session,
+                            lane_id=lane_id,
+                        )
+            else:
+                async with self.inference_lock:
+                    lane_wait_ms = (time.perf_counter() - lane_wait_start) * 1000.0
+                    if generation != session.scheduler_generation or session.scheduler_closed:
+                        logger.debug(
+                            f"Session {session.id}: skipped stale scheduler chunk "
+                            f"reason={reason} gen={generation} current={session.scheduler_generation}"
+                        )
+                        return False
+                    text = await self._run_inference_call(self._process_chunk, session)
         finally:
             session.scheduler_inflight_generation = None
 
@@ -3273,6 +3962,7 @@ class ASRServer:
             )
         session.scheduler_closed = True
         self._scheduler_ready.discard(session.id)
+        self._scheduler_session_model_lane_affinity.pop(session.id, None)
         self._scheduler_invalidate_session_locked(session, reason="close")
 
     async def _scheduler_continuous_handle_vad_start_locked(
@@ -4092,23 +4782,48 @@ class ASRServer:
                 )
             if fork.pending_audio is not None and len(fork.pending_audio) > 0:
                 lock_wait_start = time.perf_counter()
-                async with self.inference_lock:
-                    if (
-                        expected_generation is not None
-                        and expected_generation != session.scheduler_generation
-                    ):
-                        logger.debug(
-                            f"Session {session.id}: skipped stale fork final chunk "
-                            f"reason={reason} expected_gen={expected_generation} "
-                            f"current_gen={session.scheduler_generation}"
-                        )
-                        return
-                    timing["inference_lock_acquire_wait_ms"] = (
-                        time.perf_counter() - lock_wait_start
-                    ) * 1000
-                    text = await self._run_inference_call(self._process_final_chunk, fork)
-                    if text is not None:
-                        final_text = text
+                if self.model_lanes > 1:
+                    lane_id = self._scheduler_assign_session_model_lane(session)
+                    async with self._scheduler_exclusive_model_path(f"finalize:{reason}"):
+                        async with self.inference_lock:
+                            if (
+                                expected_generation is not None
+                                and expected_generation != session.scheduler_generation
+                            ):
+                                logger.debug(
+                                    f"Session {session.id}: skipped stale fork final chunk "
+                                    f"reason={reason} expected_gen={expected_generation} "
+                                    f"current_gen={session.scheduler_generation}"
+                                )
+                                return
+                            timing["inference_lock_acquire_wait_ms"] = (
+                                time.perf_counter() - lock_wait_start
+                            ) * 1000
+                            text = await self._run_scheduler_exclusive_inference_call(
+                                self._process_final_chunk,
+                                fork,
+                                lane_id=lane_id,
+                            )
+                            if text is not None:
+                                final_text = text
+                else:
+                    async with self.inference_lock:
+                        if (
+                            expected_generation is not None
+                            and expected_generation != session.scheduler_generation
+                        ):
+                            logger.debug(
+                                f"Session {session.id}: skipped stale fork final chunk "
+                                f"reason={reason} expected_gen={expected_generation} "
+                                f"current_gen={session.scheduler_generation}"
+                            )
+                            return
+                        timing["inference_lock_acquire_wait_ms"] = (
+                            time.perf_counter() - lock_wait_start
+                        ) * 1000
+                        text = await self._run_inference_call(self._process_final_chunk, fork)
+                        if text is not None:
+                            final_text = text
             if parent_snapshot is not None:
                 self._assert_fork_flush_parent_unchanged(session, parent_snapshot)
             timing["fork_flush_done"] = time.time()
@@ -4221,7 +4936,16 @@ class ASRServer:
         session.continuous_vad_stop_ts = None
         session.continuous_debounce_expiry_ts = None
         session.continuous_stop_seq += 1
-        if self.session_warmup_ms > 0:
+        if self.model_lanes > 1:
+            lane_id = self._scheduler_assign_session_model_lane(session)
+            async with self._scheduler_exclusive_model_path(f"cold_reset:{reason}"):
+                async with self.inference_lock:
+                    await self._run_scheduler_exclusive_inference_call(
+                        self._init_session,
+                        session,
+                        lane_id=lane_id,
+                    )
+        elif self.session_warmup_ms > 0:
             async with self.inference_lock:
                 await self._run_inference_call(self._init_session, session)
         else:
@@ -4334,7 +5058,7 @@ class ASRServer:
 
         audio_tensor = torch.from_numpy(audio_batch).cuda()
         audio_len = torch.tensor(valid_samples, device='cuda', dtype=torch.long)
-        mel, _mel_len = self.model.preprocessor(
+        mel, _mel_len = self._current_inference_model().preprocessor(
             input_signal=audio_tensor,
             length=audio_len,
         )
@@ -4477,8 +5201,7 @@ class ASRServer:
                 return {}
 
             with torch.inference_mode():
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                self._cuda_synchronize_for_current_model_lane()
                 mem_before = self._cuda_memory_snapshot()
                 pre_start = time.perf_counter()
                 preprocess_inputs: list[tuple[ASRSession, np.ndarray, int]] = []
@@ -4498,8 +5221,7 @@ class ASRServer:
                     fixed_audios,
                     valid_samples,
                 )
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                self._cuda_synchronize_for_current_model_lane()
                 preprocessor_ms = (time.perf_counter() - pre_start) * 1000.0
 
                 rows: list[SchedulerBatchRow] = []
@@ -4585,8 +5307,7 @@ class ASRServer:
                     drop_extra_pre_encoded=rows[0].drop_extra,
                     return_transcription=True,
                 )
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                self._cuda_synchronize_for_current_model_lane()
                 model_ms = (time.perf_counter() - model_start) * 1000.0
 
                 batch_size = len(rows)
@@ -4656,8 +5377,7 @@ class ASRServer:
                     self._write_eou_snapshot_chunk(session, row.eou_probe_snapshot)
                     texts[session.id] = text
 
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                self._cuda_synchronize_for_current_model_lane()
                 scatter_ms = (time.perf_counter() - scatter_start) * 1000.0
                 mem_after = self._cuda_memory_snapshot()
                 self._log_scheduler_batch_memory(

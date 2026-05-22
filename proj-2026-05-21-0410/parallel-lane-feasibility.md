@@ -96,3 +96,39 @@ Recommendation: thread lanes are worth a guarded prototype because they are much
 did show real overlap. Processes are not justified by this local 5090 result. Because the cloud knee is the
 actual problem and the cloud host gap is larger/single-core-bound, remeasure this exact probe on the target
 cloud GPU/driver before using the local `1.4-1.5x` number for capacity planning.
+
+## Prototype End-to-End Result
+
+Date: 2026-05-21 local. Prototype flag: `NEMOTRON_MODEL_LANES=2`, with
+`NEMOTRON_SCHEDULER_B1=1`, `NEMOTRON_BATCH_SCHED=1`, `NEMOTRON_BATCH_MAX_SIZE=32`,
+`NEMOTRON_BATCH_MAX_WAIT_MS=8`, `NEMOTRON_WARMUP_MS=200`, and `NEMOTRON_FORK_ASSERT=1`.
+
+Implementation note: the working prototype uses one worker thread, one CUDA stream, and one restored model
+instance per lane. Sharing the same NeMo model across lane threads produced real transcript corruption in the
+first attempt (`22/24` final exact, `13/24` strict exact), so the safe local prototype isolates mutable model
+state per lane. Sessions are pinned before init/warmup and all exclusive non-steady calls run on that session's
+pinned lane after draining other lanes. Concurrent dispatch is allowed only for steady normal chunks with the
+same compatibility key: steady `drop_extra_pre_encoded=2`, steady chunk geometry, same prompt/language key.
+First chunks, finalize/barrier drain, cold reset, and any non-steady geometry are exclusive.
+
+Correctness gates:
+
+| gate | result |
+|---|---|
+| Default-off / lanes=1 | `NEMOTRON_MODEL_LANES=1` strict canary: `24/24` final exact and `24/24` strict exact. Lane resources are not created on this path. |
+| Byte exact, lanes=2 | `24/24` strict exact canary, then high-N sweep `N=56/72/80` all strict exact (`56/56`, `72/72`, `80/80`), max edit distance `0`. |
+| Fork assert / CUDA | `NEMOTRON_FORK_ASSERT=1` clean; server log grep found no fork assertion failures, lane task failures, illegal-memory, or CUDA stream errors. |
+| Cleanup | Servers were stopped after measurement; scratch artifacts stayed under `/tmp/nemotron-lanes`. |
+
+End-to-end realtime keep-up sweep, out-of-phase `concurrency_test.py`, local RTX 5090, same server flags:
+
+| config | keep-up points | first failing point | approximate knee |
+|---|---:|---:|---:|
+| canonical lanes=1 baseline from `max-parallelism-sweep.md` | `N=56` | `N=58` | `~56` |
+| current lanes=1 quick same-80 throughput-only rerun | `N=40/44` | `N=48` (`lag95=594ms`) | `~44-48` |
+| prototype lanes=2 strict sweep | `N=56/72/80` (`N=80 lag95=204ms`) | `N=96` throughput-only (`lag95=1353ms`) | `~80-95`, conservative reported knee `~80` |
+
+The clean apples-to-existing-baseline comparison is `80 / 56 = 1.43x`, matching the feasibility estimate.
+The same-session quick rerun made lanes=1 look lower (`~44-48`), so it should be treated as approximate/noisy
+rather than a new canonical baseline. The useful conclusion is that the prototype realizes at least the
+predicted `~1.4x` local end-to-end speedup while preserving strict byte identity through `N=80`.
