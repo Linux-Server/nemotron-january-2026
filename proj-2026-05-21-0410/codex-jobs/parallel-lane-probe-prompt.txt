@@ -1,0 +1,66 @@
+<task>
+MEASUREMENT/FEASIBILITY PROBE (no production code change, no commits, no Modal): determine whether the single
+serial model-call lane can be PARALLELIZED — i.e. whether running 2+ independent inference calls concurrently
+actually OVERLAPS, or whether the GIL/driver serializes them. This decides whether the "parallel lanes" lever
+(relax the single `inference_lock` into N lanes) is viable with THREADS (easy) or needs PROCESSES (hard). Write
+results to `proj-2026-05-21-0410/parallel-lane-feasibility.md`. Local en model only.
+
+WHY: the cloud knee (~5) is gated by ONE CPU core doing serial kernel-launch dispatch while ~16 cores idle.
+The conformer step is ~11-15ms, launch/dispatch-bound (hundreds of tiny kernels + Python/decode orchestration).
+If that time is spent in CUDA-driver launches (GIL released) → multiple threads overlap → easy ~2-4x. If it's
+Python-bytecode-bound (GIL held) → threads won't overlap → you'd need processes. We need the actual split.
+
+SETUP: en model `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`, `$(cat /tmp/en-nemo-path)`,
+att_context [70,1], TF32 OFF, `dither=0`. Build K independent B=1 streaming states (each its own
+get_initial_cache_state + a steady-state chunk), so K calls can run truly independently (shared read-only
+weights, separate caches/inputs). Use the steady-state `conformer_stream_step` path (the real per-chunk work).
+
+PART A — characterize one step (torch.profiler, B=1): report CPU self-time (host: Python + launch dispatch) vs
+CUDA device self-time vs the wall span. This shows how much of the ~11-15ms is host-side dispatch (the part we
+hope to overlap) vs GPU-active.
+
+PART B — THE DECISIVE TEST: serial vs concurrent.
+  - SERIAL: run K independent B=1 steps back-to-back on one thread; record total wall T_serial (synced).
+  - CONCURRENT-THREADS: run the same K steps from K Python threads, EACH on its OWN `torch.cuda.Stream`, all
+    launched together; synchronize all; record total wall T_concurrent.
+  - Overlap factor = T_serial / T_concurrent. K = 2, 3, 4. Discard warmup; repeat for stable medians.
+  Interpretation: overlap≈K → fully parallel (GIL released during dispatch → THREADS work, big headroom);
+  overlap≈1 → serialized (GIL- or stream-bound → threads don't help). Report the curve.
+  Also report: does each thread hold the GIL (e.g. measure per-thread CPU time vs wall), and whether using
+  separate CUDA streams changed anything vs the default stream.
+
+PART C (optional, only if quick) — a 2-PROCESS sanity check: two processes each running B=1 steps on the same
+GPU; does aggregate throughput ~2x the single-process serial rate? (Bounds the process-based ceiling. Skip if
+model load makes this too slow/heavy; reason about it instead.)
+
+VERDICT (parallel-lane-feasibility.md): the host/GPU split (Part A); the thread overlap factor at K=2/3/4
+(Part B); whether parallel lanes are viable via THREADS (and the ~headroom) or require PROCESSES; and the
+concrete implication for a multi-lane scheduler (relax the single inference_lock → N lanes). Note this is a
+local 5090 measurement; the cloud (single-thread-bound) is where it would matter most — flag if a cloud
+re-measure is warranted. CLEANUP: free the GPU; remove temp files/__pycache__.
+</task>
+
+<context>
+Read max-parallelism-sweep.md + inphase-confirmation.md (the lane is the queue; GPU not saturated at small
+batch; ~16 cores idle on Modal, 1 used). The serial model-call lane = the single `inference_lock` path in
+server.py. This probe is standalone (don't run the server) — directly time `conformer_stream_step` calls.
+conformer_stream_step = NeMo mixins.py:592. The launch-bound finding: per-chunk ~9.3ms = ~6ms GPU-active +
+~3.2ms host launch-gaps locally (bigger on cloud).
+</context>
+
+<verification_loop>
+Part B is decisive — make sure the K calls are genuinely independent (separate caches, separate CUDA streams)
+and that warmup/compile is excluded. If overlap≈1 even on separate streams, confirm it's the GIL (compare
+per-thread CPU-time-sum vs wall) and not a stream/sync mistake before concluding "threads don't help."
+</verification_loop>
+
+<action_safety>
+Measurement only — a standalone probe script. No server.py/NeMo edits, no commits, no Modal. Free the GPU when
+done.
+</action_safety>
+
+<compact_output_contract>
+Report: (A) host-dispatch vs GPU-active split of one step; (B) serial-vs-concurrent overlap factor at K=2/3/4 +
+GIL evidence; (C) optional 2-process bound; VERDICT: parallel lanes viable via threads (+headroom) or need
+processes, and the implication for an N-lane scheduler; cloud-remeasure recommendation; cleanup.
+</compact_output_contract>
