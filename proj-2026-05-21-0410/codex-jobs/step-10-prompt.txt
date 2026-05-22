@@ -1,0 +1,61 @@
+<task>
+Implement Step 10 of proj-2026-05-21-0410/PLAN.md: "Modal re-sweep — knee/$ vs the batch=1 baseline", scoped
+by the user to the CHEAP SUBSET: **T4 and L4 only**. This is BILLABLE — be cost-conscious: smoke-check
+correctness before sweeping, STOP each Modal app immediately after its sweep, keep runtimes minimal. Update
+`proj-2026-05-20-modal-cost/RESULTS.md` (batched vs batch=1) and write a short
+`proj-2026-05-21-0410/modal-resweep.md`. You may edit `src/nemotron_speech/modal/asr_bench_modal.py` (deploy
+config) if needed; do NOT change server.py. No git commits (the orchestrator commits).
+
+DEPLOY CONFIG (the validated batched production config): batching ON —
+`NEMOTRON_CONTINUOUS=1 NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_FINALIZE_SILENCE_MS=0
+NEMOTRON_WARMUP_MS=200` → greedy_batch + TF32-off + the new defaults MAX_SIZE=32 / MAX_WAIT=8ms (the
+device-aware startup cap will clamp MAX_SIZE on the smaller cloud GPUs — log the chosen cap per GPU). English
+checkpoint, rc1. Use the existing Modal infra (`asr_bench_modal.py`, NeMo pinned to the committed commit,
+secret `hf-kwindla`, volume `nemotron-speech`) and the in-region co-located load-gen approach from the cost
+study (`proj-2026-05-20-modal-cost/coloc_loadgen.py`) so WAN/client isn't the limiter; the high-N harness
+extension (`7864feb`) supports >24 streams + `--strict-byte`.
+
+PER GPU (T4 first, then L4 — STOP the T4 app before starting L4):
+1. Deploy + wait for healthy. Log `startup_flags` (scheduler/batch enabled, decoder_strategy=greedy_batch,
+   tf32 off) + the `batch_memory_startup_cap` (effective MAX_SIZE on that GPU).
+2. SMOKE (correctness, cheap): stream ~5-10 clips, confirm sane English transcripts (no garbage/looping, no
+   tag leak) — abort the sweep + report if the deploy is broken (don't burn GPU-hours on a bad build).
+3. KNEE SWEEP (in-region load-gen): the batch=1 Modal knee was ~5 (RESULTS.md). Batching should raise it;
+   the slow cloud CPU means batches fill MORE readily (longer per-call window). Sweep N to bracket the knee,
+   e.g. N=4/8/16/24/40/60 (extend to 100 only if still keeping up). Report per-N: keep-up, proc-lag/TTFS p95,
+   avg effective batch size + batch histogram, and client send-overrun (flag if client-bound). Find the
+   strict realtime keep-up knee.
+4. STOP the app. Record knee + $/stream-hr = ($/hr ÷ knee_N) vs the batch=1 baseline (T4 $0.59 knee~5
+   $0.12/stream; L4 $0.80 knee~5 $0.16/stream from RESULTS.md).
+
+REPORT (modal-resweep.md + RESULTS.md update): per-GPU batched knee, the improvement factor vs batch=1, the
+new $/stream-hr, the batch histograms (did batches form on cloud?), client-bound flags, and the headline:
+does batching close the gap to the local ~3.5× and improve cloud $/stream. CLEANUP: confirm BOTH apps stopped
+(`modal app list` shows them stopped) so nothing keeps billing; report GPU/app state.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/PLAN.md (Step 10), proj-2026-05-20-modal-cost/RESULTS.md (the batch=1 baseline table:
+T4/L4 knee ~5, $/stream; the in-region coloc load-gen finding; instance noise +/-1-2), the Modal infra
+(`src/nemotron_speech/modal/asr_bench_modal.py` env ASR_GPU/REGION/CONCURRENT; `coloc_loadgen.py`), and
+local-validation.md + max-parallelism-sweep.md (the validated config + the local knee story to compare cloud
+against). On the slow-CPU cloud the batched-preprocess (7a) + amortized launch cost should help MORE than
+locally. Modal $/hr: T4 0.59, L4 0.80. Stop apps between (cost). Modal client in `.venv`, profile `daily`.
+</context>
+
+<verification_loop>
+Smoke-check correctness on each GPU BEFORE the sweep (don't burn GPU-hours on a broken deploy). Confirm the
+batched config actually came up (startup_flags). After each GPU, STOP the app and verify it's stopped before
+moving on. If a GPU won't schedule (T4/L4 are usually fine; drop region pin if needed), note it.
+</verification_loop>
+
+<action_safety>
+BILLABLE + cost-sensitive: smoke before sweep, stop each app immediately after, minimal runtime, T4+L4 ONLY
+(no A100/H100/B200). May edit asr_bench_modal.py for deploy config; NO server.py edits; no commits. Final
+check: both apps stopped.
+</action_safety>
+
+<compact_output_contract>
+Report: per-GPU (T4, L4) batched knee + $/stream-hr vs batch=1 baseline + improvement factor + batch
+histograms + client-bound flags; the headline (cloud batching payoff); confirmation both apps are stopped.
+</compact_output_contract>
