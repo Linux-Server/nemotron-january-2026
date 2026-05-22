@@ -89,3 +89,47 @@ Tight-budget max-streams/box:
 - **DECISION: keep `NEMOTRON_BATCH_MAX_WAIT_MS=8` (no default change).** Work-conserving is not a win here.
   (Note: graph-OFF MAX_WAIT=8 read 20/box here vs 16 in the L4 section above — N=10 p95 straddles 300, run-to-run
   noise at the boundary; the graph-ON 24/box is consistent across both runs.)
+
+## Client-side WAN benchmark — apples-to-apples vs the first-party APIs (full 1000 @ conc 10)
+
+Setup: the LOCAL machine is the client; it streams the full 1000-sample stt-benchmark over the internet to a
+fresh production-config box (cudagraph ON, lanes=2, silence0_warm200, rc1) in us-west-2. Metric = TTFS
+(end-of-speech -> final transcript), INCLUDING the WAN — the same client-side methodology as the first-party
+services in stt-benchmark/README.md. Driver: `ec2-bench/bench_client_wan.sh`. Measured network RTT
+client<->us-west-2: **~23 ms** (TCP-connect AND WS ping/pong, stable 22-24 ms). 0 errors, 0 empties;
+transcripts byte-exact = the established baseline.
+
+| box | TTFS median | P90 | P95 | P99 | server-finalize (~= TTFS - 223 ms) |
+|---|--:|--:|--:|--:|--:|
+| L4 (g6.4xlarge) | 290 | 416 | 447 | 516 | ~67 med / ~224 P95 |
+| L40S (g6e.8xlarge) | 274 | 359 | 401 | 477 | ~51 med / ~178 P95 |
+
+(223 ms = 200 ms harness trailing-silence VAD window [a benchmark constant applied to ALL services] + ~23 ms
+network RTT. So `server-finalize ~= TTFS - 223`.)
+
+Leaderboard (TTFS median / P95), ours inserted, sorted by P95:
+| Service | median | P95 |
+|---|--:|--:|
+| Soniox | 249 | 281 |
+| Deepgram | 247 | 298 |
+| Elevenlabs | 281 | 348 |
+| AssemblyAI | 256 | 362 |
+| Cartesia | 266 | 364 |
+| **Nemotron L40S (self-host, WAN)** | **274** | **401** |
+| **Nemotron L4 (self-host, WAN)** | **290** | **447** |
+| Smallest AI | 398 | 533 |
+| Speechmatics | 495 | 676 |
+| OpenAI | 637 | 965 |
+| Google | 878 | 1155 |
+| Azure | 1016 | 1345 |
+| AWS | 1136 | 1527 |
+
+Read:
+- Both self-hosted GPUs **beat every big-cloud incumbent** (AWS/Azure/Google/OpenAI/Speechmatics, 530-1530 ms
+  P95) on every percentile. **L40S median 274 ms is frontier-competitive** (between Cartesia and Elevenlabs).
+- The faster GPU (L40S) cuts the server finalize ~67->51 ms median and ~224->178 ms P95 vs the L4.
+- The remaining gap to the Deepgram/Soniox frontier (281-298 ms P95) is the **server finalize P95 TAIL**
+  (~178 ms on L40S) — confirmed NOT network (~23 ms, stable) and NOT geography. The lever to reach the frontier
+  is finalize-latency + tail optimization -> `finalize-optimization-suggestions.md` (analysis in progress).
+- WER: byte-exact = baseline (~1.94% raw); the README WER is semantic (Claude-judged) -> run `stt-benchmark wer`
+  on the prod_* tags for the exact comparable accuracy number.
