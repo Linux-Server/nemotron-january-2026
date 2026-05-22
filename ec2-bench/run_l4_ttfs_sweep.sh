@@ -21,6 +21,7 @@ if [ "$CUDAGRAPH" = 1 ]; then
   [ -n "$CUDAGRAPH_MAX_B" ] && SRV+=("NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B")
 fi
 [ "${FINALIZE_PROFILE:-0}" = 1 ] && SRV+=(NEMOTRON_FINALIZE_PROFILE=1)   # step-1 finalize telemetry under MPS
+[ "${BATCH_FINALIZE:-0}" = 1 ] && SRV+=(NEMOTRON_BATCH_FINALIZE=1 NEMOTRON_BATCH_FINALIZE_PREPROC=1)  # pinned-lane finalize
 
 wait_port(){ local p=$1; for _ in $(seq 1 180); do (exec 3<>/dev/tcp/127.0.0.1/"$p") 2>/dev/null && { exec 3>&-; return 0; }; sleep 2; done; return 1; }
 
