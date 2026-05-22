@@ -103,7 +103,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   Record avg B at the knee + the per-B engagement mix.
   Key files: `proj-2026-05-21-1959-cudagraph/local-knee.md`
 
-- [ ] **6. Cloud GPU-bound retest on EC2 g6 (L4) + g6e (L40S) — tight TTFS budget (p50<250 / p95<300).**
+- [~] **6. Cloud GPU-bound retest on EC2 g6 (L4) + g6e (L40S) — tight TTFS budget (p50<250 / p95<300).**
   Deploy manual capture to **EC2 via `ec2-bench/`** (NOT Modal — Modal is the launch-bound proxy; EC2 g6/g6e is
   the SageMaker-representative target and our established vehicle). CONFIRM capture engages at startup (~250 ms × K
   per replica, no inductor hang — the Step-10b failure mode must be gone) and **fits memory** at the target
@@ -132,5 +132,5 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | 2 | Bucketed graph-manager module | done | bf0a639 | cudagraph_encoder.py + test; byte-exact B=1..16 (encoded+state max_abs=0), fail-closed B=17->None/captured=False; capture ~60-82ms/bucket (~1.1s for K=16/replica) |
 | 3 | Wire into scheduler's batched call | done | 22a817c | NEMOTRON_ENCODER_CUDAGRAPH; monkeypatch like compile path; steady-bucket-only per-B; per-replica + per-lane-stream managers; fail-closed; default-off identity; cudagraph supersedes compile. lanes=1 byte-identical smoked; lanes=2 impl fail-closed, runtime-verify in step4. NOTE: manager is all-or-nothing per replica (uncaptured B disables that replica) -> pick K to fit in step6 |
 | 4 | Local byte-exact gate at scale | done | 023c99c | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
-| 5 | Local knee measurement | done | (step5 commit) | knee 48->56 (+17%) on 5090; lag p95 @N48 229->151ms; avg B~2-3, 0 fallbacks; local-knee.md. Cloud expected to lift more (more launch-bound) |
-| 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | pending | — | p50<250/p95<300, multi-proc+MPS; per-proc knee + per-box ceiling + p95 tail vs graph-off |
+| 5 | Local knee measurement | done | ed53ff2 | knee 48->56 (+17%) on 5090; lag p95 @N48 229->151ms; avg B~2-3, 0 fallbacks; local-knee.md. Cloud expected to lift more (more launch-bound) |
+| 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | in-progress | — | p50<250/p95<300, multi-proc+MPS; graph-off vs on; L4 first then L40S; step6_cloud_retest.sh |

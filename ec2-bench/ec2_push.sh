@@ -11,12 +11,14 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
 if [ "${1:-}" = "--working" ]; then
-  cp src/nemotron_speech/server.py src/nemotron_speech/batch_primitives.py "$STAGE/"
-  echo "[push] WORKING-TREE server.py + batch_primitives.py"
+  cp src/nemotron_speech/server.py src/nemotron_speech/batch_primitives.py \
+     src/nemotron_speech/cudagraph_encoder.py "$STAGE/"
+  echo "[push] WORKING-TREE server.py + batch_primitives.py + cudagraph_encoder.py"
 else
   git show HEAD:src/nemotron_speech/server.py > "$STAGE/server.py"
   git show HEAD:src/nemotron_speech/batch_primitives.py > "$STAGE/batch_primitives.py"
-  echo "[push] COMMITTED (HEAD) server.py + batch_primitives.py"
+  git show HEAD:src/nemotron_speech/cudagraph_encoder.py > "$STAGE/cudagraph_encoder.py"
+  echo "[push] COMMITTED (HEAD) server.py + batch_primitives.py + cudagraph_encoder.py"
 fi
 cp ec2-bench/ec2_loadgen.py ec2-bench/run_bench.sh ec2-bench/run_lanes.sh ec2-bench/run_multiproc.sh \
    ec2-bench/run_l4_ttfs_sweep.sh ec2-bench/bootstrap.sh "$STAGE/"

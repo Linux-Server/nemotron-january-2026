@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# On-box: L4 SUB-KNEE TTFS sweep — size a TIGHT latency budget (not just keep-up).
-# K=2 server processes (lanes=2) + CUDA MPS started ONCE; then sweep the per-process load N and
-# report finalize-TTFS p50/p95 per process at each level. Finds the max streams that hold
-# p50 < P50_MAX AND p95 < P95_MAX on the WORST of the K processes. Per-box streams = K * N_PER.
-# Mirrors run_multiproc.sh's server env, so N_PER=16 reproduces the 32-knee TTFS point (p95 ~344ms).
+# On-box: tight-budget TTFS sweep (not just keep-up). K server processes (LANES lanes each) + CUDA MPS
+# started ONCE; then sweep the per-process load N and report finalize-TTFS p50/p95 per process at each
+# level. Finds the max streams that hold p50 < P50_MAX AND p95 < P95_MAX on the WORST of the K processes.
+# Per-box streams = K * N_PER. Env knobs: K (default 2), LANES (2), N_LIST, ROUNDS, P50_MAX/P95_MAX,
+# CUDAGRAPH (0/1 -> NEMOTRON_ENCODER_CUDAGRAPH=1), CUDAGRAPH_MAX_B. Used for the L4 sweep (K=2) AND the
+# cudagraph cloud retest (graph-off vs graph-on; L40S K=3/4).
 set -uo pipefail
 VENV=$HOME/nemo-venv; cd "$HOME/nemotron"; export HF_HOME=$HOME/hf
-N_LIST="${N_LIST:-6,8,10,12,14,16}"; K=2
+N_LIST="${N_LIST:-6,8,10,12,14,16}"; K="${K:-2}"; LANES="${LANES:-2}"
 ROUNDS="${ROUNDS:-5}"   # REPEATS of each level (re-run the N-burst R times, pool N*R samples) -> stable p95 (1-shot N too noisy)
 P50_MAX="${P50_MAX:-250}"; P95_MAX="${P95_MAX:-300}"
+CUDAGRAPH="${CUDAGRAPH:-0}"; CUDAGRAPH_MAX_B="${CUDAGRAPH_MAX_B:-}"   # CUDAGRAPH=1 -> NEMOTRON_ENCODER_CUDAGRAPH=1
 MODEL=nvidia/nemotron-speech-streaming-en-0.6b
 SRV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 "HF_HOME=$HOME/hf"
      NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_BATCH_MAX_SIZE=32 NEMOTRON_BATCH_MAX_WAIT_MS=8
-     NEMOTRON_MODEL_LANES=2)
+     "NEMOTRON_MODEL_LANES=$LANES")
+if [ "$CUDAGRAPH" = 1 ]; then
+  SRV+=(NEMOTRON_ENCODER_CUDAGRAPH=1)
+  [ -n "$CUDAGRAPH_MAX_B" ] && SRV+=("NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B")
+fi
 
 wait_port(){ local p=$1; for _ in $(seq 1 180); do (exec 3<>/dev/tcp/127.0.0.1/"$p") 2>/dev/null && { exec 3>&-; return 0; }; sleep 2; done; return 1; }
 
@@ -32,7 +38,8 @@ done
 for k in $(seq 0 $((K-1))); do wait_port $((8080+k)) || { echo "server $k FAILED"; tail -25 "srv_l4ttfs_$k.log"; exit 1; }; done
 sleep 3
 
-echo "=== L4 sub-knee TTFS sweep | K=2 procs (lanes=2) + MPS | staggered, rounds=${ROUNDS} | target p50<${P50_MAX} p95<${P95_MAX} ==="
+echo "=== tight-budget TTFS sweep | K=$K procs (lanes=$LANES) cudagraph=$CUDAGRAPH${CUDAGRAPH_MAX_B:+(maxB=$CUDAGRAPH_MAX_B)} + MPS | staggered, rounds=${ROUNDS} | target p50<${P50_MAX} p95<${P95_MAX} ==="
+[ "$CUDAGRAPH" = 1 ] && { echo "-- cudagraph startup (per server, expect enabled + managers) --"; for k in $(seq 0 $((K-1))); do grep -E "encoder_cuda_graph_enabled=|manager_captured|manager_disabled" "srv_l4ttfs_$k.log" | sed "s/^/  srv$k: /"; done; }
 declare -a SUMMARY
 for N in ${N_LIST//,/ }; do
   LG=()
@@ -59,7 +66,7 @@ for N in ${N_LIST//,/ }; do
 done
 pkill -f "server.py --model"; sleep 2
 echo ""
-echo "=== VERDICT (worst of K=2 procs; target p50<${P50_MAX} AND p95<${P95_MAX}, 0 errs) ==="
-echo "  N_PER  per-box  TTFS(ms, max across the 2 procs)        verdict"
+echo "=== VERDICT (worst of K=$K procs; target p50<${P50_MAX} AND p95<${P95_MAX}, 0 errs) ==="
+echo "  N_PER  per-box  TTFS(ms, max across the $K procs)        verdict"
 for s in "${SUMMARY[@]}"; do echo "$s"; done
 echo "=== L4 TTFS SWEEP DONE ==="
