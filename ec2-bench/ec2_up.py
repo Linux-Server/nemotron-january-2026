@@ -15,7 +15,7 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-PROFILE = "419599258555_AWSAdministratorAccess"
+PROFILE = os.environ.get("NEMOTRON_AWS_PROFILE", "AWSAdministratorAccess-419599258555")  # SSO profile = auto-refresh
 REGION = "us-west-2"
 ITYPE = os.environ.get("NEMOTRON_EC2_ITYPE", "g6.4xlarge")
 KEY = "nemotron-bench-key"

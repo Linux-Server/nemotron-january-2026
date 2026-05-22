@@ -13,8 +13,9 @@ so it must be measured on the actual instance (see `memory/deployment-target-sag
   not confound the measurement.
 
 ## Prerequisites
-- AWS creds for the target account in `~/.aws/credentials` (profile baked into the scripts:
-  `419599258555_AWSAdministratorAccess`; edit `PROFILE` in `ec2_up.py`/`ec2_down.py` to change).
+- AWS creds — scripts default to the **auto-refreshing SSO profile** `AWSAdministratorAccess-419599258555`
+  (set up once: `aws sso login --sso-session khk`; boto3 then mints fresh role creds on its own). Override with
+  the `NEMOTRON_AWS_PROFILE` env var. (Pasted static temp creds also work but expire mid-run — prefer SSO.)
 - `boto3` — use `stt-benchmark/.venv/bin/python` (already has it); no `aws` CLI needed.
 - EC2 G-instance quota in the region (us-west-2: On-Demand G = 768 vCPU, wide open).
 - Your workstation's public IP for the SSH security-group rule — set `MY_IP` (default is baked into `ec2_up.py`;
@@ -53,6 +54,7 @@ $PY ec2-bench/ec2_down.py
 | `bootstrap.sh` | on-box: uv venv (py3.11), `torch` + deps + `nemo_toolkit[asr]@git+…@056d937`, download the public checkpoint, smoke. |
 | `run_bench.sh` | on-box: B=1 baseline + batched knee sweeps → `baseline.json`, `batched.json`. |
 | `run_lanes.sh` | on-box: B=1 baseline + `NEMOTRON_MODEL_LANES` sweep (env `LANES`, `SWEEP`). |
+| `run_multiproc.sh` | on-box: multi-PROCESS scaling test — K server processes (each lanes=2) + K concurrent load-gens (env `K_LIST`, `N_PER`); pair with CUDA MPS for concurrent GPU sharing. |
 | `ec2_loadgen.py` | standalone in-box load-gen (lifted from `coloc_loadgen.py`): N concurrent realtime WS streams from `loadgen_audio/*.pcm`, reports proc-lag/TTFS p50/p95 + the keep-up knee. |
 | `ec2_down.py` | terminate the instance. |
 
