@@ -7,6 +7,7 @@
 set -uo pipefail
 VENV=$HOME/nemo-venv; cd "$HOME/nemotron"; export HF_HOME=$HOME/hf
 N_LIST="${N_LIST:-6,8,10,12,14,16}"; K=2
+ROUNDS="${ROUNDS:-5}"   # utterances/session; pools N*ROUNDS finalize samples -> stable p95 (1-shot N is too noisy)
 P50_MAX="${P50_MAX:-250}"; P95_MAX="${P95_MAX:-300}"
 MODEL=nvidia/nemotron-speech-streaming-en-0.6b
 SRV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 "HF_HOME=$HOME/hf"
@@ -31,12 +32,12 @@ done
 for k in $(seq 0 $((K-1))); do wait_port $((8080+k)) || { echo "server $k FAILED"; tail -25 "srv_l4ttfs_$k.log"; exit 1; }; done
 sleep 3
 
-echo "=== L4 sub-knee TTFS sweep | K=2 procs (lanes=2) + MPS | staggered | target p50<${P50_MAX} p95<${P95_MAX} ==="
+echo "=== L4 sub-knee TTFS sweep | K=2 procs (lanes=2) + MPS | staggered, rounds=${ROUNDS} | target p50<${P50_MAX} p95<${P95_MAX} ==="
 declare -a SUMMARY
 for N in ${N_LIST//,/ }; do
   LG=()
   for k in $(seq 0 $((K-1))); do
-    "$VENV/bin/python" ec2_loadgen.py --url ws://127.0.0.1:$((8080+k)) --sweep "$N" \
+    "$VENV/bin/python" ec2_loadgen.py --url ws://127.0.0.1:$((8080+k)) --sweep "$N" --rounds "$ROUNDS" \
         --audio-dir "$HOME/nemotron/loadgen_audio" > "lg_l4ttfs_${N}_$k.log" 2>&1 &
     LG+=($!)
   done
