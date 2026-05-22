@@ -2035,6 +2035,12 @@ class ASRServer:
             "debounce_wait_ms": None,
             "lock_wait_ms": None,
             "fork_flush_wall_ms": None,
+            # vad_stop -> final_sent TRIGGER-path decomposition (the half FINALIZE_PROFILE
+            # previously left dark; all from the time.time() stamps in _continuous_finalize_timing).
+            "vad_stop_to_finalize_start_ms": None,   # vad_stop -> fork_flush_start (the trigger latency)
+            "debounce_to_finalize_start_ms": None,   # debounce_expiry -> fork_flush_start (post-debounce pickup)
+            "finalize_done_to_sent_ms": None,        # fork_flush_done -> final_sent (emit)
+            "vad_stop_to_sent_ms": None,             # vad_stop -> final_sent (total server-side path)
             "fork_clone_ms": 0.0,
             "fork_clone_audio_ms": 0.0,
             "fork_clone_cache_ms": 0.0,
@@ -2261,6 +2267,25 @@ class ASRServer:
                 profile["fork_flush_wall_ms"] = max(
                     0.0,
                     (float(fork_done) - float(fork_start)) * 1000,
+                )
+            # Trigger-path decomposition (vad_stop -> finalize-start -> sent). These localize the
+            # dark ~half of client TTFS that finalize_wall (fork_flush) does NOT cover.
+            final_sent = timing.get("final_sent")
+            if vad_stop is not None and fork_start is not None:
+                profile["vad_stop_to_finalize_start_ms"] = max(
+                    0.0, (float(fork_start) - float(vad_stop)) * 1000
+                )
+            if debounce_expiry is not None and fork_start is not None:
+                profile["debounce_to_finalize_start_ms"] = max(
+                    0.0, (float(fork_start) - float(debounce_expiry)) * 1000
+                )
+            if fork_done is not None and final_sent is not None:
+                profile["finalize_done_to_sent_ms"] = max(
+                    0.0, (float(final_sent) - float(fork_done)) * 1000
+                )
+            if vad_stop is not None and final_sent is not None:
+                profile["vad_stop_to_sent_ms"] = max(
+                    0.0, (float(final_sent) - float(vad_stop)) * 1000
                 )
 
         start_perf = profile.get("_start_perf")
