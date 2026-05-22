@@ -8,6 +8,7 @@ import contextlib
 import dataclasses
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -31,6 +32,10 @@ try:
         stack_pred_out,
         stack_processed,
     )
+    from nemotron_speech.cudagraph_encoder import (
+        BucketedCudaGraphEncoder,
+        EncoderGraphInputs,
+    )
 except ImportError:  # Allows `python src/nemotron_speech/server.py`.
     from batch_primitives import (
         batch_group_key,
@@ -41,6 +46,7 @@ except ImportError:  # Allows `python src/nemotron_speech/server.py`.
         stack_pred_out,
         stack_processed,
     )
+    from cudagraph_encoder import BucketedCudaGraphEncoder, EncoderGraphInputs
 
 # Enable debug logging with DEBUG_ASR=1
 DEBUG_ASR = os.environ.get("DEBUG_ASR", "0") == "1"
@@ -705,6 +711,35 @@ class ASRServer:
         self._encoder_compile_last_graph_count = 0
         self._encoder_compile_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._encoder_compile_thread_id: Optional[int] = None
+        self.encoder_cudagraph_requested = (
+            os.environ.get("NEMOTRON_ENCODER_CUDAGRAPH", "") == "1"
+        )
+        self.encoder_cudagraph_enabled = False
+        self.encoder_cudagraph_max_b_requested: Optional[int] = None
+        self.encoder_cudagraph_max_b = 0
+        if self.encoder_cudagraph_requested:
+            self.encoder_cudagraph_max_b_requested = _env_int(
+                "NEMOTRON_ENCODER_CUDAGRAPH_MAX_B",
+                self.batch_max_size,
+            )
+            if self.encoder_cudagraph_max_b_requested <= 0:
+                raise ValueError("NEMOTRON_ENCODER_CUDAGRAPH_MAX_B must be > 0")
+            self.encoder_cudagraph_max_b = min(
+                int(self.encoder_cudagraph_max_b_requested),
+                int(self.batch_max_size),
+                16,
+            )
+        self._encoder_cudagraph_startup_logged = False
+        self._encoder_cudagraph_managers: dict[int, BucketedCudaGraphEncoder] = {}
+        self._encoder_cudagraph_stream_managers: dict[
+            tuple[int, int],
+            BucketedCudaGraphEncoder,
+        ] = {}
+        self._encoder_cudagraph_manager_labels: dict[int | tuple[int, int], str] = {}
+        self._encoder_cudagraph_replay_calls = 0
+        self._encoder_cudagraph_eager_fallbacks = 0
+        self._encoder_cudagraph_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._encoder_cudagraph_thread_id: Optional[int] = None
         self.eou_probe_tag = _telemetry_run_tag() or "eou_probe"
         self.eou_probe_path = (
             _telemetry_dir() / f"{_safe_tag_filename(self.eou_probe_tag)}.eou_probe.jsonl"
@@ -1480,6 +1515,8 @@ class ASRServer:
             f"batch_fallback_reason={self.batch_fallback_reason or 'none'} "
             f"decoder_strategy={self.decoder_strategy} "
             f"encoder_compile_enabled={self.encoder_compile_enabled} "
+            f"encoder_cudagraph_requested={self.encoder_cudagraph_requested} "
+            f"encoder_cudagraph_max_B={self.encoder_cudagraph_max_b} "
             f"model_lanes_requested={self.model_lanes_requested} "
             f"model_lanes={self.model_lanes} "
             f"batch_max_size={self.batch_max_size}"
@@ -1490,6 +1527,7 @@ class ASRServer:
         self._warmup()
         if self.model_lanes > 1:
             self._ensure_scheduler_model_lane_resources()
+        self._configure_encoder_cudagraph()
         self._configure_batch_memory_cap()
 
     def _configure_encoder_compile(self) -> None:
@@ -1499,6 +1537,14 @@ class ASRServer:
 
         if not self.encoder_compile_requested:
             logger.info("encoder_compile_enabled=False requested=False")
+            self._encoder_compile_startup_logged = True
+            return
+
+        if self.encoder_cudagraph_requested:
+            logger.info(
+                "encoder_compile_enabled=False requested=True "
+                "reason=encoder_cudagraph_supersedes_compile"
+            )
             self._encoder_compile_startup_logged = True
             return
 
@@ -1529,6 +1575,191 @@ class ASRServer:
             "final_uncompiled=True"
         )
         self._encoder_compile_startup_logged = True
+
+    def _capture_encoder_cudagraph_manager_sync(
+        self,
+        label: str,
+        record_default_thread: bool = False,
+    ) -> BucketedCudaGraphEncoder:
+        if record_default_thread:
+            self._encoder_cudagraph_thread_id = threading.get_ident()
+        return BucketedCudaGraphEncoder.warmup(
+            self._current_inference_model(),
+            self.encoder_cudagraph_max_b,
+            logger=logging.getLogger("nemotron_speech.cudagraph_encoder"),
+        )
+
+    def _encoder_cudagraph_manager_is_complete(
+        self,
+        manager: BucketedCudaGraphEncoder,
+        *,
+        label: str,
+    ) -> bool:
+        captured = manager.captured_batch_sizes
+        uncaptured = manager.uncaptured_batch_sizes
+        if not captured:
+            logger.warning(
+                "encoder_cuda_graph_manager_disabled "
+                f"label={label} reason=no_captured_buckets "
+                f"requested_max_B={self.encoder_cudagraph_max_b}"
+            )
+            return False
+        if uncaptured:
+            logger.warning(
+                "encoder_cuda_graph_manager_disabled "
+                f"label={label} reason=capture_incomplete_fail_closed "
+                f"captured_B={list(captured)} uncaptured_B={list(uncaptured)}"
+            )
+            return False
+        return True
+
+    def _store_encoder_cudagraph_manager(
+        self,
+        manager: BucketedCudaGraphEncoder,
+        *,
+        model: Any,
+        label: str,
+        stream: Any = None,
+    ) -> None:
+        captured = manager.captured_batch_sizes
+        capture_ms: list[float] = []
+        for batch_size in captured:
+            value = manager.capture_ms(batch_size)
+            if value is not None:
+                capture_ms.append(float(value))
+        total_capture_ms = sum(float(value) for value in capture_ms)
+
+        if stream is None:
+            manager_key: int | tuple[int, int] = id(model)
+            self._encoder_cudagraph_managers[id(model)] = manager
+            stream_label = "default"
+        else:
+            manager_key = (id(model), id(stream))
+            self._encoder_cudagraph_stream_managers[manager_key] = manager
+            stream_label = f"lane_stream:{id(stream)}"
+        self._encoder_cudagraph_manager_labels[manager_key] = label
+
+        logger.info(
+            "encoder_cuda_graph_manager_captured "
+            f"label={label} stream={stream_label} "
+            f"captured_B={list(captured)} "
+            f"capture_ms_total={total_capture_ms:.1f}"
+        )
+
+    def _configure_encoder_cudagraph(self) -> None:
+        """Configure optional per-B manual CUDA graphs for the streaming encoder."""
+        if self._encoder_cudagraph_startup_logged:
+            return
+
+        if not self.encoder_cudagraph_requested:
+            logger.info("encoder_cuda_graph_enabled=False requested=False")
+            self._encoder_cudagraph_startup_logged = True
+            return
+
+        if self.prompted_model:
+            logger.warning(
+                "encoder_cuda_graph_enabled=False requested=True "
+                "reason=prompted_model_static_shapes_unvalidated"
+            )
+            self._encoder_cudagraph_startup_logged = True
+            return
+
+        if not torch.cuda.is_available():
+            logger.warning(
+                "encoder_cuda_graph_enabled=False requested=True "
+                "reason=torch_cuda_unavailable"
+            )
+            self._encoder_cudagraph_startup_logged = True
+            return
+
+        if self.encoder_compile_requested:
+            logger.info(
+                "encoder_cuda_graph_supersedes_compile "
+                "NEMOTRON_ENCODER_COMPILE ignored while cudagraph is enabled"
+            )
+
+        default_manager_stored = False
+        self._encoder_cudagraph_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="nemotron-encoder-cudagraph",
+        )
+        try:
+            default_manager = self._encoder_cudagraph_executor.submit(
+                self._capture_encoder_cudagraph_manager_sync,
+                "self.model",
+                True,
+            ).result()
+            if self._encoder_cudagraph_manager_is_complete(
+                default_manager,
+                label="self.model",
+            ):
+                self._store_encoder_cudagraph_manager(
+                    default_manager,
+                    model=self.model,
+                    label="self.model",
+                )
+                default_manager_stored = True
+        except Exception as exc:
+            logger.warning(
+                "encoder_cuda_graph_manager_disabled "
+                f"label=self.model reason=capture_exception_fail_closed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+
+        if not default_manager_stored and self._encoder_cudagraph_executor is not None:
+            self._encoder_cudagraph_executor.shutdown(wait=False)
+            self._encoder_cudagraph_executor = None
+            self._encoder_cudagraph_thread_id = None
+
+        if self.model_lanes > 1:
+            self._ensure_scheduler_model_lane_resources()
+            for lane_id, lane_model in enumerate(self._scheduler_model_lane_models):
+                stream = self._scheduler_model_lane_streams[lane_id]
+                if stream is None:
+                    logger.warning(
+                        "encoder_cuda_graph_lane_disabled "
+                        f"lane={lane_id} reason=missing_cuda_stream"
+                    )
+                    continue
+                label = f"lane:{lane_id}"
+                try:
+                    lane_manager = self._scheduler_model_lane_executors[lane_id].submit(
+                        self._run_scheduler_model_lane_call_sync,
+                        lane_id,
+                        self._capture_encoder_cudagraph_manager_sync,
+                        (label, False),
+                    ).result()
+                    if self._encoder_cudagraph_manager_is_complete(
+                        lane_manager,
+                        label=label,
+                    ):
+                        self._store_encoder_cudagraph_manager(
+                            lane_manager,
+                            model=lane_model,
+                            label=label,
+                            stream=stream,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "encoder_cuda_graph_lane_disabled "
+                        f"lane={lane_id} reason=capture_exception_fail_closed "
+                        f"error={type(exc).__name__}: {exc}"
+                    )
+
+        manager_count = (
+            len(self._encoder_cudagraph_managers)
+            + len(self._encoder_cudagraph_stream_managers)
+        )
+        self.encoder_cudagraph_enabled = manager_count > 0
+        logger.info(
+            "encoder_cuda_graph_enabled="
+            f"{self.encoder_cudagraph_enabled} requested=True "
+            f"max_B={self.encoder_cudagraph_max_b} "
+            f"managers={manager_count} "
+            f"default_managers={len(self._encoder_cudagraph_managers)} "
+            f"lane_stream_managers={len(self._encoder_cudagraph_stream_managers)}"
+        )
+        self._encoder_cudagraph_startup_logged = True
 
     def _session_warmup_frames(self) -> Optional[int]:
         if self.session_warmup_ms <= 0:
@@ -1583,6 +1814,51 @@ class ASRServer:
             return bucket
         return None
 
+    def _encoder_cudagraph_manager_for_model(
+        self,
+        model: Any,
+    ) -> Optional[BucketedCudaGraphEncoder]:
+        if not self.encoder_cudagraph_enabled:
+            return None
+        stream = getattr(self._scheduler_model_lane_tls, "stream", None)
+        if stream is not None:
+            return self._encoder_cudagraph_stream_managers.get((id(model), id(stream)))
+        return self._encoder_cudagraph_managers.get(id(model))
+
+    def _encoder_cudagraph_bucket_for_call(
+        self,
+        kwargs: dict[str, Any],
+        manager: Optional[BucketedCudaGraphEncoder],
+    ) -> Optional[int]:
+        if not self.encoder_cudagraph_enabled or manager is None:
+            return None
+        if kwargs.get("keep_all_outputs", True):
+            return None
+        if kwargs.get("bypass_pre_encode", False):
+            return None
+
+        processed_signal = kwargs.get("processed_signal")
+        if not torch.is_tensor(processed_signal) or processed_signal.ndim != 3:
+            return None
+
+        try:
+            batch_size = int(processed_signal.shape[0])
+            chunk_frames = int(processed_signal.shape[-1])
+            drop_extra = int(kwargs.get("drop_extra_pre_encoded"))
+            steady_T = int(self.pre_encode_cache_size + self.shift_frames)
+        except Exception:
+            return None
+
+        if chunk_frames != steady_T:
+            return None
+        if drop_extra != int(self.drop_extra):
+            return None
+        if batch_size < 1 or batch_size > int(manager.max_batch_size):
+            return None
+        if not manager.captured(batch_size):
+            return None
+        return batch_size
+
     @contextlib.contextmanager
     def _compiled_encoder_cache_step_installed(self):
         encoder = self.model.encoder
@@ -1602,19 +1878,105 @@ class ASRServer:
             else:
                 object.__delattr__(encoder, attr_name)
 
+    @contextlib.contextmanager
+    def _cudagraph_encoder_cache_step_installed(
+        self,
+        model: Any,
+        manager: BucketedCudaGraphEncoder,
+        batch_size: int,
+    ):
+        encoder = model.encoder
+        attr_name = "cache_aware_stream_step"
+        had_instance_attr = attr_name in vars(encoder)
+        original_instance_attr = vars(encoder).get(attr_name)
+        original_callable = getattr(encoder, attr_name)
+
+        def cache_aware_stream_step_wrapper(*args, **call_kwargs):
+            if args:
+                self._encoder_cudagraph_eager_fallbacks += 1
+                return original_callable(*args, **call_kwargs)
+            try:
+                inputs = EncoderGraphInputs(
+                    processed_signal=call_kwargs["processed_signal"],
+                    processed_signal_length=call_kwargs["processed_signal_length"],
+                    cache_last_channel=call_kwargs["cache_last_channel"],
+                    cache_last_time=call_kwargs["cache_last_time"],
+                    cache_last_channel_len=call_kwargs["cache_last_channel_len"],
+                )
+            except Exception:
+                self._encoder_cudagraph_eager_fallbacks += 1
+                return original_callable(**call_kwargs)
+
+            replay_outputs = manager.replay(batch_size, inputs)
+            if replay_outputs is None:
+                self._encoder_cudagraph_eager_fallbacks += 1
+                return original_callable(**call_kwargs)
+
+            self._encoder_cudagraph_replay_calls += 1
+            if (
+                self._encoder_cudagraph_replay_calls <= 5
+                or self._encoder_cudagraph_replay_calls % 50 == 0
+            ):
+                logger.info(
+                    "encoder_cuda_graph_status "
+                    f"replays={self._encoder_cudagraph_replay_calls} "
+                    f"fallbacks={self._encoder_cudagraph_eager_fallbacks} "
+                    f"B={batch_size}"
+                )
+            return replay_outputs
+
+        object.__setattr__(encoder, attr_name, cache_aware_stream_step_wrapper)
+        try:
+            yield
+        finally:
+            if had_instance_attr:
+                object.__setattr__(encoder, attr_name, original_instance_attr)
+            else:
+                object.__delattr__(encoder, attr_name)
+
     def _conformer_stream_step(self, **kwargs):
-        """Call NeMo's stream step with drop-extra restoration and optional compiled encoder."""
+        """Call NeMo's stream step with optional encoder graph/compile swap."""
         model = self._current_inference_model()
         streaming_cfg = model.encoder.streaming_cfg
         original_drop_extra = streaming_cfg.drop_extra_pre_encoded
-        bucket = (
-            self._encoder_compile_bucket_for_call(kwargs)
-            if model is self.model
-            else None
+        cudagraph_manager = self._encoder_cudagraph_manager_for_model(model)
+        cudagraph_bucket = self._encoder_cudagraph_bucket_for_call(
+            kwargs,
+            cudagraph_manager,
         )
+        bucket = None
+        if cudagraph_bucket is None:
+            bucket = (
+                self._encoder_compile_bucket_for_call(kwargs)
+                if model is self.model
+                else None
+            )
         saw_unwarmed_bucket = False
 
         try:
+            if cudagraph_bucket is not None and cudagraph_manager is not None:
+                if (
+                    self._encoder_cudagraph_thread_id is not None
+                    and getattr(self._scheduler_model_lane_tls, "stream", None) is None
+                    and threading.get_ident() != self._encoder_cudagraph_thread_id
+                ):
+                    logger.warning(
+                        "encoder_cuda_graph_call_on_different_thread "
+                        f"capture_thread={self._encoder_cudagraph_thread_id} "
+                        f"call_thread={threading.get_ident()}"
+                    )
+                with self._cudagraph_encoder_cache_step_installed(
+                    model,
+                    cudagraph_manager,
+                    cudagraph_bucket,
+                ):
+                    result = model.conformer_stream_step(**kwargs)
+                result_list = list(result)
+                for result_index in (2, 3, 4):
+                    if result_index < len(result_list) and torch.is_tensor(result_list[result_index]):
+                        result_list[result_index] = result_list[result_index].detach().clone()
+                return tuple(result_list)
+
             if bucket is None:
                 return model.conformer_stream_step(**kwargs)
 
@@ -1686,7 +2048,13 @@ class ASRServer:
                     )
 
     async def _run_inference_call(self, fn, *args):
-        executor = self._encoder_compile_executor if self.encoder_compile_enabled else None
+        executor = (
+            self._encoder_cudagraph_executor
+            if self.encoder_cudagraph_enabled and self._encoder_cudagraph_executor is not None
+            else self._encoder_compile_executor
+            if self.encoder_compile_enabled
+            else None
+        )
         return await asyncio.get_event_loop().run_in_executor(executor, fn, *args)
 
     def _current_inference_model(self):

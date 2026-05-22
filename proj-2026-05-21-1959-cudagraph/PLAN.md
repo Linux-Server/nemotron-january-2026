@@ -80,7 +80,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   asserts byte-exact per B vs eager and that uncaptured-B cleanly returns "use eager". No `server.py` wiring yet.
   Key files: `src/nemotron_speech/cudagraph_encoder.py`, `tests/test_cudagraph_encoder.py`
 
-- [ ] **3. Wire into the scheduler's batched call (FINALIZE AFTER (b) LANDS).**
+- [x] **3. Wire into the scheduler's batched call (FINALIZE AFTER (b) LANDS).**
   In `server.py`, gate behind `NEMOTRON_ENCODER_CUDAGRAPH` (default off) + `NEMOTRON_ENCODER_CUDAGRAPH_MAX_B`
   (default K). At the batched model call: if steady-bucket AND B≤K AND captured → `replay(B)`; else eager.
   Capture all 1…K at startup warmup (after model load). Supersede the dead `NEMOTRON_ENCODER_COMPILE` path
@@ -128,8 +128,8 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Per-B byte-exact + speedup probe; pick K | done | round5 | probe_perB_cudagraph.py: per-B byte-exact B=1..16, GPU-active −12..30%, K≈10 |
-| 2 | Bucketed graph-manager module | done | (step2 commit) | cudagraph_encoder.py + test; byte-exact B=1..16 (encoded+state max_abs=0), fail-closed B=17->None/captured=False; capture ~60-82ms/bucket (~1.1s for K=16/replica) |
-| 3 | Wire into scheduler's batched call | pending | — | lanes (b) committed (7bf0e04); lanes+graphs compose (per-lane stream/buffers) |
+| 2 | Bucketed graph-manager module | done | bf0a639 | cudagraph_encoder.py + test; byte-exact B=1..16 (encoded+state max_abs=0), fail-closed B=17->None/captured=False; capture ~60-82ms/bucket (~1.1s for K=16/replica) |
+| 3 | Wire into scheduler's batched call | done | (step3 commit) | NEMOTRON_ENCODER_CUDAGRAPH; monkeypatch like compile path; steady-bucket-only per-B; per-replica + per-lane-stream managers; fail-closed; default-off identity; cudagraph supersedes compile. lanes=1 byte-identical smoked; lanes=2 impl fail-closed, runtime-verify in step4. NOTE: manager is all-or-nothing per replica (uncaptured B disables that replica) -> pick K to fit in step6 |
 | 4 | Local byte-exact gate at scale | pending | — | hard gate: graph-on==graph-off, FORK_ASSERT |
 | 5 | Local knee measurement | pending | — | first measured payoff (56→?) |
 | 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | pending | — | p50<250/p95<300, multi-proc+MPS; per-proc knee + per-box ceiling + p95 tail vs graph-off |
