@@ -99,12 +99,26 @@ single-server queue: gently below the knee, then a cliff as utilization → 1.
 ## Next phase (lane-fixes — NOT part of this plan)
 
 The fixes that would help the **cloud / low-N** regime (all attack the launch-dispatch lane, not the GPU):
-1. **CUDA-graphs / encoder compile on the cloud** — cheaper call, helps at any N; expected bigger win on the
-   more-launch-bound cloud. (We have a local foothold: Step-4 encoder compile = 1.5×.)
-2. **Parallel lanes** — relax the single `inference_lock` into N lanes to use the idle cloud cores; viability
-   hinges on the GIL split (feasibility probe in flight: `parallel-lane-feasibility.md`).
-3. **Batch the `vad_stop` barrier-drain** — quickest knee bump (in-phase 115 → toward 180).
-4. **Coarse phase-alignment** (global tick) — confirmed ~2× lever, at a latency cost.
+1. **CUDA-graphs — via MANUAL capture, not torch.compile.** Local foothold = Step-4 encoder torch.compile
+   (1.5×). But the cloud test (Step 10b) showed `torch.compile(reduce-overhead)` **warmup never completes on
+   T4/L4** (inductor codegen/autotune too slow on the small/slow nodes; >6min, no completion) → not usable as
+   a cloud lever and a non-starter for cold-start. **Next: manual CUDA-graph capture** (record+replay the
+   launch sequence — no inductor codegen → fast warmup, production-viable). Hypothesis (graphs lift the cloud
+   knee) remains UNTESTED — manual capture is the way to test it.
+2. **Parallel lanes — PROBED (`parallel-lane-feasibility.md`): viable but modest.** Not a GIL wall (K=4
+   threads = 2.75× CPU-in-wall), but Amdahl-bounded: the step is ~70% GPU-active (serial floor) / ~30% host,
+   so threads + per-lane CUDA streams give only **~1.4× local** (measured 1.41×). Processes don't help (GPU
+   time-shares). **Expected bigger on cloud** (host fraction 46–68% → ceiling ~1.9–3.1×) — needs a cloud
+   re-measure. Realistic = a guarded N=2–3 thread-lane pool (own CUDA stream/lane; guard the global
+   `drop_extra_pre_encoded`; per-lane sync). Note: lanes & CUDA-graphs are partial substitutes (both attack
+   the host fraction).
+3. **Batch the `vad_stop` barrier-drain** — quickest knee bump (in-phase 115 → toward 180); fixes the
+   unbatched finalize path.
+4. **Coarse phase-alignment** (global tick) — confirmed ~2× lever (in-phase 56→115), at a latency cost.
+
+Reachability note: the GPU's ~220 ceiling is a **batching** number (one B=46 call), reachable only by
+filling batches (offline/in-phase). Lanes (~1.4–3×) and CUDA-graphs (collapse the launch fraction) are the
+realtime levers; neither reaches 220 with independent realtime traffic.
 
 ## Artifacts
 
