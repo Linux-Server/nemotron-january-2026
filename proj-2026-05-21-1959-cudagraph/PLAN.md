@@ -125,6 +125,25 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   (`deployment-target-sagemaker`).
   Key files: `ec2-bench/run_l4_ttfs_sweep.sh`, `ec2-bench/run_multiproc.sh`, `proj-2026-05-21-inference-opt/g6-vs-g6e-results.md`
 
+- [ ] **7. Drop the coalescing tick (work-conserving batching) — measure, then flip if it wins.**
+  Hypothesis: the `NEMOTRON_BATCH_MAX_WAIT_MS=8` coalescing timer (server.py:635) was a *launch-bound*
+  amortization — it forced bigger batches so fewer kernel-launch dispatches were paid (our note at
+  server.py:632 records it raised the local knee 40->56). The scheduler loop (`_scheduler_drain_once`,
+  server.py:3454) is ALREADY event-driven + drains every currently-ready chunk via `get_nowait`; the timer is
+  the only non-work-conserving piece. CUDA-graphs collapse the per-launch cost (step 5: small batches now cheap,
+  avg B~2-3, knee still up), so the timer's throughput benefit should shrink while its cost (up to 8 ms of
+  *under-load* latency, exactly on the tight-budget path) stays. **Predict: `MAX_WAIT=0` recovers the old lower
+  knee with graphs OFF, but ~matches `MAX_WAIT=8` with graphs ON, at lower p95.**
+  Do: (a) make `MAX_WAIT` an env knob in `run_l4_ttfs_sweep.sh` (currently hard-coded 8 in the SRV env);
+  (b) run the 2x2 tight-budget sweep `MAX_WAIT in {0,8} x CUDAGRAPH in {0,1}` on one box (reuse step 6's
+  box/config), comparing per-process tight-budget max-N (p50<250/p95<300) + the keep-up knee + p95;
+  (c) if `MAX_WAIT=0` with graphs ON holds the knee AND lowers p95, flip the default to 0 when cudagraph is
+  enabled (small config change in server.py), flag-gated, default stays 8 until the measurement says otherwise.
+  Correctness: `MAX_WAIT` changes only batch *grouping/timing*, not per-stream frames, so per-stream output is
+  unchanged by the batch-independence property already validated in step 4 — spot-check byte-exact, expect free.
+  Key files: `ec2-bench/run_l4_ttfs_sweep.sh`, `src/nemotron_speech/server.py`,
+  `proj-2026-05-21-1959-cudagraph/cloud-retest.md`
+
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
@@ -134,3 +153,4 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | 4 | Local byte-exact gate at scale | done | 023c99c | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
 | 5 | Local knee measurement | done | ed53ff2 | knee 48->56 (+17%) on 5090; lag p95 @N48 229->151ms; avg B~2-3, 0 fallbacks; local-knee.md. Cloud expected to lift more (more launch-bound) |
 | 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | in-progress | — | p50<250/p95<300, multi-proc+MPS; graph-off vs on; L4 first then L40S; step6_cloud_retest.sh |
+| 7 | Drop coalescing tick (work-conserving) | pending | — | measure MAX_WAIT 0 vs 8 x graph off/on; flip default to 0 if it wins w/ graphs on; byte-exact ~free (batch-grouping only) |
