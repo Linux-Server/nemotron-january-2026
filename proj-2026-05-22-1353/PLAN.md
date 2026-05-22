@@ -77,6 +77,24 @@ byte-exact, fail-closed.
 - New test harnesses required (no existing one fits): a same-websocket **multi-final** client + a **forced-B>1**
   scheduler-barrier test (below). No new heavy deps; <400 ms TTFS budget; flag-gated; default = current behavior.
 
+## Scope & sequencing (post-R5)
+This is a **probe-first** plan, not a commit-to-build plan. **Steps 1-2 are a PROBE PHASE** — (1) prove the
+~178 ms finalize-P95 target is reproducible *server compute* (not measurement noise), and (2) prove a captured
+finalize graph is byte-exact AND projects a *business-meaningful* P95 win. **Steps 3-7 (the full graph subsystem)
+run ONLY if the Step-2 business-payoff gate clears.** If the probe fails reproducibility or the payoff gate, STOP
+and pivot. Rationale (R5): the median (274 ms) is already frontier-competitive; the finalize is the *smallest* TTFS
+component and a no-regret byte-exact lever with a *capped* (~100 ms P95) ceiling — so de-risk cheaply before
+building/maintaining a whole capture/replay subsystem for it.
+
+**Parallel product-quality tracks (separate from this byte-exact graph plan — they trade accuracy, so they are a
+PRODUCT decision, not infra):** these carry the *bigger* latency upside and should be evaluated alongside:
+- **VAD stop-window** (the largest TTFS term, ~200 ms): sweep client `vad-stop-secs` 0.12 / 0.15 / 0.20 and measure
+  false-cutoff rate + WER impact. 200→120 ms saves ~80 ms of *every* turn's user-perceived latency (≈ the whole P95
+  gap to Deepgram) — but it is not an apples-to-apples benchmark lever and risks clipping speech.
+- **Final-only shorter padding** (rc1 pads 32 frames / 320 ms; `final_padding_frames`): a latency-vs-WER sweep on
+  the final tail only (NOT global rc0 — `[70,0]` crashes upstream NeMo). Lower final T → less finalize compute, at
+  some suffix-accuracy cost.
+
 ## Steps
 
 - [ ] **1. Finalize-tail telemetry + (B,T) histogram + BATCH_FINALIZE profiling (NO hard gate here).**
@@ -91,6 +109,12 @@ byte-exact, fail-closed.
   report `E_eager_encoder` (median + tail), the tail attribution, the `(B,T,...)` + **B-distribution** histogram per
   config, and a preliminary "encoder tail is worth probing" yes/no. Choose the production BATCH_FINALIZE config.
   Deliverable: `finalize-telemetry.md`. (The HARD go/pivot gate is Step 2, once E_graph is measured.)
+  **REPRODUCIBILITY GATE (R5) — the target may be noise:** the ~178 ms is ONE WAN run, and the client-side number
+  includes control-path RTT, not pure server compute. Before any graph build: repeat the WAN run (≥3×) + add an
+  on-box/loopback server-side timing (net-excluded) + a bootstrap CI on the finalize-P95 + a representative sample
+  closer to production (multi-final / real-Silero-VAD, since the one-utterance harness bypasses the Pipecat
+  pipeline). PROCEED only if a stable, net-excluded SERVER-COMPUTE finalize tail reproduces across runs/topologies;
+  else STOP (the 178 ms was measurement noise, not a compute target).
   Key files: `src/nemotron_speech/server.py`, `proj-2026-05-22-1353/finalize-telemetry.md`
 
 - [ ] **2. Feasibility PROBE MATRIX + measured timing + COUNTERFACTUAL GO/PIVOT GATE.**
@@ -103,12 +127,15 @@ byte-exact, fail-closed.
   ALL of them. If any mismatch, `cache_len` would have to enter the key (→ explosion) → **ABORT the graph track**
   (do NOT add cache_len to the key). (NeMo uses `cache_last_channel_len` as a tensor value for offset/masks/clamp,
   not a Python branch — `conformer_encoder.py` ~670/776/878 — so this is *plausible*; prove it first.) ALSO measure
-  the per-bucket **`E_finalize_graph`** (synced) vs eager. **GO/PIVOT GATE (counterfactual SCREEN, on the wall-time
-  tail cohort from Step 1):** proceed to Steps 3-5 ONLY if `P95(W) - P95(W - E_eager_encoder + E_finalize_graph)`
-  clears a concrete threshold (e.g. ≥ ~30 ms), using the MEASURED `E_finalize_graph`. NOTE this mixes production-load
-  `E_eager` with isolated-probe `E_graph` → an OPTIMISTIC screen, not proof: require margin + a sensitivity check
-  (Step 5's cloud retest is the real proof). Else ABORT the graph track and PIVOT to the dominant tail component
-  (decode → reconsider Ada decoder graph; clone/sync/lock/GC).
+  the per-bucket **`E_finalize_graph`** (synced) vs eager. **BUSINESS-PAYOFF GATE (R5 — Steps 1-2 are a PROBE
+  PHASE; the full subsystem Steps 3-7 executes ONLY if this clears):** compute the counterfactual SCREEN
+  `P95(W) - P95(W - E_eager_encoder + E_finalize_graph)` on the wall-time tail cohort (MEASURED `E_finalize_graph`;
+  this mixes production-load `E_eager` with isolated-probe `E_graph` → OPTIMISTIC, so add margin + a sensitivity
+  check). Proceed to the FULL build ONLY if it projects a **reproducible ≥ ~60-80 ms server-finalize P95 reduction
+  OR a clear capacity/robustness win** (≥30 ms merely "proves the physics" and does NOT justify the subsystem cost).
+  Else STOP at the probe (write up the finding) and PIVOT — to the dominant tail component (decode → reconsider Ada
+  decoder graph; clone/sync/lock) and/or to the parallel product-quality tracks (below), which carry the bigger
+  latency upside.
   Key files: `proj-2026-05-22-1353/probe_finalize_bucket.py`, `proj-2026-05-22-1353/finalize-gate.md`
 
 - [ ] **3. Finalize-bucket graph manager + standalone test (partial-capture aware).**
@@ -165,8 +192,8 @@ byte-exact, fail-closed.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Telemetry + histogram + BATCH_FINALIZE profiling | pending | — | NO hard gate; E_eager + tail attribution + (B,T)+B-dist per config; existing harness (multi-final deferred to Step 4) |
-| 2 | Probe (B=1) + cache-len ABORT + E_graph + counterfactual SCREEN | pending | — | sweep ALL cache_lens (abort if mismatch); byte-exact + timing; GO/PIVOT screen w/ margin |
+| 1 | Telemetry + REPRODUCIBILITY gate + histogram + BATCH_FINALIZE profiling | pending | — | PROBE PHASE; repeat+on-box server-side timing+P95 CI+representative sample; STOP if 178ms is noise; E_eager/tail/(B,T)+B-dist |
+| 2 | Probe (B=1) + cache-len ABORT + E_graph + BUSINESS-payoff gate | pending | — | PROBE PHASE; sweep ALL cache_lens (abort if mismatch); byte-exact+timing; build subsystem (3-7) ONLY if >=60-80ms P95 or robustness |
 | 3 | Finalize-bucket manager + test (partial) | pending | — | ≥1-bucket completeness; synthetic+real; mem/time |
 | 4 | Wire + executor CONTRACT + gate at scale | pending | — | requires steady; hard-disable on thread/stream mismatch; build multi-final harness; B>1 eager-fallback check; lanes×batch×steady matrix |
 | 5 | Cloud retest — both topologies | pending | — | one-proc WAN + multi-proc+MPS; memory fit; histogram re-check |
@@ -196,4 +223,13 @@ byte-exact, fail-closed.
   to a clean-fallback check. MINOR — the gate is an optimistic SCREEN (prod E_eager + isolated E_graph) needing
   margin/sensitivity (Step 5 is proof); defer the multi-final harness out of Step 1 (existing harness suffices for
   telemetry) to Step 4. Both VERDICTS: **ready to /implement.** Net across R1-R4: severity C/C → C/M → C+refine →
-  none/scoping, and R4's changes *removed* complexity — the plan has converged.
+  none/scoping, and R4's changes *removed* complexity — the mechanics converged.
+- **R5 (Codex `bkh0w88ad` + self) — PREMISE/SCOPE lens (mechanics had saturated):** both reviewers found all 4
+  premises QUESTIONABLE + verdict **RE-SCOPE** (not "ready"). (1) Target reliability — the 178 ms is one noisy WAN
+  run incl control-path RTT → Step 1 is now a hard **reproducibility gate** (repeat + on-box server-side timing +
+  P95 CI + representative multi-final sample). (2) Right lever — finalize is the smallest TTFS term; the **200 ms
+  VAD window** is the bigger product lever → added a parallel VAD track. (3) Byte-exact caps upside → added a
+  parallel final-padding latency-vs-WER track. (4) Effort/payoff — ~100 ms P95 doesn't justify the subsystem on
+  "physics works" → Step-2 gate raised to a **business-payoff threshold (≥60-80 ms or robustness)**; **Steps 1-2
+  reframed as a probe phase, Steps 3-7 conditional.** This round (premise lens) changed the plan's SHAPE where the
+  4 mechanics rounds could not — the value was in switching the lens, not the count.
