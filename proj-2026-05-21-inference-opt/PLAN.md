@@ -64,7 +64,7 @@ re-explored.
   per-box knee through the LB.
   Key files: `deploy/` (LB config), `ec2-bench/`
 
-- [ ] **4. Per-GPU config matrix + guarded auto-select.**
+- [x] **4. Per-GPU config matrix + guarded auto-select.** (`auto_pick_K` in `deploy/launch_multiproc.sh`)
   Encode (detected GPU, vCPU) → (lanes=2, K, MAX_SIZE, MPS on) from Steps 1–2; the launcher picks at startup and
   refuses known-bad configs (e.g. K beyond the measured GPU/vCPU cap). Default off / explicit until validated.
   Key files: `src/nemotron_speech/server.py` (or the launcher), config
@@ -94,7 +94,7 @@ re-explored.
 | 1 | Per-GPU multi-process+MPS matrix (cloud) | done | (this commit) | L4 K=2->32 (GPU-bound); L40S 48@16vCPU, 64@32vCPU (ceiling); full matrix measured |
 | 2 | Production multi-process launcher + MPS | done (design) | (deploy commit) | deploy/launch_multiproc.sh + MPS hardening notes |
 | 3 | Routing layer (LB leastconn+maxconn) | done (design) | (deploy commit) | deploy/haproxy.cfg.example (+ ALB equiv) |
-| 4 | Per-GPU config matrix + auto-select | pending | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |
+| 4 | Per-GPU config matrix + auto-select | done | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |
 | 5 | Finish finalize/TTFS chain | pending | — | finalize preprocessing + close/cold-reset, byte-exact |
 | 6 | Per-B manual CUDA-graphs (re-scoped) | pending | — | per-lane cheaper-call; re-rank vs multi-process |
-| 7 | Deployment substrate + SageMaker | pending | — | EC2/ECS + ALB; not SM real-time endpoints |
+| 7 | Deployment substrate + SageMaker | done (design) | — | EC2/ECS + ALB; not SM real-time endpoints |

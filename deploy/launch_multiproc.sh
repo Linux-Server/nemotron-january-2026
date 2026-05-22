@@ -12,7 +12,15 @@ set -uo pipefail
 APP_DIR="${NEMOTRON_APP_DIR:-$HOME/nemotron}"          # holds server.py + batch_primitives.py
 VENV="${NEMOTRON_VENV:-$HOME/nemo-venv}"
 MODEL="${NEMOTRON_MODEL:-nvidia/nemotron-speech-streaming-en-0.6b}"
-K="${NEMOTRON_PROCS:-3}"                                # processes/box (per-GPU matrix: L4=2, L40S=4)
+# Step 4: per-GPU config matrix + guarded auto-select (override with NEMOTRON_PROCS). Measured matrix:
+#   L4 -> K=2 (GPU-bound, ~32/box); L40S -> K=4 if >=~32 vCPU (~64/box, GPU ceiling) else K=3 (~48, vCPU-bound).
+auto_pick_K(){ local g c; g=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1); c=$(nproc)
+  case "$g" in
+    *L4*)   echo 2 ;;
+    *L40S*) [ "${c:-0}" -ge 24 ] && echo 4 || echo 3 ;;
+    *)      echo 2 ;;                                   # unknown GPU: conservative — measure with ec2-bench first
+  esac; }
+K="${NEMOTRON_PROCS:-$(auto_pick_K)}"                   # processes/box (auto from GPU+vCPU; see DEPLOYMENT.md)
 LANES="${NEMOTRON_MODEL_LANES:-2}"                      # within-process sweet spot (>2 regresses; GIL)
 BASE_PORT="${NEMOTRON_BASE_PORT:-8080}"
 export HF_HOME="${HF_HOME:-$HOME/hf}"
