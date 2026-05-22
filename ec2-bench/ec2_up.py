@@ -64,7 +64,8 @@ else:
 
     vpc = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"][0]["VpcId"]
     subnets = ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc]}])["Subnets"]
-    subnet = next((s for s in subnets if s.get("MapPublicIpOnLaunch")), subnets[0])["SubnetId"]
+    # Try across AZs (g6e capacity is often AZ-constrained -> InsufficientInstanceCapacity in one AZ).
+    cand_subnets = [s for s in subnets if s.get("MapPublicIpOnLaunch")] or subnets
 
     try:
         sg = ec2.describe_security_groups(Filters=[
@@ -84,15 +85,29 @@ else:
 
     ami, aminame = find_ami()
     print(f"[ami] {ami}  {aminame}")
-    print(f"[launch] {ITYPE} {REGION} vpc={vpc} subnet={subnet} sg={sg} ...")
-    r = ec2.run_instances(
-        ImageId=ami, InstanceType=ITYPE, KeyName=KEY, MinCount=1, MaxCount=1,
-        NetworkInterfaces=[{"DeviceIndex": 0, "AssociatePublicIpAddress": True,
-                            "Groups": [sg], "SubnetId": subnet}],
-        BlockDeviceMappings=[{"DeviceName": "/dev/sda1",
-                              "Ebs": {"VolumeSize": 200, "VolumeType": "gp3", "DeleteOnTermination": True}}],
-        TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": NAME}]}])
-    inst = r["Instances"][0]
+    inst = None
+    last_err = None
+    for s in cand_subnets:
+        subnet = s["SubnetId"]; az = s.get("AvailabilityZone", "?")
+        print(f"[launch] {ITYPE} {REGION} az={az} vpc={vpc} subnet={subnet} sg={sg} ...")
+        try:
+            r = ec2.run_instances(
+                ImageId=ami, InstanceType=ITYPE, KeyName=KEY, MinCount=1, MaxCount=1,
+                NetworkInterfaces=[{"DeviceIndex": 0, "AssociatePublicIpAddress": True,
+                                    "Groups": [sg], "SubnetId": subnet}],
+                BlockDeviceMappings=[{"DeviceName": "/dev/sda1",
+                                      "Ebs": {"VolumeSize": 200, "VolumeType": "gp3", "DeleteOnTermination": True}}],
+                TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": NAME}]}])
+            inst = r["Instances"][0]
+            break
+        except ClientError as e:
+            if "InsufficientInstanceCapacity" in str(e) or "Unsupported" in str(e):
+                print(f"[launch] az={az} no capacity ({type(e).__name__}); trying next AZ ...")
+                last_err = e
+                continue
+            raise
+    if inst is None:
+        raise SystemExit(f"no {ITYPE} capacity in any AZ of {REGION}: {last_err}")
     print(f"[launch] {inst['InstanceId']} starting")
 
 iid = inst["InstanceId"]
