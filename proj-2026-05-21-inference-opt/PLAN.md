@@ -50,14 +50,14 @@ re-explored.
   vCPUs → production cap is higher; if feasible, run the load-gen from a 2nd instance to remove that confound.
   Key files: `ec2-bench/run_multiproc.sh`, `proj-2026-05-21-inference-opt/g6-vs-g6e-results.md`
 
-- [ ] **2. Production multi-process launcher + MPS (the deployable unit).**
+- [x] **2. Production multi-process launcher + MPS (the deployable unit).** (DESIGN — `deploy/launch_multiproc.sh`)
   A launcher (systemd unit / container entrypoint) that: starts the MPS daemon, spawns K `server.py` processes
   (lanes=2, ports 8080+k) with readiness/health endpoints, and restarts a crashed process. K + lanes from config
   (per-GPU matrix from Step 1). Harden the **MPS blast-radius**: a CUDA fault in one client can corrupt the shared
   context — add per-process supervision + fast restart, and document the isolation tradeoff (vs MIG on A100/H100).
   Key files: `ec2-bench/` (derive from `run_multiproc.sh`), new `deploy/` launcher
 
-- [ ] **3. Routing layer.**
+- [x] **3. Routing layer.** (DESIGN — `deploy/haproxy.cfg.example`)
   LB (HAProxy / nginx / ALB) with `leastconn` + per-backend `maxconn` ≈ 12 (~75% of the 16 knee, for the 400 ms TTFS
   headroom) + health-check + connection-drain, fronting all process-ports across boxes. WS streams are sticky-for-life
   (no mid-stream rebalance). Custom proxy only if lag-aware routing is later needed. Validate end-to-end keep-up +
@@ -82,7 +82,7 @@ re-explored.
   most valuable where vCPU-bound (Step 1 will show how vCPU-bound we are). Byte-exact per B, fail-closed, default off.
   Key files: `src/nemotron_speech/server.py`, `src/nemotron_speech/cudagraph_encoder.py`
 
-- [ ] **7. Deployment substrate + SageMaker.**
+- [x] **7. Deployment substrate + SageMaker.** (DESIGN — `deploy/DEPLOYMENT.md`: EC2+ASG+ALB recommended)
   Target EC2/ECS/EKS + ALB for the WebSocket service (SageMaker real-time endpoints are request/response — wrong fit).
   If SageMaker is required, custom-container + the multi-process launcher behind the routing layer. Validate the
   per-box knee + $/stream on the actual production instance type (the knee is CPU-bound — Modal/local don't predict it).
@@ -92,8 +92,8 @@ re-explored.
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Per-GPU multi-process+MPS matrix (cloud) | done | (this commit) | L4 K=2->32 (GPU-bound); L40S 48@16vCPU, 64@32vCPU (ceiling); full matrix measured |
-| 2 | Production multi-process launcher + MPS | pending | — | MPS blast-radius hardening |
-| 3 | Routing layer (LB leastconn+maxconn) | pending | — | local+remote process-ports |
+| 2 | Production multi-process launcher + MPS | done (design) | (deploy commit) | deploy/launch_multiproc.sh + MPS hardening notes |
+| 3 | Routing layer (LB leastconn+maxconn) | done (design) | (deploy commit) | deploy/haproxy.cfg.example (+ ALB equiv) |
 | 4 | Per-GPU config matrix + auto-select | pending | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |
 | 5 | Finish finalize/TTFS chain | pending | — | finalize preprocessing + close/cold-reset, byte-exact |
 | 6 | Per-B manual CUDA-graphs (re-scoped) | pending | — | per-lane cheaper-call; re-rank vs multi-process |
