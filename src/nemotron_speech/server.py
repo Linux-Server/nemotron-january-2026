@@ -464,6 +464,9 @@ class ASRSession:
     scheduler_ready_since: Optional[float] = None
     scheduler_closed: bool = False
     scheduler_last_audio_monotonic: Optional[float] = None
+    scheduler_pending_barrier_event: Optional[tuple] = None
+    scheduler_pending_barrier_queue: Optional[asyncio.Queue] = None
+    scheduler_pending_barrier_drained: int = 0
 
     # Audio overlap buffer for mid-utterance reset continuity
     # This preserves the last N ms of audio to provide encoder left-context
@@ -518,6 +521,9 @@ class ASRServer:
         self.scheduler_enabled = self.continuous_context and self.scheduler_b1_requested
         self.batch_requested = os.environ.get("NEMOTRON_BATCH_SCHED", "") == "1"
         self.batch_enabled = self.batch_requested
+        self.batch_barrier_drain_requested = (
+            os.environ.get("NEMOTRON_BATCH_BARRIER_DRAIN", "") == "1"
+        )
         self.batch_fallback_reason: Optional[str] = None
         self.model_lanes_requested = _env_int("NEMOTRON_MODEL_LANES", 1)
         if self.model_lanes_requested <= 0:
@@ -1779,9 +1785,11 @@ class ASRServer:
     def _scheduler_batch_key_parallel_lane_key(self, key: tuple) -> Optional[tuple[Any, int]]:
         """Return the compatibility key for concurrent steady batches.
 
-        Only steady normal chunks may share lanes. First chunks, barrier drains,
-        finalization, and any other drop/chunk geometry use the session's pinned
-        lane exclusively after all in-flight lanes have completed.
+        Only steady normal chunks may share lanes. First chunks, legacy B=1
+        barrier drains, finalization, and any other drop/chunk geometry use the
+        session's pinned lane exclusively after all in-flight lanes have
+        completed. Flag-gated batched barrier drains enter through the normal
+        ready-batch path, so steady barrier chunks can share lanes here.
         """
         drop_extra = self._scheduler_batch_key_drop_extra(key)
         if drop_extra is None:
@@ -2841,6 +2849,7 @@ class ASRServer:
                 "scheduler_b1_started "
                 f"queue_maxsize={self.scheduler_queue_maxsize} "
                 f"batch_enabled={self.batch_enabled} "
+                f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
                 f"model_lanes={self.model_lanes} "
                 f"batch_max_wait_ms={self.batch_max_wait_ms} "
                 f"batch_max_size={self.batch_max_size}"
@@ -2928,6 +2937,13 @@ class ASRServer:
             return None
         return max(0.0, deadline - time.monotonic())
 
+    def _scheduler_batch_barrier_drain_active(self) -> bool:
+        return (
+            self.batch_barrier_drain_requested
+            and self.scheduler_enabled
+            and self.batch_enabled
+        )
+
     def _scheduler_has_queued_events(self) -> bool:
         for session in list(self.sessions.values()):
             if (
@@ -2935,6 +2951,11 @@ class ASRServer:
                 and session.id in self._scheduler_inflight_sessions
             ):
                 continue
+            if (
+                self._scheduler_batch_barrier_drain_active()
+                and session.scheduler_pending_barrier_event is not None
+            ):
+                return True
             queue = session.continuous_event_queue
             if queue is not None and not queue.empty():
                 return True
@@ -2960,6 +2981,7 @@ class ASRServer:
         logger.info(
             "scheduler_b1_loop_running "
             f"batch_enabled={self.batch_enabled} "
+            f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
             f"model_lanes={self.model_lanes} "
             f"batch_max_wait_ms={self.batch_max_wait_ms} "
             f"batch_max_size={self.batch_max_size}"
@@ -2993,6 +3015,9 @@ class ASRServer:
                     pass
 
     async def _scheduler_drain_once(self) -> bool:
+        if self._scheduler_batch_barrier_drain_active():
+            return await self._scheduler_drain_once_batched_barrier()
+
         progressed = False
         for session in list(self.sessions.values()):
             if session.id in self._scheduler_inflight_sessions:
@@ -3015,6 +3040,105 @@ class ASRServer:
             progressed = await self._scheduler_process_ready_pass() or progressed
 
         return progressed
+
+    async def _scheduler_drain_once_batched_barrier(self) -> bool:
+        progressed = False
+
+        for session in list(self.sessions.values()):
+            if session.id in self._scheduler_inflight_sessions:
+                continue
+            if session.scheduler_pending_barrier_event is None:
+                continue
+            completed = await self._scheduler_maybe_complete_pending_barrier_event(
+                session
+            )
+            progressed = completed or progressed
+
+        for session in list(self.sessions.values()):
+            if session.id in self._scheduler_inflight_sessions:
+                continue
+            if session.scheduler_pending_barrier_event is not None:
+                continue
+            queue = session.continuous_event_queue
+            if queue is None:
+                continue
+            try:
+                event = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                continue
+
+            if event[0] == "audio":
+                try:
+                    await self._scheduler_process_event(session, event)
+                finally:
+                    queue.task_done()
+                progressed = True
+                continue
+
+            task_done_now = False
+            try:
+                async with session.state_lock:
+                    self._scheduler_ready.discard(session.id)
+                    if self._scheduler_session_ready(session):
+                        session.scheduler_pending_barrier_event = event
+                        session.scheduler_pending_barrier_queue = queue
+                        session.scheduler_pending_barrier_drained = 0
+                        if session.scheduler_inflight_generation is not None:
+                            logger.debug(
+                                f"Session {session.id}: scheduler batched barrier "
+                                f"waiting for in-flight "
+                                f"gen={session.scheduler_inflight_generation} "
+                                f"reason={event[0]}"
+                            )
+                        logger.debug(
+                            f"Session {session.id}: scheduler batched barrier "
+                            f"deferred {event[0]} until ready backlog drains"
+                        )
+                        self._scheduler_mark_ready_if_ready_locked(session)
+                    else:
+                        await self._scheduler_process_event_after_barrier_locked(
+                            session,
+                            event,
+                        )
+                        task_done_now = True
+            finally:
+                if task_done_now:
+                    queue.task_done()
+            progressed = True
+
+        if self._scheduler_ready:
+            progressed = await self._scheduler_process_ready_pass() or progressed
+
+        return progressed
+
+    async def _scheduler_maybe_complete_pending_barrier_event(
+        self,
+        session: ASRSession,
+    ) -> bool:
+        async with session.state_lock:
+            event = session.scheduler_pending_barrier_event
+            if event is None:
+                return False
+
+            if self._scheduler_session_ready(session):
+                self._scheduler_mark_ready_if_ready_locked(session)
+                return False
+
+            queue = session.scheduler_pending_barrier_queue
+            drained = session.scheduler_pending_barrier_drained
+            session.scheduler_pending_barrier_event = None
+            session.scheduler_pending_barrier_queue = None
+            session.scheduler_pending_barrier_drained = 0
+            if drained:
+                logger.debug(
+                    f"Session {session.id}: scheduler_batch_barrier_drained "
+                    f"chunks={drained} before {event[0]}"
+                )
+            await self._scheduler_process_event_after_barrier_locked(session, event)
+
+        if queue is not None:
+            queue.task_done()
+        return True
 
     def _scheduler_session_ready(self, session: ASRSession) -> bool:
         if session.scheduler_closed or session.continuous_event_queue is None:
@@ -3329,6 +3453,8 @@ class ASRServer:
                     queue_wait_ms=queue_wait_ms,
                     reason=reason,
                 )
+                if session.scheduler_pending_barrier_event is not None:
+                    session.scheduler_pending_barrier_drained += 1
                 self._scheduler_mark_ready_if_ready_locked(session)
                 progressed = True
 
@@ -3533,6 +3659,8 @@ class ASRServer:
                         queue_wait_ms=queue_wait_ms,
                         reason=f"{reason}:lane{lane_id}",
                     )
+                    if session.scheduler_pending_barrier_event is not None:
+                        session.scheduler_pending_barrier_drained += 1
                     ready_requeue_sessions.append(session)
                     progressed = True
 
@@ -3773,6 +3901,60 @@ class ASRServer:
         )
         return session.scheduler_generation
 
+    async def _scheduler_dispatch_event_locked(
+        self,
+        session: ASRSession,
+        event: tuple,
+    ) -> None:
+        event_type = event[0]
+        if event_type == "close":
+            await self._scheduler_continuous_handle_close_locked(session)
+        elif event_type == "audio":
+            await self._scheduler_continuous_handle_audio_locked(session, event[1])
+        elif event_type == "vad_start":
+            await self._scheduler_continuous_handle_vad_start_locked(session)
+        elif event_type == "vad_stop":
+            await self._scheduler_continuous_handle_vad_stop_locked(session)
+        elif event_type == "reset":
+            await self._scheduler_continuous_handle_reset_locked(
+                session,
+                finalize=event[1],
+                msg_type=event[2],
+            )
+        elif event_type == "debounce_expired":
+            await self._scheduler_continuous_handle_debounce_expired_locked(
+                session,
+                stop_seq=event[1],
+            )
+        else:
+            logger.warning(
+                f"Session {session.id}: unknown scheduler event {event_type}"
+            )
+
+    async def _scheduler_process_event_after_barrier_locked(
+        self,
+        session: ASRSession,
+        event: tuple,
+    ) -> None:
+        event_type = event[0]
+        close_future = event[1] if event_type == "close" and len(event) > 1 else None
+        try:
+            await self._scheduler_dispatch_event_locked(session, event)
+        except Exception as e:
+            logger.error(f"Session {session.id} scheduler worker error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            try:
+                await session.websocket.send_str(json.dumps({
+                    "type": "error",
+                    "message": str(e)
+                }))
+            except Exception:
+                pass
+        finally:
+            if close_future is not None and not close_future.done():
+                close_future.set_result(True)
+
     async def _scheduler_process_event(self, session: ASRSession, event: tuple) -> None:
         event_type = event[0]
         close_future = event[1] if event_type == "close" and len(event) > 1 else None
@@ -3784,30 +3966,7 @@ class ASRServer:
                         session,
                         reason=event_type,
                     )
-
-                if event_type == "close":
-                    await self._scheduler_continuous_handle_close_locked(session)
-                elif event_type == "audio":
-                    await self._scheduler_continuous_handle_audio_locked(session, event[1])
-                elif event_type == "vad_start":
-                    await self._scheduler_continuous_handle_vad_start_locked(session)
-                elif event_type == "vad_stop":
-                    await self._scheduler_continuous_handle_vad_stop_locked(session)
-                elif event_type == "reset":
-                    await self._scheduler_continuous_handle_reset_locked(
-                        session,
-                        finalize=event[1],
-                        msg_type=event[2],
-                    )
-                elif event_type == "debounce_expired":
-                    await self._scheduler_continuous_handle_debounce_expired_locked(
-                        session,
-                        stop_seq=event[1],
-                    )
-                else:
-                    logger.warning(
-                        f"Session {session.id}: unknown scheduler event {event_type}"
-                    )
+                await self._scheduler_dispatch_event_locked(session, event)
         except Exception as e:
             logger.error(f"Session {session.id} scheduler worker error: {e}")
             import traceback

@@ -234,6 +234,7 @@ async def run_level(
     vad_lead_ms: int,
     start_delay_ms: int,
     final_timeout_s: float,
+    include_interims: bool,
 ) -> dict[str, Any]:
     selected = [clone_stream(s) for s in streams[:n]]
     chunk_bytes = int(SAMPLE_RATE * chunk_ms / 1000) * 2
@@ -361,7 +362,10 @@ async def run_level(
     )
     return {
         "summary": summary,
-        "results": [stream_json(s) for s in selected],
+        "results": [
+            stream_json(s, include_interims=include_interims)
+            for s in selected
+        ],
     }
 
 
@@ -410,8 +414,8 @@ def summarize_level(streams: list[Stream], chunk_ms: int) -> dict[str, Any]:
     }
 
 
-def stream_json(s: Stream) -> dict[str, Any]:
-    return {
+def stream_json(s: Stream, *, include_interims: bool = False) -> dict[str, Any]:
+    record = {
         "stream_id": s.stream_id,
         "sample_id": s.sample_id,
         "audio_path": s.audio_path,
@@ -430,6 +434,9 @@ def stream_json(s: Stream) -> dict[str, Any]:
         "error": s.error,
         "tag_leak": s.tag_leak,
     }
+    if include_interims:
+        record["interims"] = s.interims
+    return record
 
 
 async def main_async(args: argparse.Namespace) -> None:
@@ -468,6 +475,7 @@ async def main_async(args: argparse.Namespace) -> None:
             vad_lead_ms=args.vad_lead_ms,
             start_delay_ms=args.start_delay_ms,
             final_timeout_s=args.final_timeout_s,
+            include_interims=args.include_interims,
         )
         output["summaries"][str(n)] = level["summary"]
         output["levels"][str(n)] = level["results"]
@@ -501,6 +509,7 @@ def main() -> None:
     ap.add_argument("--start-delay-ms", type=int, default=1000)
     ap.add_argument("--final-timeout-s", type=float, default=60.0)
     ap.add_argument("--pause-s", type=float, default=1.0)
+    ap.add_argument("--include-interims", action="store_true")
     ap.add_argument(
         "--output",
         default=str(REPO_ROOT / "proj-2026-05-21-0410" / "inphase-loadgen-results.json"),
