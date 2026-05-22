@@ -11,6 +11,9 @@ batching, so we capture a graph **per batch size B = 1…K** (no padding), repla
 eager for B>K and all non-steady buckets. This is the cloud lever (B=1 lifts the ~5 knee where batches don't
 form) **and** the self-host lever (small-B graphs compound with batching; avg B≈4 at the N=56 knee, so the
 realtime range is exactly where graphs help most). Flag-gated, default off, fail-closed, English-first.
+Deployment target is **AWS SageMaker** (likely **L40/L40S**, Ada), not Modal — Modal is only the benchmark
+proxy, and since the knee is single-thread-CPU-bound the production knee must be validated on the target
+instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 
 ## Reference implementations
 - `proj-2026-05-21-0410/probe_manual_cudagraph.py` — the validated static-buffer record/replay (`ManualCudaGraphEncoder`)
@@ -92,11 +95,16 @@ realtime range is exactly where graphs help most). Flag-gated, default off, fail
   Record avg B at the knee + the per-B engagement mix.
   Key files: `proj-2026-05-21-1959-cudagraph/local-knee.md`
 
-- [ ] **6. Cloud knee test (T4 + L4) — the deliverable torch.compile couldn't run.**
+- [ ] **6. Cloud knee test on Modal (L4 + L40S, Ada) — the deliverable torch.compile couldn't run.**
   Deploy with manual capture; CONFIRM it engages at startup (~250 ms × K, no inductor hang — the Step-10b
-  failure mode must be gone), smoke for correctness, then sweep T4/L4 and compare to the batch=1 baseline (~5).
-  Does the cheaper call lift the cloud knee where batching couldn't? Billable, cost-conscious (smoke first, stop
-  apps immediately, T4+L4 only). Write into `proj-2026-05-20-modal-cost/RESULTS.md` (Step 10c).
+  failure mode must be gone), smoke for correctness, then sweep and compare to the batch=1 baseline. Use **L4
+  and L40S** (both Ada sm_89 — capturability transfers; **T4 dropped**, production targets higher-end). Does the
+  cheaper call lift the knee? Billable, cost-conscious (smoke first, stop apps immediately).
+  **CAVEAT — Modal is a launch-bound *proxy*, not the deploy target.** Production is **AWS SageMaker** (likely
+  L40/L40S); the knee is single-thread-CPU-bound and SageMaker's dedicated vCPUs differ from Modal's allocation,
+  so the production knee MUST be re-measured on the actual SageMaker instance before sign-off (and the Modal
+  "batching doesn't help" conclusion may not hold there).
+  Write into `proj-2026-05-20-modal-cost/RESULTS.md` (Step 10c).
   Key files: `src/nemotron_speech/modal/asr_bench_modal.py`, `proj-2026-05-20-modal-cost/RESULTS.md`
 
 ## Progress
@@ -107,4 +115,4 @@ realtime range is exactly where graphs help most). Flag-gated, default off, fail
 | 3 | Wire into scheduler's batched call | pending | — | **finalize after (b) lands**; lanes+graphs compose |
 | 4 | Local byte-exact gate at scale | pending | — | hard gate: graph-on==graph-off, FORK_ASSERT |
 | 5 | Local knee measurement | pending | — | first measured payoff (56→?) |
-| 6 | Cloud knee test (T4+L4) | pending | — | the torch.compile-couldn't-run deliverable |
+| 6 | Cloud knee test on Modal (L4+L40S) | pending | — | torch.compile-couldn't-run; Modal=proxy, validate on SageMaker target |
