@@ -200,7 +200,7 @@ PRODUCT decision, not infra):**
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Telemetry + REPRODUCIBILITY gate | DONE — gate=STOP | (step1) | server finalize ~39ms p95 (encoder ~35), reproducible; client P95 is network-bound, NOT server compute -> graph won't close the frontier gap. Instrumentation ships (default-off). finalize-telemetry.md |
+| 1 | Telemetry + REPRODUCIBILITY gate | DONE — gate=STOP | 5f919ec | server finalize ~39ms p95 (encoder ~35), reproducible; client P95 is network-bound, NOT server compute -> graph won't close the frontier gap. Instrumentation ships (default-off). finalize-telemetry.md |
 | 2-7 | Probe/manager/wire/cloud-retest/preproc/batch-config | NOT PURSUED | — | Step-1 business-payoff gate not met (a graph moves client P95 ~20ms, not the ~100ms needed). Pivot = network/multi-region (server is already fast). Revisit only if a multi-process finalize-contention problem surfaces |
 
 ## Review log
