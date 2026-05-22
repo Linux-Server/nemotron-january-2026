@@ -46,6 +46,30 @@ Reproducible: model_wall p95 firstHalf 39.4 / secondHalf 39.0. (B,T): all **B=1,
   already removes the dominant MPS bifurcation → low value. Revisit ONLY if a multi-process finalize-contention
   problem ever surfaces.
 
+## CORRECTION (multi-process+MPS gate, step1b) — the single-process gate measured the WRONG regime
+The single-process gate above said "server fast ~40ms, client gap must be network" — but production is K-proc+MPS,
+and the WAN bench was also single-process. Re-measured under **K=4 + MPS** (L40S, 2089 finals, conc 10+16/proc,
+`step1b_repro_gate_multiproc.sh`, BATCH_FINALIZE OFF):
+
+| component | p50 | p95 | max |
+|---|--:|--:|--:|
+| model_wall (GPU) | 36.4 | 40.4 | 61 |  (encoder 36.0 p95 — UNCHANGED vs single-proc; does NOT bifurcate under MPS) |
+| **lock_wait** | 65.7 | **94.6** | **393** |
+| **queue_wait** | 0.14 | **99.6** | 226 |
+| fork_clone / preproc / sync | ~1 / 2.4 / 0.1 | ~4 / 3 / 0.1 | — |
+
+Total server-side finalize span (loadgen TTFS): **226–496 ms p95 @ 40/box, 533–701 ms @ 64/box** (vs ~66 ms
+single-proc) — while the GPU stayed ~40 ms. **The tail is HOST-SIDE serialization** (lock_wait + queue_wait: a
+finalize waiting behind steady inference on the per-process inference lock + scheduler queue under parallel
+finalize), NOT GPU, NOT network. Confirms the user's "parallel-finalize host variation" hypothesis + Codex's
+"serialized finalize host envelope" (`finalize-python-tail-analysis.md`).
+
+**REVISED VERDICT:** drop the GPU finalize graph (encoder is fine ~40ms, stable under MPS). **PIVOT to the
+host/Python path.** The gate ran with `NEMOTRON_BATCH_FINALIZE` OFF → the global-exclusive serial finalize path
+(the worst case). **Cheapest first test: turn `NEMOTRON_BATCH_FINALIZE` (+`_PREPROC`) ON** (existing byte-exact
+flag → pinned-lane finalize, no global lock) and re-measure the lock/queue tail. Then the deeper Python fixes
+(de-dup the decoder-state clone, parallelize finalize, buffer reuse — Codex's ranked list).
+
 ## Value of the probe (why this is a success, not a failure)
 The probe-first plan (gate Steps 1–2 before building Steps 3–7) + the **reproducibility gate added in review R5**
 caught this for ~1 instrumentation pass + ~1 cloud run (~30 min, ~$2) — instead of building a 7-step finalize-graph

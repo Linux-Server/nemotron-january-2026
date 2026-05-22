@@ -99,11 +99,16 @@ PRODUCT decision, not infra):**
 
 ## Steps
 
-> **GATE OUTCOME (2026-05-22): STOP at the probe.** Step-1 on-box telemetry: server finalize is **~39 ms p95**
-> (encoder ~35, reproducible), NOT the ~178 ms client attribution — the client P95 gap is **network/client-side
-> WAN tail**, not server compute. A finalize graph would move the client P95 by only ~20 ms, not the ~100 ms to
-> the frontier. Business-payoff gate NOT met → **Steps 2–7 NOT pursued.** See `finalize-telemetry.md`. The
-> instrumentation (`NEMOTRON_FINALIZE_PROFILE`, default-off) ships as reusable profiling.
+> **GATE OUTCOME (2026-05-22, revised after the multi-process+MPS re-run): DROP the GPU finalize graph (Steps
+> 2–7); PIVOT to the host/Python path.** Single-proc gate first said "server fast ~39 ms → gap is network" (WRONG
+> regime). The **K=4 + MPS** gate (production regime, 2089 finals) shows the GPU finalize is still ~40 ms p95
+> (stable — does NOT bifurcate), but the finalize **TAIL is host-side serialization**: lock_wait p95 95 (max 393)
+> + queue_wait p95 100 — a finalize waiting behind steady inference on the per-process lock + scheduler queue under
+> parallel finalize; total server-side span 226–701 ms p95. So the GPU graph is the WRONG lever → NOT built. **PIVOT:
+> (1) turn ON the existing `NEMOTRON_BATCH_FINALIZE`(+`_PREPROC`) — pinned-lane finalize, avoids the global-exclusive
+> serial path the gate ran WITHOUT; (2) Python fixes — de-dup the decoder-state clone, parallelize finalize, buffer
+> reuse (`finalize-python-tail-analysis.md`).** Instrumentation (`NEMOTRON_FINALIZE_PROFILE`, default-off) ships.
+> See `finalize-telemetry.md`. Confirms the user's parallel-finalize-host-variation hypothesis.
 
 - [x] **1. Finalize-tail telemetry + (B,T) histogram + BATCH_FINALIZE profiling (NO hard gate here).**
   `NEMOTRON_FINALIZE_PROFILE=1` (default-off, non-invasive). Per-final records `{finalize_wall, queue_wait,
