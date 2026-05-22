@@ -1,0 +1,61 @@
+<task>
+PROTOTYPE — round 3 (src/nemotron_speech/server.py, flag-gated default OFF, LOCAL, NO commits): attack the
+serial finalize/fork STORM — the NEW in-phase limiter exposed by round 2. Round 2 (round2-barrier-drain.md)
+batched the vad_stop barrier-drain byte-exactly: in-phase N=120 now passes (~207 ms TTFS p95), but N=130+ still
+fails because, when N streams send vad_stop ~simultaneously (in-phase), the N fork-flush finalize calls run
+SERIALLY (B=1, lane-exclusive). Verdict quote: "the next limiter is the remaining serial final/fork/reset work
+under the aligned finalization storm." Build on round 2 (NEMOTRON_BATCH_BARRIER_DRAIN is committed).
+
+TWO complementary fixes from the round-1 analysis (A2 + A3); implement under NEMOTRON_BATCH_FINALIZE (default 0,
+engages only with scheduler + batching on):
+- A2 — route final/fork work to the session's PINNED lane (lanes use per-lane model replicas), blocking only
+  that lane, NOT all lanes via `_scheduler_exclusive_model_path` (~server.py:4785-4808). Keep same-session
+  in-flight exclusion. This alone lets other lanes keep serving steady traffic during a finalize.
+- A3 — BATCH concurrent finalize forks: group simultaneous forks built by `_build_continuous_finalize_fork`
+  (~4581-4631) by (target_lang, keep_all_outputs=True, drop_extra, final chunk_T, decoder mode, decoder-state
+  freshness) and run them through the batched stack/scatter path (mirror `_process_ready_batch`, batch_primitives)
+  instead of N serial B=1 `_process_final_chunk` calls (~5657-5757).
+You may implement A2 first and add A3 if A2 alone doesn't lift the in-phase knee past ~120 — your call; document
+which you shipped and why.
+
+GATES (byte-exact is non-negotiable — the finalize path + final deltas + deep-cloned RNNT state are the hazards):
+1. BYTE-EXACT: per-stream final transcript + full final-delta list + full interim sequence + no-duplicate-final,
+   byte-IDENTICAL to NEMOTRON_BATCH_FINALIZE=0, IN-PHASE, fixed clip set. Variable final-T grouping + fork state
+   isolation are exactly where this breaks — gate hard, print every mismatch, any diff = NO-GO (diagnose).
+2. DEFAULT-OFF identity (flag off = round-2 behavior).
+3. FORK_ASSERT=1 clean across in-phase N=120/130/140/150.
+4. THROUGHPUT/TTFS: in-phase sweep N=120/130/140/150 with NEMOTRON_BATCH_BARRIER_DRAIN=1 ALSO on (round 2 is the
+   prerequisite), flag on vs off. Report finalize TTFS p95, the serial-final count (expect it to collapse), avg
+   effective B in the finalize region, and the in-phase knee. Round 2 reached ~120; target pushing toward ~150-180
+   (the forced-batch ceiling regime, ~184 at B=32 per max-parallelism-sweep).
+
+Use proj-2026-05-21-0410/inphase_loadgen.py --include-interims. LOCAL (RTX 5090). Write
+proj-2026-05-21-inference-opt/round3-finalize-storm.md. No cloud, no commits, no unrelated refactors.
+</task>
+
+<context>
+Round 3 of the ambitious deep-dive, building directly on the committed round-2 barrier-drain. The orchestrator is
+concurrently measuring g6e lane scaling + about to run an fp16 probe (cloud, different machine — no conflict with
+your local server.py edit). This finalize-storm path is the identified next in-phase limiter; the forced-batch
+ceiling (~184 at B=32) is the headroom we're trying to unlock in-phase. Read round2-barrier-drain.md,
+round1-analysis.md (A2/A3), and the finalize/fork code.
+</context>
+
+<verification_loop>
+Byte-exact in-phase finals (on==off, incl. final deltas + interims) is the hard gate — finalize batching with
+variable T and forked RNNT state is the highest-risk change in this whole effort. If ANY final differs, diagnose
+(T grouping? fork isolation? decoder-state freshness? scatter?) before reporting. Confirm default-off no-op.
+FORK_ASSERT on. Then quantify the in-phase TTFS/knee vs round 2's ~120.
+</verification_loop>
+
+<action_safety>
+Modify ONLY src/nemotron_speech/server.py (+ test/doc). Flag-gated, default off = round-2 behavior. No NeMo edits,
+no cloud, no commits. Kill servers + free the local GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report: which of A2/A3 shipped + why; the finalize design + byte-exact correctness argument; byte-exact in-phase
+result (on==off, any diffs); default-off identity; FORK_ASSERT; on/off in-phase numbers (serial-final count, avg
+effective B in finalize, TTFS p95, knee at N=120/130/140/150); VERDICT on lifting the knee past 120; written doc;
+cleanup.
+</compact_output_contract>

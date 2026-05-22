@@ -484,6 +484,33 @@ class SchedulerBatchRow:
     eou_probe_snapshot: Optional[dict[str, Any]]
 
 
+@dataclass
+class SchedulerFinalizeEvent:
+    session: ASRSession
+    event: tuple
+    queue: asyncio.Queue
+
+
+@dataclass
+class SchedulerFinalizeItem:
+    session: ASRSession
+    reason: str
+    expected_generation: int
+    timing: dict[str, Any]
+    parent_snapshot: Optional[dict[str, Any]]
+    fork: Optional[ASRSession]
+    final_text: str
+    should_flush: bool
+    fork_clone_ms: float = 0.0
+
+
+@dataclass
+class SchedulerFinalizeBatchRow:
+    item: SchedulerFinalizeItem
+    chunk_mel: torch.Tensor
+    drop_extra: int
+
+
 class ASRServer:
     """WebSocket server for streaming ASR with true incremental processing."""
 
@@ -523,6 +550,9 @@ class ASRServer:
         self.batch_enabled = self.batch_requested
         self.batch_barrier_drain_requested = (
             os.environ.get("NEMOTRON_BATCH_BARRIER_DRAIN", "") == "1"
+        )
+        self.batch_finalize_requested = (
+            os.environ.get("NEMOTRON_BATCH_FINALIZE", "") == "1"
         )
         self.batch_fallback_reason: Optional[str] = None
         self.model_lanes_requested = _env_int("NEMOTRON_MODEL_LANES", 1)
@@ -620,6 +650,11 @@ class ASRServer:
         self._scheduler_batch_queue_wait_count = 0
         self._scheduler_batches = 0
         self._scheduler_chunks = 0
+        self._scheduler_finalize_batches = 0
+        self._scheduler_finalize_rows = 0
+        self._scheduler_finalize_batch_size_hist: dict[int, int] = {}
+        self._scheduler_finalize_serial_fallback_calls = 0
+        self._scheduler_finalize_fallback_counts: dict[str, int] = {}
         self._scheduler_lane_wait_ms_total = 0.0
         self._scheduler_lane_wait_ms_max = 0.0
         self._scheduler_model_lane_executors: list[concurrent.futures.ThreadPoolExecutor] = []
@@ -1425,6 +1460,8 @@ class ASRServer:
             f"scheduler_enabled={self.scheduler_enabled} "
             f"batch_requested={self.batch_requested} "
             f"batch_enabled={self.batch_enabled} "
+            f"batch_finalize_requested={self.batch_finalize_requested} "
+            f"batch_finalize={self._scheduler_batch_finalize_active()} "
             f"batch_fallback_reason={self.batch_fallback_reason or 'none'} "
             f"decoder_strategy={self.decoder_strategy} "
             f"encoder_compile_enabled={self.encoder_compile_enabled} "
@@ -2850,6 +2887,7 @@ class ASRServer:
                 f"queue_maxsize={self.scheduler_queue_maxsize} "
                 f"batch_enabled={self.batch_enabled} "
                 f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
+                f"batch_finalize={self._scheduler_batch_finalize_active()} "
                 f"model_lanes={self.model_lanes} "
                 f"batch_max_wait_ms={self.batch_max_wait_ms} "
                 f"batch_max_size={self.batch_max_size}"
@@ -2944,6 +2982,13 @@ class ASRServer:
             and self.batch_enabled
         )
 
+    def _scheduler_batch_finalize_active(self) -> bool:
+        return (
+            self.batch_finalize_requested
+            and self.scheduler_enabled
+            and self.batch_enabled
+        )
+
     def _scheduler_has_queued_events(self) -> bool:
         for session in list(self.sessions.values()):
             if (
@@ -2982,6 +3027,7 @@ class ASRServer:
             "scheduler_b1_loop_running "
             f"batch_enabled={self.batch_enabled} "
             f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
+            f"batch_finalize={self._scheduler_batch_finalize_active()} "
             f"model_lanes={self.model_lanes} "
             f"batch_max_wait_ms={self.batch_max_wait_ms} "
             f"batch_max_size={self.batch_max_size}"
@@ -3019,6 +3065,7 @@ class ASRServer:
             return await self._scheduler_drain_once_batched_barrier()
 
         progressed = False
+        finalize_events: list[SchedulerFinalizeEvent] = []
         for session in list(self.sessions.values()):
             if session.id in self._scheduler_inflight_sessions:
                 continue
@@ -3030,11 +3077,24 @@ class ASRServer:
             except asyncio.QueueEmpty:
                 continue
 
+            finalize_event = self._scheduler_finalize_event_if_batchable(
+                session,
+                event,
+                queue,
+            )
+            if finalize_event is not None:
+                finalize_events.append(finalize_event)
+                progressed = True
+                continue
+
             try:
                 await self._scheduler_process_event(session, event)
             finally:
                 queue.task_done()
             progressed = True
+
+        if finalize_events:
+            await self._scheduler_process_finalize_event_batch(finalize_events)
 
         if self._scheduler_ready:
             progressed = await self._scheduler_process_ready_pass() or progressed
@@ -3043,6 +3103,7 @@ class ASRServer:
 
     async def _scheduler_drain_once_batched_barrier(self) -> bool:
         progressed = False
+        finalize_events: list[SchedulerFinalizeEvent] = []
 
         for session in list(self.sessions.values()):
             if session.id in self._scheduler_inflight_sessions:
@@ -3072,6 +3133,16 @@ class ASRServer:
                     await self._scheduler_process_event(session, event)
                 finally:
                     queue.task_done()
+                progressed = True
+                continue
+
+            finalize_event = self._scheduler_finalize_event_if_batchable(
+                session,
+                event,
+                queue,
+            )
+            if finalize_event is not None:
+                finalize_events.append(finalize_event)
                 progressed = True
                 continue
 
@@ -3106,6 +3177,9 @@ class ASRServer:
                     queue.task_done()
             progressed = True
 
+        if finalize_events:
+            await self._scheduler_process_finalize_event_batch(finalize_events)
+
         if self._scheduler_ready:
             progressed = await self._scheduler_process_ready_pass() or progressed
 
@@ -3139,6 +3213,79 @@ class ASRServer:
         if queue is not None:
             queue.task_done()
         return True
+
+    def _scheduler_finalize_event_if_batchable(
+        self,
+        session: ASRSession,
+        event: tuple,
+        queue: asyncio.Queue,
+    ) -> Optional[SchedulerFinalizeEvent]:
+        if not self._scheduler_batch_finalize_active():
+            return None
+        if not event or event[0] != "debounce_expired":
+            return None
+        return SchedulerFinalizeEvent(session=session, event=event, queue=queue)
+
+    async def _scheduler_process_finalize_event_batch(
+        self,
+        events: list[SchedulerFinalizeEvent],
+    ) -> None:
+        if not events:
+            return
+        try:
+            items: list[SchedulerFinalizeItem] = []
+            async with contextlib.AsyncExitStack() as stack:
+                for finalize_event in sorted(events, key=lambda item: item.session.id):
+                    await stack.enter_async_context(finalize_event.session.state_lock)
+
+                for finalize_event in events:
+                    session = finalize_event.session
+                    event = finalize_event.event
+                    stop_seq = event[1] if len(event) > 1 else None
+                    if (
+                        session.continuous_state != PENDING_FINALIZE
+                        or stop_seq != session.continuous_stop_seq
+                    ):
+                        logger.debug(
+                            f"Session {session.id}: ignored stale batched debounce expiry "
+                            f"seq={stop_seq} current={session.continuous_stop_seq} "
+                            f"state={session.continuous_state}"
+                        )
+                        continue
+
+                    session.continuous_debounce_task = None
+                    reset_seen = session.continuous_reset_seen
+                    session.continuous_reset_seen = False
+                    session.continuous_state = FINALIZED
+                    session.continuous_debounce_expiry_ts = time.time()
+                    logger.debug(
+                        f"Session {session.id}: debounce expired seq={stop_seq}; "
+                        f"batched finalizing (reset_seen={reset_seen})"
+                    )
+                    reason = "reset_then_debounce" if reset_seen else "debounce_expired"
+                    expected_generation = self._scheduler_invalidate_session_locked(
+                        session,
+                        reason=reason,
+                    )
+                    items.append(
+                        self._continuous_prepare_finalize_item_locked(
+                            session,
+                            reason=reason,
+                            expected_generation=expected_generation,
+                        )
+                    )
+
+                if items:
+                    await self._continuous_flush_finalize_items_locked(items)
+                    for item in items:
+                        await self._continuous_emit_prepared_finalize_locked(item)
+                        self._continuous_finish_speculative_finalize_locked(
+                            item.session,
+                            reason=item.reason,
+                        )
+        finally:
+            for finalize_event in events:
+                finalize_event.queue.task_done()
 
     def _scheduler_session_ready(self, session: ASRSession) -> bool:
         if session.scheduler_closed or session.continuous_event_queue is None:
@@ -4879,6 +5026,585 @@ class ASRServer:
             f"total_audio_samples={session.total_audio_samples}"
         )
 
+    def _continuous_finalize_timing(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "reason": reason,
+            "vad_stop": session.continuous_vad_stop_ts,
+            "debounce_expiry": session.continuous_debounce_expiry_ts,
+            "fork_flush_start": None,
+            "fork_flush_done": None,
+            "final_sent": None,
+            "inference_lock_acquire_wait_ms": None,
+        }
+
+    def _continuous_prepare_finalize_item_locked(
+        self,
+        session: ASRSession,
+        *,
+        reason: str,
+        expected_generation: int,
+    ) -> SchedulerFinalizeItem:
+        audio_samples = session.total_audio_samples
+        audio_duration_ms = (audio_samples * 1000) // self.sample_rate
+        pending_len = len(session.pending_audio) if session.pending_audio is not None else 0
+        held_len = len(session.continuous_post_stop_audio) // 2
+        timing = self._continuous_finalize_timing(session, reason=reason)
+        logger.debug(
+            f"Session {session.id} continuous finalize ({reason}): "
+            f"audio={audio_samples} samples ({audio_duration_ms}ms), "
+            f"pending={pending_len} samples, held_post_stop={held_len} samples, "
+            f"emitted={session.emitted_frames} frames"
+        )
+
+        final_text = session.current_text
+        should_flush = (
+            session.total_audio_samples > 0
+            or (session.pending_audio is not None and len(session.pending_audio) > 0)
+        )
+        parent_snapshot = None
+        fork = None
+        fork_clone_ms = 0.0
+        if should_flush:
+            timing["fork_flush_start"] = time.time()
+            parent_snapshot = (
+                self._snapshot_fork_assert_parent(session)
+                if self.fork_assert_enabled
+                else None
+            )
+            fork_clone_start = time.perf_counter()
+            fork = self._build_continuous_finalize_fork(session)
+            fork_clone_ms = (time.perf_counter() - fork_clone_start) * 1000
+            if self.scheduler_enabled:
+                logger.info(
+                    f"Session {session.id}: scheduler_b1 fork_clone_ms="
+                    f"{fork_clone_ms:.2f} reason={reason}"
+                )
+
+        return SchedulerFinalizeItem(
+            session=session,
+            reason=reason,
+            expected_generation=expected_generation,
+            timing=timing,
+            parent_snapshot=parent_snapshot,
+            fork=fork,
+            final_text=final_text,
+            should_flush=should_flush,
+            fork_clone_ms=fork_clone_ms,
+        )
+
+    @contextlib.asynccontextmanager
+    async def _scheduler_pinned_model_lane_path(
+        self,
+        sessions: list[ASRSession],
+        *,
+        reason: str,
+    ):
+        if self.model_lanes <= 1:
+            yield 0
+            return
+
+        if not sessions:
+            yield 0
+            return
+
+        lane_ids = {
+            self._scheduler_assign_session_model_lane(session)
+            for session in sessions
+        }
+        if len(lane_ids) != 1:
+            raise RuntimeError(
+                "pinned model lane finalize batch received mixed lanes: "
+                f"{sorted(lane_ids)}"
+            )
+        lane_id = next(iter(lane_ids))
+        session_ids = {session.id for session in sessions}
+        condition = self._scheduler_model_lane_condition_obj()
+        async with condition:
+            while (
+                self._scheduler_model_lane_exclusive_active
+                or lane_id not in self._scheduler_available_model_lanes
+                or any(
+                    session_id in self._scheduler_inflight_sessions
+                    for session_id in session_ids
+                )
+            ):
+                await condition.wait()
+            self._scheduler_available_model_lanes.remove(lane_id)
+            self._scheduler_inflight_sessions.update(session_ids)
+        try:
+            logger.debug(
+                f"scheduler_finalize_pinned_lane_acquired lane={lane_id} "
+                f"sessions={','.join(sorted(session_ids))} reason={reason}"
+            )
+            yield lane_id
+        finally:
+            async with condition:
+                self._scheduler_available_model_lanes.add(lane_id)
+                self._scheduler_inflight_sessions.difference_update(session_ids)
+                if not self._scheduler_inflight_model_lane_tasks:
+                    self._scheduler_model_lane_active_key = None
+                condition.notify_all()
+            self._wake_scheduler()
+
+    async def _continuous_flush_finalize_items_locked(
+        self,
+        items: list[SchedulerFinalizeItem],
+    ) -> None:
+        flush_items = [
+            item
+            for item in items
+            if (
+                item.fork is not None
+                and item.fork.pending_audio is not None
+                and len(item.fork.pending_audio) > 0
+            )
+        ]
+        if not flush_items:
+            return
+
+        lock_wait_start = time.perf_counter()
+        if self.model_lanes > 1 and self._scheduler_batch_finalize_active():
+            by_lane: dict[int, list[SchedulerFinalizeItem]] = {}
+            for item in flush_items:
+                lane_id = self._scheduler_assign_session_model_lane(item.session)
+                by_lane.setdefault(lane_id, []).append(item)
+
+            for lane_id, lane_items in sorted(by_lane.items()):
+                async with self._scheduler_pinned_model_lane_path(
+                    [item.session for item in lane_items],
+                    reason="finalize_batch",
+                ) as reserved_lane_id:
+                    wait_ms = (time.perf_counter() - lock_wait_start) * 1000
+                    for item in lane_items:
+                        item.timing["inference_lock_acquire_wait_ms"] = wait_ms
+                    texts = await self._run_scheduler_model_lane_call(
+                        reserved_lane_id,
+                        self._process_final_fork_groups,
+                        lane_items,
+                    )
+                    for item in lane_items:
+                        text = texts.get(item.session.id)
+                        if text is not None:
+                            item.final_text = text
+        else:
+            async with self.inference_lock:
+                wait_ms = (time.perf_counter() - lock_wait_start) * 1000
+                for item in flush_items:
+                    item.timing["inference_lock_acquire_wait_ms"] = wait_ms
+                texts = await self._run_inference_call(
+                    self._process_final_fork_groups,
+                    flush_items,
+                )
+                for item in flush_items:
+                    text = texts.get(item.session.id)
+                    if text is not None:
+                        item.final_text = text
+
+        for item in items:
+            if item.parent_snapshot is not None:
+                self._assert_fork_flush_parent_unchanged(
+                    item.session,
+                    item.parent_snapshot,
+                )
+            if item.should_flush:
+                item.timing["fork_flush_done"] = time.time()
+                logger.debug(
+                    f"Session {item.session.id} continuous fork final chunk processed in "
+                    f"{(item.timing['fork_flush_done'] - item.timing['fork_flush_start']) * 1000:.1f}ms: "
+                    f"'{item.final_text[-50:] if len(item.final_text) > 50 else item.final_text}'"
+                )
+
+    async def _continuous_emit_prepared_finalize_locked(
+        self,
+        item: SchedulerFinalizeItem,
+    ) -> None:
+        session = item.session
+        final_text = item.final_text
+        timing = item.timing
+        reason = item.reason
+        expected_generation = item.expected_generation
+
+        if not final_text.startswith(session.committed_text):
+            logger.debug(
+                f"Session {session.id}: continuous ASR correction detected, "
+                f"committed='{session.committed_text[-30:]}', "
+                f"new='{final_text[-30:]}'"
+            )
+        delta_text = _continuous_append_only_delta(
+            final_text,
+            session.continuous_emitted_text,
+        )
+
+        if expected_generation != session.scheduler_generation:
+            logger.debug(
+                f"Session {session.id}: suppressed stale continuous final "
+                f"reason={reason} expected_gen={expected_generation} "
+                f"current_gen={session.scheduler_generation}"
+            )
+            return
+
+        session.committed_text = final_text
+        session.last_emitted_text = final_text
+
+        if delta_text:
+            timing["final_sent"] = time.time()
+            sent = await self._send_json_locked(
+                session,
+                {
+                    "type": "transcript",
+                    "text": delta_text,
+                    "is_final": True,
+                    "finalize": True,
+                    "finalize_timing": timing,
+                },
+                tolerate_closed=(
+                    reason == "close" or getattr(session.websocket, "closed", False)
+                ),
+                description="continuous final transcript",
+            )
+            if sent:
+                session.continuous_emitted_text = (
+                    session.continuous_emitted_text + " " + delta_text
+                ).strip()
+                logger.debug(
+                    f"Session {session.id} continuous final: delta='{delta_text}' "
+                    f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}', "
+                    f"collector='{session.continuous_emitted_text[-50:]}')"
+                )
+        else:
+            logger.debug(
+                f"Session {session.id}: suppressed empty/duplicate continuous final "
+                f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}', "
+                f"collector='{session.continuous_emitted_text[-50:]}')"
+            )
+
+    def _prepare_final_fork_batch_row(
+        self,
+        item: SchedulerFinalizeItem,
+    ) -> Optional[SchedulerFinalizeBatchRow]:
+        session = item.fork
+        if session is None or session.pending_audio is None or len(session.pending_audio) == 0:
+            return None
+
+        padded_total_samples = (
+            session.emitted_frames * self.hop_samples + len(session.pending_audio)
+        )
+        total_mel_frames = (padded_total_samples // self.hop_samples) + 1
+        remaining_frames = total_mel_frames - session.emitted_frames
+
+        logger.debug(
+            f"Session {session.id} final chunk: "
+            f"total_mel={total_mel_frames}, emitted={session.emitted_frames}, "
+            f"remaining={remaining_frames}"
+        )
+
+        if remaining_frames <= 0:
+            logger.warning(f"Session {session.id}: No remaining frames to process!")
+            return None
+
+        pending = session.pending_audio
+        raw_ring = session.raw_audio_ring
+        new_mels: list[torch.Tensor] = []
+        frames_collected = 0
+        while frames_collected < remaining_frames:
+            frames_this_call = min(self.shift_frames, remaining_frames - frames_collected)
+            needed_new_samples = min(
+                len(pending),
+                self.preprocess_new_audio_samples,
+            )
+            new_audio = pending[:needed_new_samples]
+            fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+                raw_ring,
+                new_audio,
+            )
+            mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+            start = self.first_preprocess_mel_frame
+            new_mels.append(mel[:, :, start : start + frames_this_call])
+
+            if frames_this_call == self.shift_frames:
+                consumed_samples = min(self.shift_frames * self.hop_samples, len(pending))
+                consumed_audio = pending[:consumed_samples]
+                if len(consumed_audio) >= self.raw_audio_ring_samples:
+                    raw_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+                elif len(consumed_audio) > 0:
+                    keep = self.raw_audio_ring_samples - len(consumed_audio)
+                    raw_ring = np.concatenate([raw_ring[-keep:], consumed_audio]).astype(
+                        np.float32,
+                        copy=False,
+                    )
+                pending = pending[consumed_samples:]
+            frames_collected += frames_this_call
+
+        new_mel = torch.cat(new_mels, dim=-1)
+        if session.emitted_frames == 0:
+            chunk_mel = new_mel
+            drop_extra = 0
+        else:
+            chunk_mel = torch.cat((session.mel_frame_ring, new_mel), dim=-1)
+            drop_extra = self.drop_extra
+
+        return SchedulerFinalizeBatchRow(
+            item=item,
+            chunk_mel=chunk_mel,
+            drop_extra=int(drop_extra),
+        )
+
+    def _finalize_batch_group_key_for_row(
+        self,
+        row: SchedulerFinalizeBatchRow,
+    ) -> tuple:
+        fork = row.item.fork
+        target_lang = (
+            fork.target_lang
+            if fork is not None and fork.target_lang is not None
+            else self.target_lang
+        )
+        base_key = batch_group_key(
+            target_lang,
+            True,
+            row.drop_extra,
+            row.chunk_mel.shape[-1],
+            self.decoder_strategy,
+        )
+        return (
+            *base_key,
+            fork.previous_hypotheses is None if fork is not None else True,
+            fork.pred_out_stream is None if fork is not None else True,
+        )
+
+    def _record_finalize_batch_fallback(self, reason: str, count: int) -> None:
+        self._scheduler_finalize_fallback_counts[reason] = (
+            self._scheduler_finalize_fallback_counts.get(reason, 0) + count
+        )
+        self._scheduler_finalize_serial_fallback_calls += count
+
+    def _record_finalize_batch_telemetry(
+        self,
+        *,
+        batch_size: int,
+        key: tuple,
+        model_ms: float,
+        scatter_ms: float,
+    ) -> None:
+        self._scheduler_finalize_batches += 1
+        self._scheduler_finalize_rows += batch_size
+        self._scheduler_finalize_batch_size_hist[batch_size] = (
+            self._scheduler_finalize_batch_size_hist.get(batch_size, 0) + 1
+        )
+        avg_b = self._scheduler_finalize_rows / max(1, self._scheduler_finalize_batches)
+        if self._scheduler_finalize_batches % 10 == 0 or batch_size > 1:
+            logger.info(
+                "scheduler_finalize_batch_telemetry "
+                f"batches={self._scheduler_finalize_batches} "
+                f"rows={self._scheduler_finalize_rows} "
+                f"last_batch_size={batch_size} "
+                f"avg_effective_B={avg_b:.2f} "
+                f"group_key={key} "
+                f"effective_batch_hist={dict(sorted(self._scheduler_finalize_batch_size_hist.items()))} "
+                f"serial_fallback_calls={self._scheduler_finalize_serial_fallback_calls} "
+                f"fallback_counts={dict(sorted(self._scheduler_finalize_fallback_counts.items()))} "
+                f"model_batch_ms={model_ms:.2f} "
+                f"scatter_postprocess_ms={scatter_ms:.2f}"
+            )
+
+    def _process_final_fork_groups(
+        self,
+        items: list[SchedulerFinalizeItem],
+    ) -> dict[str, Optional[str]]:
+        try:
+            if not items:
+                return {}
+
+            texts: dict[str, Optional[str]] = {
+                item.session.id: item.final_text for item in items
+            }
+            with torch.inference_mode():
+                self._cuda_synchronize_for_current_model_lane()
+                rows: list[SchedulerFinalizeBatchRow] = []
+                for item in items:
+                    if item.expected_generation != item.session.scheduler_generation:
+                        logger.debug(
+                            f"Session {item.session.id}: skipped stale batched fork final chunk "
+                            f"reason={item.reason} expected_gen={item.expected_generation} "
+                            f"current_gen={item.session.scheduler_generation}"
+                        )
+                        continue
+                    row = self._prepare_final_fork_batch_row(item)
+                    if row is None:
+                        continue
+                    rows.append(row)
+
+                grouped: dict[tuple, list[SchedulerFinalizeBatchRow]] = {}
+                for row in rows:
+                    grouped.setdefault(
+                        self._finalize_batch_group_key_for_row(row),
+                        [],
+                    ).append(row)
+
+                for key, group_rows in grouped.items():
+                    for start in range(0, len(group_rows), self.batch_max_size):
+                        batch_rows = group_rows[start : start + self.batch_max_size]
+                        texts.update(self._process_final_batch_rows(batch_rows, key))
+
+                self._cuda_synchronize_for_current_model_lane()
+                return texts
+        except Exception as e:
+            session_ids = ",".join(item.session.id for item in items)
+            logger.error(f"scheduler finalize batch processing error sessions={session_ids}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {item.session.id: None for item in items}
+
+    def _process_final_batch_rows(
+        self,
+        rows: list[SchedulerFinalizeBatchRow],
+        key: tuple,
+    ) -> dict[str, Optional[str]]:
+        try:
+            chunk_mels = [row.chunk_mel for row in rows]
+            processed_signal, processed_signal_length = stack_processed(chunk_mels)
+            cache_last_channel, cache_last_time, cache_last_channel_len = stack_caches(
+                [
+                    (
+                        row.item.fork.cache_last_channel,
+                        row.item.fork.cache_last_time,
+                        row.item.fork.cache_last_channel_len,
+                    )
+                    for row in rows
+                ]
+            )
+            previous_hypotheses = [
+                clone_hypotheses_deep(row.item.fork.previous_hypotheses)
+                for row in rows
+            ]
+            previous_pred_out = [
+                clone_tree(row.item.fork.pred_out_stream)
+                for row in rows
+            ]
+            flat_hypotheses = stack_hypotheses(previous_hypotheses)
+            flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
+        except Exception as e:
+            if len(rows) > 1:
+                return self._process_final_batch_solo_fallback(
+                    rows,
+                    key=key,
+                    reason="unsafe_stack",
+                    error=e,
+                )
+            raise
+
+        if self.prompted_model:
+            self._apply_inference_prompt(rows[0].item.fork)
+
+        model_start = time.perf_counter()
+        (
+            pred_out_stream,
+            transcribed_texts,
+            batch_cache_last_channel,
+            batch_cache_last_time,
+            batch_cache_last_channel_len,
+            batch_previous_hypotheses,
+        ) = self._conformer_stream_step(
+            processed_signal=processed_signal,
+            processed_signal_length=processed_signal_length,
+            cache_last_channel=cache_last_channel,
+            cache_last_time=cache_last_time,
+            cache_last_channel_len=cache_last_channel_len,
+            keep_all_outputs=True,
+            previous_hypotheses=flat_hypotheses,
+            previous_pred_out=flat_pred_out,
+            drop_extra_pre_encoded=rows[0].drop_extra,
+            return_transcription=True,
+        )
+        self._cuda_synchronize_for_current_model_lane()
+        model_ms = (time.perf_counter() - model_start) * 1000.0
+
+        batch_size = len(rows)
+        scatter_start = time.perf_counter()
+        texts: dict[str, Optional[str]] = {}
+        try:
+            for index, row in enumerate(rows):
+                fork = row.item.fork
+                row_cache = scatter_cache_row(
+                    batch_cache_last_channel,
+                    batch_cache_last_time,
+                    batch_cache_last_channel_len,
+                    index,
+                )
+                fork.pred_out_stream = self._scatter_batch_list_item(
+                    pred_out_stream,
+                    index,
+                    batch_size,
+                )
+                fork.previous_hypotheses = self._scatter_batch_list_item(
+                    batch_previous_hypotheses,
+                    index,
+                    batch_size,
+                )
+                fork.cache_last_channel = row_cache[0]
+                fork.cache_last_time = row_cache[1]
+                fork.cache_last_channel_len = row_cache[2]
+                text = row.item.final_text
+                if (
+                    transcribed_texts
+                    and len(transcribed_texts) > index
+                    and transcribed_texts[index]
+                ):
+                    text = self._extract_hypothesis_text(transcribed_texts[index])
+                    logger.debug(
+                        f"Session {fork.id} final chunk output: "
+                        f"'{text[-50:] if len(text) > 50 else text}' "
+                        f"(was: '{fork.current_text[-30:] if len(fork.current_text) > 30 else fork.current_text}')"
+                    )
+                else:
+                    logger.debug(f"Session {fork.id} final chunk: no new text from model")
+                texts[row.item.session.id] = text
+        except Exception as e:
+            if len(rows) > 1:
+                return self._process_final_batch_solo_fallback(
+                    rows,
+                    key=key,
+                    reason="unsafe_scatter",
+                    error=e,
+                )
+            raise
+
+        self._cuda_synchronize_for_current_model_lane()
+        scatter_ms = (time.perf_counter() - scatter_start) * 1000.0
+        self._record_finalize_batch_telemetry(
+            batch_size=batch_size,
+            key=key,
+            model_ms=model_ms,
+            scatter_ms=scatter_ms,
+        )
+        return texts
+
+    def _process_final_batch_solo_fallback(
+        self,
+        rows: list[SchedulerFinalizeBatchRow],
+        *,
+        key: tuple,
+        reason: str,
+        error: Exception,
+    ) -> dict[str, Optional[str]]:
+        self._record_finalize_batch_fallback(reason, len(rows))
+        logger.warning(
+            "scheduler_finalize_batch_fallback "
+            f"reason={reason} key={key} "
+            f"sessions={','.join(row.item.session.id for row in rows)} "
+            f"error={type(error).__name__}: {error}"
+        )
+        texts: dict[str, Optional[str]] = {}
+        for row in rows:
+            text = self._process_final_chunk(row.item.fork)
+            texts[row.item.session.id] = text
+        return texts
+
     async def _continuous_finalize_emit_locked(
         self,
         session: ASRSession,
@@ -4943,8 +5669,17 @@ class ASRServer:
                 lock_wait_start = time.perf_counter()
                 if self.model_lanes > 1:
                     lane_id = self._scheduler_assign_session_model_lane(session)
-                    async with self._scheduler_exclusive_model_path(f"finalize:{reason}"):
-                        async with self.inference_lock:
+                    if self._scheduler_batch_finalize_active():
+                        async with self._scheduler_pinned_model_lane_path(
+                            [session],
+                            reason=f"finalize:{reason}",
+                        ) as reserved_lane_id:
+                            if reserved_lane_id != lane_id:
+                                raise RuntimeError(
+                                    "scheduler_finalize_lane_affinity_violation "
+                                    f"session={session.id} pinned={lane_id} "
+                                    f"dispatch={reserved_lane_id}"
+                                )
                             if (
                                 expected_generation is not None
                                 and expected_generation != session.scheduler_generation
@@ -4958,13 +5693,36 @@ class ASRServer:
                             timing["inference_lock_acquire_wait_ms"] = (
                                 time.perf_counter() - lock_wait_start
                             ) * 1000
-                            text = await self._run_scheduler_exclusive_inference_call(
+                            text = await self._run_scheduler_model_lane_call(
+                                reserved_lane_id,
                                 self._process_final_chunk,
                                 fork,
-                                lane_id=lane_id,
                             )
                             if text is not None:
                                 final_text = text
+                    else:
+                        async with self._scheduler_exclusive_model_path(f"finalize:{reason}"):
+                            async with self.inference_lock:
+                                if (
+                                    expected_generation is not None
+                                    and expected_generation != session.scheduler_generation
+                                ):
+                                    logger.debug(
+                                        f"Session {session.id}: skipped stale fork final chunk "
+                                        f"reason={reason} expected_gen={expected_generation} "
+                                        f"current_gen={session.scheduler_generation}"
+                                    )
+                                    return
+                                timing["inference_lock_acquire_wait_ms"] = (
+                                    time.perf_counter() - lock_wait_start
+                                ) * 1000
+                                text = await self._run_scheduler_exclusive_inference_call(
+                                    self._process_final_chunk,
+                                    fork,
+                                    lane_id=lane_id,
+                                )
+                                if text is not None:
+                                    final_text = text
                 else:
                     async with self.inference_lock:
                         if (
