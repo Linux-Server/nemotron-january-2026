@@ -89,11 +89,12 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   graphs must compose — each lane replays on its own stream; the graph's static buffers are per-lane or guarded).
   Key files: `src/nemotron_speech/server.py`
 
-- [ ] **4. Local byte-exact gate at scale (hard gate).**
+- [x] **4. Local byte-exact gate at scale (hard gate).**
   Stream a fixed multi-stream clip set with `NEMOTRON_ENCODER_CUDAGRAPH=1` vs `=0` (+ scheduler/batching on) and
   diff transcripts — must be byte-identical (200/200-style canary), `FORK_ASSERT=1` clean over a multi-minute
   run. Confirm default-off (`=0`/unset) is byte-identical to the pre-change server. Confirm graphs actually
-  engage (replay counters > 0, no silent all-eager).
+  engage (replay counters > 0, no silent all-eager). **ALSO run `NEMOTRON_MODEL_LANES=2` graph-on (the
+  per-lane-stream path deferred from step 3) and confirm byte-identical + per-lane replay engagement.**
   Key files: existing harness (`proj-2026-05-19-eou-endpointing/`), `proj-2026-05-21-1959-cudagraph/`
 
 - [ ] **5. Local knee measurement (first measured payoff).**
@@ -129,7 +130,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 |---|------|--------|--------|-------|
 | 1 | Per-B byte-exact + speedup probe; pick K | done | round5 | probe_perB_cudagraph.py: per-B byte-exact B=1..16, GPU-active −12..30%, K≈10 |
 | 2 | Bucketed graph-manager module | done | bf0a639 | cudagraph_encoder.py + test; byte-exact B=1..16 (encoded+state max_abs=0), fail-closed B=17->None/captured=False; capture ~60-82ms/bucket (~1.1s for K=16/replica) |
-| 3 | Wire into scheduler's batched call | done | (step3 commit) | NEMOTRON_ENCODER_CUDAGRAPH; monkeypatch like compile path; steady-bucket-only per-B; per-replica + per-lane-stream managers; fail-closed; default-off identity; cudagraph supersedes compile. lanes=1 byte-identical smoked; lanes=2 impl fail-closed, runtime-verify in step4. NOTE: manager is all-or-nothing per replica (uncaptured B disables that replica) -> pick K to fit in step6 |
-| 4 | Local byte-exact gate at scale | pending | — | hard gate: graph-on==graph-off, FORK_ASSERT |
+| 3 | Wire into scheduler's batched call | done | 22a817c | NEMOTRON_ENCODER_CUDAGRAPH; monkeypatch like compile path; steady-bucket-only per-B; per-replica + per-lane-stream managers; fail-closed; default-off identity; cudagraph supersedes compile. lanes=1 byte-identical smoked; lanes=2 impl fail-closed, runtime-verify in step4. NOTE: manager is all-or-nothing per replica (uncaptured B disables that replica) -> pick K to fit in step6 |
+| 4 | Local byte-exact gate at scale | done | (step4 commit) | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
 | 5 | Local knee measurement | pending | — | first measured payoff (56→?) |
 | 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | pending | — | p50<250/p95<300, multi-proc+MPS; per-proc knee + per-box ceiling + p95 tail vs graph-off |
