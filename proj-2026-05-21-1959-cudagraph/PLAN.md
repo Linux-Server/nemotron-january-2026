@@ -103,7 +103,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   Record avg B at the knee + the per-B engagement mix.
   Key files: `proj-2026-05-21-1959-cudagraph/local-knee.md`
 
-- [~] **6. Cloud GPU-bound retest on EC2 g6 (L4) + g6e (L40S) — tight TTFS budget (p50<250 / p95<300).**
+- [x] **6. Cloud GPU-bound retest on EC2 g6 (L4) + g6e (L40S) — tight TTFS budget (p50<250 / p95<300).**
   Deploy manual capture to **EC2 via `ec2-bench/`** (NOT Modal — Modal is the launch-bound proxy; EC2 g6/g6e is
   the SageMaker-representative target and our established vehicle). CONFIRM capture engages at startup (~250 ms × K
   per replica, no inductor hang — the Step-10b failure mode must be gone) and **fits memory** at the target
@@ -152,5 +152,5 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | 3 | Wire into scheduler's batched call | done | 22a817c | NEMOTRON_ENCODER_CUDAGRAPH; monkeypatch like compile path; steady-bucket-only per-B; per-replica + per-lane-stream managers; fail-closed; default-off identity; cudagraph supersedes compile. lanes=1 byte-identical smoked; lanes=2 impl fail-closed, runtime-verify in step4. NOTE: manager is all-or-nothing per replica (uncaptured B disables that replica) -> pick K to fit in step6 |
 | 4 | Local byte-exact gate at scale | done | 023c99c | 100/100 byte-identical: on==off (lanes1 & lanes2), off_l2==off, off==historical baseline; replays 4650(l1)/5600(l2) fallbacks=0; 3 managers @ lanes2 (self+2 lanes, each B=1..16); FORK clean; capture ~1.35s/replica |
 | 5 | Local knee measurement | done | ed53ff2 | knee 48->56 (+17%) on 5090; lag p95 @N48 229->151ms; avg B~2-3, 0 fallbacks; local-knee.md. Cloud expected to lift more (more launch-bound) |
-| 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | in-progress | — | p50<250/p95<300, multi-proc+MPS; graph-off vs on; L4 first then L40S; step6_cloud_retest.sh |
+| 6 | Cloud GPU-bound retest EC2 g6+g6e (tight budget) | done | (step6 commit) | L4 K=2: 16->24/box (+50%); L40S K=4: fails-at-32 (MPS-bifurcated) -> 64/box ROBUST (p95 216, ~4x p95 cut, bifurcation gone). cudagraph = tight-budget lever; maxB=8 fit both; byte-exact. cloud-retest.md |
 | 7 | Drop coalescing tick (work-conserving) | pending | — | measure MAX_WAIT 0 vs 8 x graph off/on; flip default to 0 if it wins w/ graphs on; byte-exact ~free (batch-grouping only) |

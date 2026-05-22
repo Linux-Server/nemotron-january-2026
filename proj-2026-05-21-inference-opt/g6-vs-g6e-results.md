@@ -91,6 +91,23 @@ TTFS p95 per process at the full per-process knee (16 streams/proc), staggered (
 - **→ Operate BELOW the per-process knee (`maxconn`≈12 = 75%)** for reliably-in-budget TTFS — validated; the L40S
   especially needs this derating. So the keepup-only knees (48/64) overstate the *reliable* L40S density.
 
+## CUDA-graph encoder — tight-budget retest (p50<250/p95<300, graph-ON vs OFF)
+Manual per-B CUDA-graph capture of the encoder (`NEMOTRON_ENCODER_CUDAGRAPH=1`; byte-exact, fail-closed,
+default-off; proj-2026-05-21-1959-cudagraph). Tight-budget per-box, multi-process+MPS, rounds-pooled, maxB=8:
+| box | config | graph-OFF /box | graph-ON /box |
+|---|---|--:|--:|
+| g6 / L4 | K=2 x lanes2 | 16 | **24 (+50%)** |
+| g6e / L40S | K=4 x lanes2 | **fails (<=32, MPS-bifurcated)** | **64 (robust, p95 216)** |
+
+- cudagraph is a **tight-budget** lever (lowers per-call encoder latency -> pulls the p95 tail under 300 at
+  moderate load); the raw keep-up knee is ~unchanged (dispatch-bound). Benefit is concentrated in the moderate-N
+  zone where the budget bites.
+- On the high-density **L40S K=4 it eliminates the MPS launch-contention bifurcation** (graph-off starves 2/4
+  procs -> fails the budget at every level; graph-on is uniform -> holds 64/box). So cudagraph is *required* for
+  the L40S to hit the tight budget at K=4 — a ~4x p95 cut (349->80 at 32-box).
+- $/stream @ budget (graph-on): L4 g6.2xlarge 24/box -> **$0.041** (cheapest); L40S g6e.8xlarge 64/box -> $0.071.
+- Detail: `proj-2026-05-21-1959-cudagraph/cloud-retest.md`.
+
 ## $/stream and recommendation (approximate EC2 on-demand)
 | Instance | GPU | est. per-box knee | ~$/hr | ~$/stream-hr |
 |---|---|---:|---:|---:|
