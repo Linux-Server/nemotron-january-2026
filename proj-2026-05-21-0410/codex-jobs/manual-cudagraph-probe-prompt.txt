@@ -1,0 +1,67 @@
+<task>
+FEASIBILITY PROBE (standalone, no server.py edit, no commits, local only): can we capture the conformer
+ENCODER step as a MANUAL CUDA graph (torch.cuda.CUDAGraph record+replay) — byte-exact, with FAST warmup —
+instead of torch.compile(reduce-overhead)? This is the path for the cloud cheaper-call lever, because Step 10b
+showed torch.compile's inductor warmup never completes on Modal T4/L4. Create
+`proj-2026-05-21-0410/probe_manual_cudagraph.py` + write a short `proj-2026-05-21-0410/manual-cudagraph-probe.md`.
+
+WHY MANUAL: torch.compile(reduce-overhead) IS a CUDA graph under the hood but pays an inductor codegen/autotune
+warmup that's seconds locally but minutes-and-hung on slow cloud nodes. A MANUAL CUDA graph (record the launch
+sequence once, replay) has no codegen → near-instant warmup → cloud- and cold-start-viable. Local Step-4
+torch.compile gave 1.5× on the encoder; manual capture should match (same launch collapse) with fast warmup.
+
+SETUP: en model `/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`, `$(cat /tmp/en-nemo-path)`,
+att_context [70,1], greedy, TF32 defaults (match Step-4's compile config so the speedup is comparable),
+dither=0, NEMOTRON_WARMUP_MS=200 geometry.
+
+THE HARD PART (recurrent cache): CUDA-graph replay reuses FIXED memory addresses, but the cache-aware step's
+inputs/outputs change every chunk (`cache_last_channel`/`cache_last_time`/`cache_last_channel_len` are fed back
++ a new mel chunk in). Use the standard static-buffer pattern: allocate STATIC input buffers (mel chunk +
+cache) and let the graph write STATIC output buffers; capture `encoder.cache_aware_stream_step` ONCE for the
+steady-state static B=1 bucket (T=pre_encode_cache+shift=25, drop_extra=2); then per chunk: `copy_` the live
+inputs into the static input buffers, `graph.replay()`, `copy_` the static outputs back out. Decode (RNNT
+greedy) runs eager as today (don't graph it — data-dependent). Only the steady bucket is needed for the proof;
+note that first-chunk/warmup/final are separate shapes (a production version captures each bucket).
+
+GATES (report all):
+  (1) BYTE-EXACT: stream ≥3 clips full (many steady chunks) through the manual-graph encoder + eager decode;
+      the transcript must be byte-identical to the fully-eager path (the copy-in/out must preserve exactness;
+      fp ~1e-6 in the encoder output is fine as long as the TEXT matches). Hard gate.
+  (2) WARMUP/CAPTURE TIME: measure wall-time to capture the graph (alloc + warmup + capture). Expected ~seconds
+      (the whole point vs torch.compile minutes). Report it; this is the headline "is it cloud-viable" number.
+  (3) SPEEDUP: per-chunk steady-state wall (manual-graph replay + decode) vs fully-eager, both synced. Expect
+      ~1.5× (matching Step-4 torch.compile). NOTE: a parallel-lane prototype may be using the same GPU
+      concurrently — if so this timing is noisy; report whether the GPU looked contended and flag the speedup
+      as approximate. Byte-exact (1) and capture-time order-of-magnitude (2) are the robust gates.
+  (4) Recapture/stability: confirm replay is stable over the stream (no illegal-memory / shape errors).
+
+REPORT (manual-cudagraph-probe.md): byte-exact (yes/no, any diffs), capture/warmup time (vs torch.compile's
+minutes), speedup (approx, note contention), stability; VERDICT: is manual CUDA-graph capture of the encoder
+feasible + byte-exact + fast-warmup → the viable cloud lever to wire into server.py next? CLEANUP: free the GPU,
+remove temp files/__pycache__. Standalone — do NOT edit server.py.
+</task>
+
+<context>
+Read proj-2026-05-21-0410/SUMMARY.md (the next-phase plan; Step-4 torch.compile encoder = 1.5× local; Step-10b
+torch.compile warmup failed on cloud), probe_encoder_compile.py (Step-1 Probe A — the torch.compile encoder
+probe to mirror), and conformer_stream_step / cache_aware_stream_step (NeMo mixins.py:592, conformer_encoder.py
+~1087 for the cache layout). Static-buffer CUDA-graph pattern is standard for recurrent/stateful steps.
+A parallel-lane prototype (server.py) may run concurrently on the same GPU — your file (the probe script) does
+not conflict, but GPU timing may.
+</context>
+
+<verification_loop>
+Byte-exact over a FULL multi-chunk stream is the hard gate (the cache copy-in/out is where exactness can break
+— verify the static buffers are copied correctly each step). Confirm capture time is ~seconds (the cloud-viability
+point). If the GPU is contended (parallel prototype running), flag the speedup as approximate but still report
+byte-exact + capture-time.
+</verification_loop>
+
+<action_safety>
+Standalone probe only. No server.py/NeMo edits, no commits. Free the GPU when done.
+</action_safety>
+
+<compact_output_contract>
+Report: byte-exact (full stream), capture/warmup time (vs torch.compile minutes), approx speedup (+contention
+note), stability; VERDICT on manual CUDA-graph feasibility as the cloud lever; cleanup.
+</compact_output_contract>
