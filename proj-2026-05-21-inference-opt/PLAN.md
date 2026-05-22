@@ -91,7 +91,7 @@ re-explored.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Per-GPU multi-process+MPS matrix (cloud) | done | (this commit) | L4 K=2->32 (GPU-bound); L40S 48@16vCPU, 64@32vCPU (ceiling); full matrix measured |
+| 1 | Per-GPU multi-process+MPS matrix (cloud) | done | (this commit) | L4 K=2->32 (GPU-bound); L40S 48@16vCPU, 64@32vCPU (ceiling); full matrix measured. TTFS-at-knee (staggered): L4/32 ROBUST ~340ms p95; L40S/48-64 NOISY (MPS starves ~1 client 537-770ms) -> operate <knee (maxconn~12); reliable L40S ~32-48 not 64 |
 | 2 | Production multi-process launcher + MPS | done (design) | (deploy commit) | deploy/launch_multiproc.sh + MPS hardening notes |
 | 3 | Routing layer (LB leastconn+maxconn) | done (design) | (deploy commit) | deploy/haproxy.cfg.example (+ ALB equiv) |
 | 4 | Per-GPU config matrix + auto-select | done | — | (GPU,vCPU)→(lanes,K,MAX_SIZE) |

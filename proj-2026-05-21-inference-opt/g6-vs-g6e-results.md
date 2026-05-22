@@ -76,6 +76,21 @@ near K=2, sooner than the L40S). Needs a measured g6 multi-process+MPS run to co
 saturates at ~100%, collapses). So the **L4 per-box ceiling = 32 (K=2, GPU-bound)** — the smaller L4 fills at K=2
 where the L40S fills at K=4, so L40S (64) is ~2x L4 (32), matching its ~2x compute. **Full matrix now measured.**
 
+## TTFS at the knee (staggered load, MPS) — the latency-budget answer
+TTFS p95 per process at the full per-process knee (16 streams/proc), staggered (0-400 ms jitter), vs the 400 ms budget:
+| box | K | per-box | TTFS p95 (per proc) | within budget? |
+|---|---:|---:|---|---|
+| g6 / L4 | 2 | 32 | ~340 ms (both) | YES — robust |
+| g6e / L40S | 3 | 48 | 326 / 363 / **537** | NOISY — 1/3 starved |
+| g6e / L40S | 4 | 64 | 347 / 355 / **695 / 770** | NOISY — 2/4 starved |
+
+- **L4 (32) is robust and inside the budget (~340 ms p95)** — no derating needed.
+- **L40S (48/64) is VARIANCE-PRONE at the full per-process knee** — MPS contention starves ~1 client (TTFS p95
+  537-770 ms, over budget). Across 4 L40S runs ~half were clean (48/64), ~half had a starved client (→ ~32). So
+  the L40S's *dependable* per-box is ~32-48, not a solid 64.
+- **→ Operate BELOW the per-process knee (`maxconn`≈12 = 75%)** for reliably-in-budget TTFS — validated; the L40S
+  especially needs this derating. So the keepup-only knees (48/64) overstate the *reliable* L40S density.
+
 ## $/stream and recommendation (approximate EC2 on-demand)
 | Instance | GPU | est. per-box knee | ~$/hr | ~$/stream-hr |
 |---|---|---:|---:|---:|
