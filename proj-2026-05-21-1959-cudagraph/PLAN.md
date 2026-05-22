@@ -72,7 +72,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
   ALL tested B (any mismatch → diagnose the stacking/capture before proceeding).
   Key files: `proj-2026-05-21-1959-cudagraph/probe_perB_cudagraph.py`
 
-- [ ] **2. Bucketed graph-manager module (standalone-tested).**
+- [x] **2. Bucketed graph-manager module (standalone-tested).**
   New `BucketedCudaGraphEncoder` (e.g. in `src/nemotron_speech/cudagraph_encoder.py`): holds per-B captured
   graphs + per-B static buffers (cache `[layers,B,...]` channel/time, `[B]` len, mel `[B,F,T]`); `warmup()`
   captures B=1…K (side-stream warmup → capture, per probe); `replay(B, inputs)→outputs` does copy-in / replay /
@@ -128,7 +128,7 @@ instance (the Modal "batching doesn't help" result is CPU-allocation-specific).
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Per-B byte-exact + speedup probe; pick K | done | round5 | probe_perB_cudagraph.py: per-B byte-exact B=1..16, GPU-active −12..30%, K≈10 |
-| 2 | Bucketed graph-manager module | pending | — | standalone-tested; fail-closed; watch graph-pool memory |
+| 2 | Bucketed graph-manager module | done | (step2 commit) | cudagraph_encoder.py + test; byte-exact B=1..16 (encoded+state max_abs=0), fail-closed B=17->None/captured=False; capture ~60-82ms/bucket (~1.1s for K=16/replica) |
 | 3 | Wire into scheduler's batched call | pending | — | lanes (b) committed (7bf0e04); lanes+graphs compose (per-lane stream/buffers) |
 | 4 | Local byte-exact gate at scale | pending | — | hard gate: graph-on==graph-off, FORK_ASSERT |
 | 5 | Local knee measurement | pending | — | first measured payoff (56→?) |
