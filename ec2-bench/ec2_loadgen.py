@@ -39,10 +39,10 @@ def load_audios(audio_dir, count):
             for i in range(count)]
 
 
-async def _run_session(url, audio, delay, n_level, rounds=1):
-    # One WS connection that streams `rounds` back-to-back utterances (each: vad_start -> stream at 1x
-    # -> vad_stop -> finalize), collecting one finalize-TTFS + proc-lag per round. rounds>1 gives a
-    # sustained closed-loop load and N*rounds latency samples per level (stable p95 vs the 1-shot N samples).
+async def _run_session(url, audio, delay, n_level):
+    # One WS connection = one utterance (vad_start -> stream at 1x -> vad_stop -> finalize), recording one
+    # finalize-TTFS + proc-lag. (Multi-utterance-per-connection was rejected: re-arming vad_start after
+    # `reset finalize` times out on this server. Stable sampling = REPEAT the whole level and pool — see main.)
     import websockets
     res = {"sid": audio["sid"], "n": n_level, "transcript": "", "ttfs_list": [], "proc_lag_list": [],
            "error": None, "interim_count": 0, "overrun_ms": None, "tag_leak": False}
@@ -81,30 +81,26 @@ async def _run_session(url, audio, delay, n_level, rounds=1):
             rt = asyncio.create_task(recv())
             stream = audio["pcm"] + bytes(int(SAMPLE_RATE * TRAIL_MS / 1000) * 2)
             expected_s = len(stream) / 2 / SAMPLE_RATE
-            for _r in range(rounds):
-                st["final_ev"] = asyncio.Event()
-                st["final_parts"] = []
-                await ws.send(json.dumps({"type": "vad_start"}))
-                t0 = time.monotonic()
-                sent = 0
-                chunk_i = 0
-                while sent < len(stream):
-                    await ws.send(stream[sent:sent + CHUNK_BYTES])
-                    sent += CHUNK_BYTES
-                    st["last_sent"] = time.monotonic()
-                    chunk_i += 1
-                    dt = t0 + chunk_i * (CHUNK_MS / 1000.0) - time.monotonic()
-                    if dt > 0:
-                        await asyncio.sleep(dt)
-                res["overrun_ms"] = (time.monotonic() - t0 - expected_s) * 1000
-                st["vad_stop_t"] = time.monotonic()
-                await ws.send(json.dumps({"type": "vad_stop"}))
-                await ws.send(json.dumps({"type": "reset", "finalize": True}))
-                try:
-                    await asyncio.wait_for(st["final_ev"].wait(), timeout=30)
-                except asyncio.TimeoutError:
-                    res["error"] = "timeout"
-                    break
+            await ws.send(json.dumps({"type": "vad_start"}))
+            t0 = time.monotonic()
+            sent = 0
+            chunk_i = 0
+            while sent < len(stream):
+                await ws.send(stream[sent:sent + CHUNK_BYTES])
+                sent += CHUNK_BYTES
+                st["last_sent"] = time.monotonic()
+                chunk_i += 1
+                dt = t0 + chunk_i * (CHUNK_MS / 1000.0) - time.monotonic()
+                if dt > 0:
+                    await asyncio.sleep(dt)
+            res["overrun_ms"] = (time.monotonic() - t0 - expected_s) * 1000
+            st["vad_stop_t"] = time.monotonic()
+            await ws.send(json.dumps({"type": "vad_stop"}))
+            await ws.send(json.dumps({"type": "reset", "finalize": True}))
+            try:
+                await asyncio.wait_for(st["final_ev"].wait(), timeout=30)
+            except asyncio.TimeoutError:
+                res["error"] = "timeout"
             res["transcript"] = " ".join(st["final_parts"]).strip()
             rt.cancel()
     except Exception as e:  # noqa: BLE001
@@ -112,13 +108,13 @@ async def _run_session(url, audio, delay, n_level, rounds=1):
     return res
 
 
-def _run_level(url, audios, n, rounds=1):
-    rnd = random.Random(1234 + n)
+def _run_level(url, audios, n, seed_off=0):
+    rnd = random.Random(1234 + n + seed_off * 997)  # vary the stagger per repeat
     delays = [rnd.uniform(0, START_JITTER_MS / 1000) for _ in range(n)]
     async def go():
         return await asyncio.wait_for(
-            asyncio.gather(*[_run_session(url, audios[i], delays[i], n, rounds) for i in range(n)]),
-            timeout=480 + rounds * 120)
+            asyncio.gather(*[_run_session(url, audios[i], delays[i], n) for i in range(n)]),
+            timeout=480)
     return asyncio.run(go())
 
 
@@ -143,17 +139,21 @@ def main():
     ap.add_argument("--audio-dir", required=True)
     ap.add_argument("--output", default="")
     ap.add_argument("--rounds", type=int, default=1,
-                    help="utterances per session (sustained load); p95 is pooled over N*rounds samples")
+                    help="repeats of each level (re-run the N-concurrent burst R times, pool N*R samples for a stable p95)")
     args = ap.parse_args()
     levels = [int(x) for x in args.sweep.split(",") if x.strip()]
     audios = load_audios(args.audio_dir, max(levels))
     ndistinct = len({a["sid"] for a in audios})
-    print(f"loadgen vs {args.url} | {ndistinct} distinct clips (cycled to N) | levels={levels} | rounds={args.rounds}")
+    reps = max(1, args.rounds)
+    print(f"loadgen vs {args.url} | {ndistinct} distinct clips (cycled to N) | levels={levels} | repeats={reps}")
     print("  N   ok  errs  TTFSp50 TTFSp95  lagp50  lagp95  over95  keepup")
-    out = {"url": args.url, "levels": levels, "rounds": args.rounds, "summaries": {}}
+    out = {"url": args.url, "levels": levels, "repeats": reps, "summaries": {}}
     knee = 0
     for n in levels:
-        s = _summ(_run_level(args.url, audios, n, args.rounds))
+        pooled = []
+        for rep in range(reps):
+            pooled.extend(_run_level(args.url, audios, n, seed_off=rep))
+        s = _summ(pooled)
         out["summaries"][str(n)] = s
         f = lambda v: "nan" if v is None else f"{v:.0f}"
         print(f"  {n:<3} {s['ok']:<3} {s['errors']:<4} {f(s['ttfs_p50']):>7} {f(s['ttfs_p95']):>7} "

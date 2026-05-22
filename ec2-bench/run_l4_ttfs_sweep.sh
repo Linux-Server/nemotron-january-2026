@@ -7,7 +7,7 @@
 set -uo pipefail
 VENV=$HOME/nemo-venv; cd "$HOME/nemotron"; export HF_HOME=$HOME/hf
 N_LIST="${N_LIST:-6,8,10,12,14,16}"; K=2
-ROUNDS="${ROUNDS:-5}"   # utterances/session; pools N*ROUNDS finalize samples -> stable p95 (1-shot N is too noisy)
+ROUNDS="${ROUNDS:-5}"   # REPEATS of each level (re-run the N-burst R times, pool N*R samples) -> stable p95 (1-shot N too noisy)
 P50_MAX="${P50_MAX:-250}"; P95_MAX="${P95_MAX:-300}"
 MODEL=nvidia/nemotron-speech-streaming-en-0.6b
 SRV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200 "HF_HOME=$HOME/hf"
