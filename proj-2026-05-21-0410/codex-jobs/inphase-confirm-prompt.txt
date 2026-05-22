@@ -1,0 +1,55 @@
+<task>
+MEASUREMENT ONLY (no commits): empirically confirm that the single serial model-call lane — not the GPU — is
+the queue, by driving PHASE-ALIGNED (synchronized) realtime streams and showing TTFS stays ~flat to a MUCH
+higher N than the out-of-phase ~56 knee (predicted ~150-180, near the forced-batch ceiling). Write results to
+`proj-2026-05-21-0410/inphase-confirmation.md`. Local en server, no Modal.
+
+BACKGROUND: out-of-phase independent streams keep avg batch ~4 at the realtime knee (56), because their 160ms
+chunk cycles are scattered, so the serial lane (one ~11-15ms call at a time) queues and TTFS climbs. The
+forced-batch microbench (max-parallelism-sweep.md) showed the GPU sustains ~220 stream-equivalents at full
+B=46. PREDICTION: if streams are PHASE-ALIGNED so all N emit their chunk at the same 160ms boundary, the
+scheduler forms full batches (up to MAX_SIZE), the lane sits idle between bursts, and TTFS stays low until
+N approaches the forced-batch ceiling (~180 at B=32). That gap (56 -> ~180) is the phasing penalty and proves
+the lane is the bottleneck.
+
+BUILD: a PHASE-ALIGNED load-gen — extend the high-N harness / coloc_loadgen with an `--in-phase` mode (or a
+new small driver): all N streams start at the SAME wall-clock instant and send their 160ms PCM chunks in
+LOCKSTEP (aligned boundaries, NO arrival jitter), still 1x realtime. Everything else (vad handshake, finalize,
+strict timing capture, send-overrun) same as the existing harness.
+
+RUN: local en server, batching on (`NEMOTRON_CONTINUOUS=1 NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1
+NEMOTRON_WARMUP_MS=200 NEMOTRON_FINALIZE_SILENCE_MS=0`, MAX_SIZE=32, MAX_WAIT=8), rc1, .venv-asr,
+$(cat /tmp/en-nemo-path), port 8080. Sweep N = 60 / 100 / 150 / 180 / 200 IN-PHASE. Per N report: keep-up
+(proc-lag/TTFS p95 <500ms, final <400ms), TTFS p95, **avg effective batch size** (should be ~MAX_SIZE, i.e.
+FULL batches — the key contrast vs out-of-phase ~4) + batch histogram, and client send-overrun (in-phase
+bursts stress the client harder — flag if client-bound; if it bites, note it and lean on the lower N that
+were clean).
+
+REPORT (`inphase-confirmation.md`): the in-phase keep-up knee + avg B per N; the contrast table vs the
+out-of-phase result (knee 56, avg B ~4 — from highN-validation.md / max-parallelism-sweep.md); the verdict:
+does in-phase push the knee toward the ~180 forced-batch ceiling with avg B ~= MAX_SIZE (confirming the lane
+is the queue + phasing is the penalty)? Note any client-bound caveat. CLEANUP: kill server by PID, free 8080
++ GPU, remove temp files/__pycache__; don't touch 8088.
+</task>
+
+<context>
+Read max-parallelism-sweep.md (Part A forced-batch ceiling 220 @ B=46; out-of-phase knee 56 @ avg B 4.16),
+highN-validation.md, and the harness (`concurrency_test.py` ext `7864feb` + `coloc_loadgen.py`). The lane =
+single inference_lock model-call path, ~11-15ms/call, launch-dispatch-bound. In-phase should fill batches to
+~MAX_SIZE and keep the lane idle between 160ms bursts, so TTFS stays flat until N ~ 160ms / T(B) * B ~= 180.
+</context>
+
+<verification_loop>
+Confirm in-phase actually fills batches (avg B near MAX_SIZE, not ~4) — that's the whole point. If avg B is
+still small in "in-phase" mode, the alignment isn't working (debug the lockstep timing) before reporting. If
+the client send-overrun spikes at high N (in-phase bursts are harder on one client), flag it.
+</verification_loop>
+
+<action_safety>
+Measurement only; an in-phase load-gen (no server.py change). No commits. Kill server; free GPU; not 8088.
+</action_safety>
+
+<compact_output_contract>
+Report: in-phase knee + avg B per N; contrast vs out-of-phase (56 / avg B 4); verdict (does in-phase reach
+~180 with full batches -> lane is the queue, phasing is the penalty); client-bound caveat; cleanup.
+</compact_output_contract>
