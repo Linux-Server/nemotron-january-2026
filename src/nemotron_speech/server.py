@@ -1103,6 +1103,8 @@ class ASRServer:
                 "reserved_bytes": 0,
                 "max_reserved_bytes": 0,
                 "retained_session_cache_bytes": self._retained_session_cache_bytes(),
+                "num_alloc_retries": 0,
+                "num_ooms": 0,
             }
         stats = torch.cuda.memory_stats()
         active = int(stats.get("active_bytes.all.current", torch.cuda.memory_allocated()))
@@ -1112,6 +1114,10 @@ class ASRServer:
             "reserved_bytes": int(torch.cuda.memory_reserved()),
             "max_reserved_bytes": int(torch.cuda.max_memory_reserved()),
             "retained_session_cache_bytes": self._retained_session_cache_bytes(),
+            # cudaMalloc-stall signal: num_alloc_retries increments when a malloc fails -> cache-free -> retry
+            # (a synchronous, device-syncing stall). num_ooms = hard OOMs. Both CUMULATIVE.
+            "num_alloc_retries": int(stats.get("num_alloc_retries", 0)),
+            "num_ooms": int(stats.get("num_ooms", 0)),
         }
 
     def _log_retained_cache_telemetry(self, reason: str) -> None:
@@ -8161,6 +8167,7 @@ class ASRServer:
             return
         if (
             batch_size == 1
+            and model_ms < 200.0   # always log a STALL batch (find what coincides with num_alloc_retries)
             and self._scheduler_batches % self.batch_memory_telemetry_every != 0
         ):
             return
@@ -8180,7 +8187,9 @@ class ASRServer:
             f"cuda_reserved_before_bytes={mem_before['reserved_bytes']} "
             f"cuda_reserved_after_bytes={mem_after['reserved_bytes']} "
             f"cuda_max_reserved_bytes={mem_after['max_reserved_bytes']} "
-            f"retained_session_cache_bytes={mem_after['retained_session_cache_bytes']}"
+            f"retained_session_cache_bytes={mem_after['retained_session_cache_bytes']} "
+            f"num_alloc_retries={mem_after['num_alloc_retries']} "
+            f"num_ooms={mem_after['num_ooms']}"
         )
 
     def _process_ready_batch(self, sessions: list[ASRSession]) -> dict[str, Optional[str]]:
