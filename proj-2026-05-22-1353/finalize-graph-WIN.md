@@ -29,3 +29,20 @@ fixable (the next lever if we want to tighten P99). NOT WAN/transmission.
 The finalize graph is default-off (NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE), fail-closed, byte-exact -> enable in prod
 (deploy/launch_multiproc.sh). Memory: ~2.9GB reserved/proc (B=1 x T=42-60 across 3 managers) -- fine on L40S; on
 L4(24GB) trim the T range to the observed 43-58 (16 buckets). The livelock fix (cooperative yield) ships with it.
+
+## P99 tail follow-up (post-win): allocator ruled out, GC marginal, residual = ~1s model-batch stall
+- **Pre-malloc / CUDA allocator: RULED OUT** — num_alloc_retries=0 across 51k log entries. Pre-allocating won't help.
+- **GC fix** (NEMOTRON_GC_TUNE: gc.freeze() after load + set_threshold(700,100,100); byte-exact, flag-gated): the
+  ~300ms gen-2 pause is DEALLOCATING ~4500 GPU-tensor-wrapping cyclic objects/pass, NOT scanning the (frozen) startup
+  heap -> freeze() ineffective; the threshold cut gen-2 COUNT 14->8. P99 2147->1572 but WITHIN run noise (P99 ranged
+  702-2509 across runs); p50/p95 unchanged (frontier, byte-exact); cuda_reserved bounded +0.4GB. -> Keep GC_TUNE
+  DEFAULT-OFF (marginal; absent from launch_multiproc). gc.freeze() safety: refcounting (immediate free) is untouched
+  + the frozen set is the immortal startup heap, so it leaks nothing; runaway avoided because gen-2 still runs (tuned
+  not disabled) -> bounded cyclic-garbage window (+0.4GB observed).
+- **Residual dominant P99 tail = the ~700-1178ms model-batch stall** (retries=0, GC ruled out). Cause open ->
+  deeper CUDA-stream/cudagraph-lane probe (nsys / per-op timing) if pursued. Same root as the #2 overload stall.
+
+## DURABLE RESULTS (banked + prod-enabled)
+1. Finalize encoder CUDA graph -> 274/401 -> 246/279 (frontier-competitive, beats Deepgram p50+p95), byte-exact,
+   enabled in launch_multiproc.sh.
+2. Scheduler event-loop-starvation livelock FIX (cooperative yield, unconditional) -> ships automatically.
