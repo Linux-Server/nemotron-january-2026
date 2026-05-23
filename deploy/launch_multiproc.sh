@@ -27,10 +27,16 @@ export HF_HOME="${HF_HOME:-$HOME/hf}"
 export CUDA_MPS_PIPE_DIRECTORY="${CUDA_MPS_PIPE_DIRECTORY:-/tmp/nvidia-mps}"
 export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-/tmp/nvidia-mps-log}"
 
-# silence0_warm200 + batching + the committed TTFS levers (barrier-drain, finalize-storm).
+# silence0_warm200 + batching + barrier-drain + encoder CUDA graphs (STEADY + FINALIZE). The finalize encoder
+# graph is the byte-exact 274/401 -> 246/279 TTFS win (frontier-competitive); it REQUIRES the steady graph (it
+# warms its finalize buckets into the steady graph managers). The scheduler event-loop-starvation livelock fix is
+# unconditional in server.py (ships automatically). MEMORY: the finalize graph adds ~2-3 GB graph-pool/proc
+# (B=1 x T=42..60); on L4 (24 GB) with K=2, lower NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX (observed T is 43-58)
+# or reduce procs if tight — see DEPLOYMENT.md.
 SRV_ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200
          NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_BATCH_MAX_SIZE=32 NEMOTRON_BATCH_MAX_WAIT_MS=8
-         "NEMOTRON_MODEL_LANES=$LANES" NEMOTRON_BATCH_BARRIER_DRAIN=1 NEMOTRON_BATCH_FINALIZE=1)
+         "NEMOTRON_MODEL_LANES=$LANES" NEMOTRON_BATCH_BARRIER_DRAIN=1 NEMOTRON_BATCH_FINALIZE=1
+         NEMOTRON_ENCODER_CUDAGRAPH=1 NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=8 NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1)
 
 cd "$APP_DIR"
 
