@@ -2041,6 +2041,10 @@ class ASRServer:
             "debounce_to_finalize_start_ms": None,   # debounce_expiry -> fork_flush_start (post-debounce pickup)
             "finalize_done_to_sent_ms": None,        # fork_flush_done -> final_sent (emit)
             "vad_stop_to_sent_ms": None,             # vad_stop -> final_sent (total server-side path)
+            # Last-stage finalize gather (the "final gather / token Python" suspect): Python
+            # stack+clone NOT otherwise broken out of fork_flush_wall; cost scales w/ hyp/token length.
+            "final_gather_ms": None,                 # stack inputs + clone hyps/pred + stack (6792-6814)
+            "clone_hyp_flush_ms": None,              # just clone_hypotheses_deep + clone_tree (per-row)
             "fork_clone_ms": 0.0,
             "fork_clone_audio_ms": 0.0,
             "fork_clone_cache_ms": 0.0,
@@ -6789,6 +6793,9 @@ class ASRServer:
         rows: list[SchedulerFinalizeBatchRow],
         key: tuple,
     ) -> dict[str, Optional[str]]:
+        gather_start = time.perf_counter()
+        final_gather_ms = None
+        clone_hyp_flush_ms = None
         try:
             chunk_mels = [row.chunk_mel for row in rows]
             processed_signal, processed_signal_length = stack_processed(chunk_mels)
@@ -6802,6 +6809,7 @@ class ASRServer:
                     for row in rows
                 ]
             )
+            clone_hyp_start = time.perf_counter()
             previous_hypotheses = [
                 clone_hypotheses_deep(row.item.fork.previous_hypotheses)
                 for row in rows
@@ -6810,8 +6818,10 @@ class ASRServer:
                 clone_tree(row.item.fork.pred_out_stream)
                 for row in rows
             ]
+            clone_hyp_flush_ms = (time.perf_counter() - clone_hyp_start) * 1000.0
             flat_hypotheses = stack_hypotheses(previous_hypotheses)
             flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
+            final_gather_ms = (time.perf_counter() - gather_start) * 1000.0
         except Exception as e:
             if len(rows) > 1:
                 return self._process_final_batch_solo_fallback(
@@ -6910,6 +6920,8 @@ class ASRServer:
                     row.item.finalize_profile["cache_last_channel_len_out"] = (
                         self._finalize_profile_tensor_value(row_cache[2])
                     )
+                    row.item.finalize_profile["final_gather_ms"] = final_gather_ms
+                    row.item.finalize_profile["clone_hyp_flush_ms"] = clone_hyp_flush_ms
                 text = row.item.final_text
                 if (
                     transcribed_texts
