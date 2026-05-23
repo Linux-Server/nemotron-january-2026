@@ -116,6 +116,34 @@ delta — and re-run step1c (K=4). Localizes the dark ~210 ms (reset vs debounce
 growing half of the client finalize is host-side and currently dark — fix THAT, not the (already-fast) compute.
 Then a production-config (K + BATCH_FINALIZE + LB, real client) WAN bench for the true client TTFS.
 
+## CORRECTION (trigger-edge instrumented, step1c re-run): the "210 ms dark trigger" was WRONG
+Instrumented the `vad_stop`→finalize-start→sent edges (commit 55fa4ab, all from the `_continuous_finalize_timing`
+time.time() stamps). Server-side `vad_stop→final_sent` decomposition (emitted finals, K=4+MPS):
+
+| segment | BF=0 p95 | BF=1 p95 |
+|---|--:|--:|
+| TRIGGER (`vad_stop`→finalize-start = debounce + pickup) | **5.6** | **41.5** |
+| `fork_flush_wall` (COMPUTE) | 131.5 | 137.2 |
+| └ `lock_wait` (nested, lane contention) | 87.4 | 88.5 |
+| `finalize_done_to_sent` (emit) | 0.1 | 0.1 |
+| **`vad_stop_to_sent` (total server-side)** | **137.8** | **164.5** |
+
+1. **The trigger is tiny (~5-41 ms), NOT ~210.** Total server-side finalize is **~138-165 ms p95**, almost all
+   `fork_flush_wall`, which is **~64% `lock_wait` (~87 ms = lane contention)**. The lever is unambiguous: lane
+   contention. Strip it -> server finalize ~70 ms.
+2. **The loadgen over-reports by ~225 ms.** Its TTFS (390-452) is ~225 ms ABOVE the server's own `vad_stop→sent`
+   (~150) — on LOCALHOST (no network). That gap is client-side (10 conns/one asyncio loop, and/or server
+   audio-backlog BEFORE the `vad_stop` timestamp). **The loadgen is NOT a trustworthy absolute-TTFS proxy**; the
+   server-side ~150 ms is the real finalize cost. (My earlier "two halves = 130 compute + 210 trigger" was wrong —
+   it's ~150 server, lock-bound, + a loadgen client-side artifact.)
+3. BF=0 ≈ BF=1 server-side bulk (138 vs 165, run-variance; loadgen even flipped them) — BF is an outlier-cap, not
+   a bulk win (re-confirmed).
+
+**NEXT:** (1) REAL WAN bench (stt-benchmark client, K=4 prod config + LB) for the trustworthy client TTFS — the
+loadgen over-reports and the only real number (401) was single-proc + BF-off. (2) Attack `lock_wait` (~87 ms lane
+contention) — the confirmed server-side lever (~80 ms of the ~150). The probe disproved the dark-trigger
+hypothesis AND pinpointed lock_wait — exactly what a probe should do.
+
 ## Value of the probe (why this is a success, not a failure)
 The probe-first plan (gate Steps 1–2 before building Steps 3–7) + the **reproducibility gate added in review R5**
 caught this for ~1 instrumentation pass + ~1 cloud run (~30 min, ~$2) — instead of building a 7-step finalize-graph
