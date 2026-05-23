@@ -14,6 +14,7 @@ ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200
 # Step-1 probe + Step-7 config passthroughs (default off):
 [ "${FINALIZE_PROFILE:-0}" = 1 ] && ENV+=(NEMOTRON_FINALIZE_PROFILE=1)
 [ "${BATCH_FINALIZE:-0}" = 1 ] && ENV+=(NEMOTRON_BATCH_FINALIZE=1 NEMOTRON_BATCH_FINALIZE_PREPROC=1)
+[ "${BARRIER_DRAIN:-0}" = 1 ] && ENV+=(NEMOTRON_BATCH_BARRIER_DRAIN=1)   # match prod (launch_multiproc) for the steady path
 exec env -u LD_LIBRARY_PATH "${ENV[@]}" \
   "$HOME/nemo-venv/bin/python" server.py --model nvidia/nemotron-speech-streaming-en-0.6b \
   --host 0.0.0.0 --port 8080 --right-context 1
