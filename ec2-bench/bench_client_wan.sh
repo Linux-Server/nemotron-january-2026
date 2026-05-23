@@ -75,9 +75,10 @@ run_one(){
   local WD=$!
   timeout 1500 "$PY" proj-2026-05-19-eou-endpointing/run_full1000_conc12.py --url "ws://$IP:8080" --model-tag "$tag" --concurrency "$CONC" 2>&1 | tail -6
   kill $WD 2>/dev/null || true
-  if [ "${FINALIZE_PROFILE:-0}" = 1 ]; then   # pull server-side finalize decomposition for this run
+  if [ "${FINALIZE_PROFILE:-0}" = 1 ]; then   # pull server-side finalize decomposition + full log (USR1 dumps land here on a hang)
     ssh -i "$KEY" $SSHO ubuntu@"$IP" "grep finalize_profile_record ~/nemotron/srv_prod.log" > "$E/leaderboard_decomp_${tag}.records" 2>/dev/null
-    echo "  pulled $(wc -l < "$E/leaderboard_decomp_${tag}.records" 2>/dev/null || echo 0) finalize_profile records -> $E/leaderboard_decomp_${tag}.records"
+    ssh -i "$KEY" $SSHO ubuntu@"$IP" "cat ~/nemotron/srv_prod.log" > "$E/leaderboard_decomp_${tag}.srvlog" 2>/dev/null
+    echo "  pulled $(wc -l < "$E/leaderboard_decomp_${tag}.records" 2>/dev/null || echo 0) finalize records + full srvlog -> $E/leaderboard_decomp_${tag}.{records,srvlog}"
   fi
   ssh -i "$KEY" $SSHO ubuntu@"$IP" "pkill -f 'server.py --model'" 2>/dev/null || true
   kill $SSHSRV 2>/dev/null || true
