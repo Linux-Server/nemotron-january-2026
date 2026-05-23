@@ -31,3 +31,11 @@ complete, or a stream deadlock), NOT a scheduler/asyncio deadlock. No traceback,
   reproduces the hang (→ real bug, pivot to debugging it) OR completes (→ flake, and we get the decomposition).
 - If it hangs again: bisect the prod flags (cudagraph / barrier-drain / batch-finalize) to localize, with FORK_ASSERT
   and a CUDA-hang watchdog.
+
+## UPDATE: did NOT reproduce locally (RTX5090)
+`local_hang_repro.sh` ran the EXACT full prod config (cudagraph+lanes2+barrier-drain+batch-finalize) under
+sustained conc-10 for 300 utterances / **668 finalizes — clean, no hang** (TTFS 14/20). So the cloud freeze is NOT
+a deterministic config bug; it is cloud-specific (L40S/g6e GPU-driver transient) or a WAN-timing race — most likely
+a one-off flake. NEXT: watchdogged cloud re-run (bench_client_wan.sh now has a server-silence watchdog + 25min
+timeout + FAULTHANDLER passthrough so a hang is caught in ~4min AND its stacks are dumped). Completes -> flake +
+decomposition obtained; hangs again -> reproducible cloud issue -> bisect the prod flags.

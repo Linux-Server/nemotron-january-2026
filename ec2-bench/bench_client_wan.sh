@@ -54,13 +54,27 @@ run_one(){
   [ $ok != 1 ] && { echo "bootstrap TIMEOUT"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -20 ~/nemotron/bootstrap.log'; "$PY" $E/ec2_down.py; return 1; }
   # ONE production server, bound 0.0.0.0 (external client), cudagraph ON + lanes=2. Run in the FOREGROUND of a
   # BACKGROUNDED ssh so the server lives with the connection (one-shot `ssh "... &"` gets torn down at close).
-  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B FINALIZE_PROFILE=${FINALIZE_PROFILE:-0} BATCH_FINALIZE=${BATCH_FINALIZE:-0} BARRIER_DRAIN=${BARRIER_DRAIN:-0} bash start_prod_server.sh > srv_prod.log 2>&1" &
+  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B FINALIZE_PROFILE=${FINALIZE_PROFILE:-0} BATCH_FINALIZE=${BATCH_FINALIZE:-0} BARRIER_DRAIN=${BARRIER_DRAIN:-0} FAULTHANDLER=${FAULTHANDLER:-0} bash start_prod_server.sh > srv_prod.log 2>&1" &
   local SSHSRV=$!
   local sok=0; for _ in $(seq 1 90); do sleep 4; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -q "ASR server listening" ~/nemotron/srv_prod.log' 2>/dev/null && { sok=1; break; }; done
   if [ $sok != 1 ]; then echo "server FAILED to start"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -30 ~/nemotron/srv_prod.log' 2>/dev/null; kill $SSHSRV 2>/dev/null; "$PY" $E/ec2_down.py; return 1; fi
   ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -E "encoder_cuda_graph_enabled=|manager_captured" ~/nemotron/srv_prod.log | head'
   echo "=== LOCAL harness (client) -> ws://$IP:8080 | full 1000 @ conc $CONC (latency INCLUDES WAN to $REGION) ==="
-  "$PY" proj-2026-05-19-eou-endpointing/run_full1000_conc12.py --url "ws://$IP:8080" --model-tag "$tag" --concurrency "$CONC" 2>&1 | tail -6
+  # WATCHDOG: if the server log goes silent > SILENCE_S (default 180s) the server hung -> kill the client so the
+  # run tears down + terminates instead of idling for hours (the b4wp7pcn0 stall burned ~1.5h with no watchdog).
+  ( SILENCE_S="${SILENCE_S:-180}"; sleep 60
+    while pgrep -f run_full1000_conc12 >/dev/null 2>&1; do
+      age=$(ssh -i "$KEY" $SSHO ubuntu@"$IP" 'echo $(( $(date +%s) - $(stat -c %Y ~/nemotron/srv_prod.log 2>/dev/null || echo 0) ))' 2>/dev/null)
+      if [ -n "$age" ] && [ "$age" -gt "$SILENCE_S" ] 2>/dev/null; then
+        echo "[watchdog] server log silent ${age}s -> HANG; dumping stacks (USR1) + killing client"
+        ssh -i "$KEY" $SSHO ubuntu@"$IP" "pkill -USR1 -f 'server.py --model'" 2>/dev/null || true
+        pkill -f run_full1000_conc12 2>/dev/null || true; break
+      fi
+      sleep 30
+    done ) &
+  local WD=$!
+  timeout 1500 "$PY" proj-2026-05-19-eou-endpointing/run_full1000_conc12.py --url "ws://$IP:8080" --model-tag "$tag" --concurrency "$CONC" 2>&1 | tail -6
+  kill $WD 2>/dev/null || true
   if [ "${FINALIZE_PROFILE:-0}" = 1 ]; then   # pull server-side finalize decomposition for this run
     ssh -i "$KEY" $SSHO ubuntu@"$IP" "grep finalize_profile_record ~/nemotron/srv_prod.log" > "$E/leaderboard_decomp_${tag}.records" 2>/dev/null
     echo "  pulled $(wc -l < "$E/leaderboard_decomp_${tag}.records" 2>/dev/null || echo 0) finalize_profile records -> $E/leaderboard_decomp_${tag}.records"
