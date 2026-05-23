@@ -2202,6 +2202,46 @@ class ASRServer:
                 result[4]
             )
 
+    def _maybe_finalize_torch_profile_begin(self):
+        # Kernel-level finalize profile (NEMOTRON_FINALIZE_TORCH_PROFILE=N profiles the first N finalize model
+        # calls). Observation-only (does NOT change outputs) -> byte-exact when off (returns None -> no-op).
+        n = int(os.environ.get("NEMOTRON_FINALIZE_TORCH_PROFILE", "0"))
+        if n <= 0 or getattr(self, "_finalize_torch_profile_count", 0) >= n:
+            return None
+        try:
+            from torch.profiler import profile as _tp, ProfilerActivity as _pa
+            prof = _tp(activities=[_pa.CPU, _pa.CUDA])
+            prof.__enter__()
+            return prof
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"finalize_torch_profile begin failed: {e}")
+            return None
+
+    def _maybe_finalize_torch_profile_end(self, prof, *, b, t) -> None:
+        if prof is None:
+            return
+        try:
+            prof.__exit__(None, None, None)
+            self._finalize_torch_profile_count = getattr(self, "_finalize_torch_profile_count", 0) + 1
+            ka = prof.key_averages()
+            cuda_us = sum(e.self_cuda_time_total for e in ka)
+            cpu_us = sum(e.self_cpu_time_total for e in ka)
+            kernels = sum(e.count for e in ka if e.self_cuda_time_total > 0)
+            low = lambda s: s.lower()  # noqa: E731
+            hit = lambda name, subs: any(s in low(name) for s in subs)  # noqa: E731
+            memcpy = sum(e.count for e in ka if hit(e.key, ("memcpy", "copy_", "item", "_local_scalar", "nonzero", "_to_copy")))
+            sync = sum(e.count for e in ka if hit(e.key, ("synchron",)))
+            logger.info(
+                f"finalize_torch_profile #{self._finalize_torch_profile_count} B={b} T={t}: "
+                f"kernel_launches={kernels} self_cuda_us={cuda_us:.0f} self_cpu_us={cpu_us:.0f} "
+                f"cpu/cuda={cpu_us / max(cuda_us, 1e-9):.2f} (>>1 = launch-bound) "
+                f"memcpy_d2h_ops={memcpy} sync_ops={sync}"
+            )
+            logger.info("finalize_torch_profile TOP-BY-CUDA:\n" + ka.table(sort_by="self_cuda_time_total", row_limit=12))
+            logger.info("finalize_torch_profile TOP-BY-COUNT:\n" + ka.table(sort_by="count", row_limit=12))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"finalize_torch_profile end failed: {e}")
+
     def _finalize_profile_set_model_wall(
         self,
         profile: Optional[dict[str, Any]],
@@ -6845,6 +6885,7 @@ class ASRServer:
                 "encoder_invocations": 0,
             }
             self._finalize_profile_cuda_synchronize(model_profile)
+        _ftp = self._maybe_finalize_torch_profile_begin()
         model_start = time.perf_counter()
         (
             pred_out_stream,
@@ -6871,6 +6912,9 @@ class ASRServer:
         else:
             self._cuda_synchronize_for_current_model_lane()
         model_ms = (time.perf_counter() - model_start) * 1000.0
+        self._maybe_finalize_torch_profile_end(
+            _ftp, b=len(rows), t=int(processed_signal.shape[-1]) if hasattr(processed_signal, "shape") else None
+        )
         self._finalize_profile_set_model_wall(model_profile, model_ms)
 
         batch_size = len(rows)
