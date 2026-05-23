@@ -2224,9 +2224,9 @@ class ASRServer:
             prof.__exit__(None, None, None)
             self._finalize_torch_profile_count = getattr(self, "_finalize_torch_profile_count", 0) + 1
             ka = prof.key_averages()
-            cuda_us = sum(e.self_cuda_time_total for e in ka)
+            cuda_us = sum(e.self_device_time_total for e in ka)  # torch 2.11: cuda->device rename
             cpu_us = sum(e.self_cpu_time_total for e in ka)
-            kernels = sum(e.count for e in ka if e.self_cuda_time_total > 0)
+            kernels = sum(e.count for e in ka if e.self_device_time_total > 0)
             low = lambda s: s.lower()  # noqa: E731
             hit = lambda name, subs: any(s in low(name) for s in subs)  # noqa: E731
             memcpy = sum(e.count for e in ka if hit(e.key, ("memcpy", "copy_", "item", "_local_scalar", "nonzero", "_to_copy")))
