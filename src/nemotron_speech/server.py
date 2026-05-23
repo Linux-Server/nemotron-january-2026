@@ -3978,6 +3978,17 @@ class ASRServer:
                 logger.error(traceback.format_exc())
                 progressed = False
 
+            # Cooperative yield (REQUIRED for liveness). _scheduler_drain_once's awaits can ALL complete
+            # synchronously — notably the batched-barrier path, where a barrier-pending session is perpetually
+            # re-marked ready (_scheduler_maybe_complete_pending_barrier_event) and the ready-pass returns
+            # progressed=True every pass. Without an explicit yield, `if progressed: continue` (and the
+            # has_work `continue` below) then spin on in-memory work and NEVER return to the event loop to read
+            # the socket → I/O is starved and the server freezes. Observed on the cloud (Python 3.11 + WAN load)
+            # as a hard hang stuck in _scheduler_drain_once_batched_barrier; masked (not fixed) by 3.12's task
+            # scheduling. sleep(0) guarantees the event loop services I/O + other tasks every iteration. This
+            # changes scheduling timing only — transcripts/finals are unchanged.
+            await asyncio.sleep(0)
+
             if progressed:
                 continue
 
