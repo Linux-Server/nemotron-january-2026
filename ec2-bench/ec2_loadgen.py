@@ -22,6 +22,7 @@ CHUNK_MS = 20
 CHUNK_BYTES = int(SAMPLE_RATE * CHUNK_MS / 1000) * 2  # 20ms int16
 TRAIL_MS = 200
 START_JITTER_MS = int(os.environ.get("LOADGEN_JITTER_MS", "400"))  # 0 = in-phase (force coincident finals -> B>1)
+STREAM_JITTER_MS = int(os.environ.get("LOADGEN_STREAM_JITTER_MS", "0"))  # WAN-mimic: random per-chunk stall (uneven backlog)
 KEEPUP_LAG_MS = 500.0  # proc-lag p95 below this == realtime keep-up
 
 
@@ -96,6 +97,8 @@ async def _run_session(url, audio, delay, n_level):
                 dt = t0 + chunk_i * (CHUNK_MS / 1000.0) - time.monotonic()
                 if dt > 0:
                     await asyncio.sleep(dt)
+                if STREAM_JITTER_MS and random.random() < 0.25:  # WAN-mimic: bursty/irregular arrival -> uneven backlog
+                    await asyncio.sleep(random.uniform(0, STREAM_JITTER_MS / 1000.0))
             res["overrun_ms"] = (time.monotonic() - t0 - expected_s) * 1000
             st["vad_stop_t"] = time.monotonic()
             await ws.send(json.dumps({"type": "vad_stop"}))

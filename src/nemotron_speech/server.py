@@ -3967,6 +3967,9 @@ class ASRServer:
             f"batch_max_wait_ms={self.batch_max_wait_ms} "
             f"batch_max_size={self.batch_max_size}"
         )
+        # Debug A/B ONLY (default OFF => fix ON): NEMOTRON_SCHED_NO_YIELD=1 skips the cooperative yield below to
+        # reproduce the pre-fix livelock for testing. Never set in production.
+        sched_yield = os.environ.get("NEMOTRON_SCHED_NO_YIELD") != "1"
         while True:
             try:
                 progressed = await self._scheduler_drain_once()
@@ -3983,11 +3986,12 @@ class ASRServer:
             # re-marked ready (_scheduler_maybe_complete_pending_barrier_event) and the ready-pass returns
             # progressed=True every pass. Without an explicit yield, `if progressed: continue` (and the
             # has_work `continue` below) then spin on in-memory work and NEVER return to the event loop to read
-            # the socket → I/O is starved and the server freezes. Observed on the cloud (Python 3.11 + WAN load)
-            # as a hard hang stuck in _scheduler_drain_once_batched_barrier; masked (not fixed) by 3.12's task
-            # scheduling. sleep(0) guarantees the event loop services I/O + other tasks every iteration. This
-            # changes scheduling timing only — transcripts/finals are unchanged.
-            await asyncio.sleep(0)
+            # the socket → I/O is starved and the server freezes. Reproduced on the cloud under WAN load on BOTH
+            # Python 3.11 AND 3.12 (stuck in _scheduler_drain_once_batched_barrier) — it is WAN-timing-triggered,
+            # NOT a Python-version issue; it does not trigger on the fast local loopback. sleep(0) guarantees the
+            # event loop services I/O + other tasks every iteration. Scheduling-timing only — outputs unchanged.
+            if sched_yield:
+                await asyncio.sleep(0)
 
             if progressed:
                 continue
