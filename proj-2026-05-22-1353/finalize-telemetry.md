@@ -144,6 +144,32 @@ loadgen over-reports and the only real number (401) was single-proc + BF-off. (2
 contention) — the confirmed server-side lever (~80 ms of the ~150). The probe disproved the dark-trigger
 hypothesis AND pinpointed lock_wait — exactly what a probe should do.
 
+## BATCHING (idea 1): the coincident-finals serialization, and why barrier-drain does NOT fix it
+The in-phase burst (local probe2/probe3, conc-12 same-clip, JITTER=0 -> coincident finals) showed TTFS 14 -> 86/176,
+driven by **queue_wait** (p50 39, p95 ~92-103), with **B=1** on ~all records (model 11 / clone 0.05 / gather 0.08
+all tight). Cause (Codex `codex-finalize-batching-findings.md` + confirmed): `NEMOTRON_BATCH_FINALIZE` batches only
+the `debounce_expired` events visible in ONE scheduler scan (one event/session/pass) then flushes immediately —
+there is NO finalize coalescing WAIT — and `_continuous_flush_finalize_items_locked` then SPLITS by pinned lane.
+So coincident finals (arriving slightly apart) never accumulate -> B=1, serialized -> queue_wait.
+
+**A/B (probe3, same box): `NEMOTRON_BATCH_BARRIER_DRAIN` 0 vs 1 does NOT coalesce finals** — B {1:279,2:6} vs
+{1:271,2:18}, queue_wait p95 92 vs 94, TTFS 167 vs 168 (unchanged). Barrier-drain defers OTHER non-audio events
+behind ready backlog; it does not wait for finals. So my "the harnesses lack barrier-drain that prod sets ->
+config mismatch" hypothesis is REJECTED for finalize: prod (launch_multiproc, barrier-drain ON) has the SAME B=1
+finalize serialization. (The harness/prod barrier-drain mismatch is real but irrelevant to the finalize tail.)
+
+**Idea 1 = NEW work: a default-off finalize coalescing drain** (stage first final, collect debounce_expired until
+batch_max_size / deadline / quiescence, THEN flush; stage-2 concurrent per-lane dispatch). Byte-exact-gated. **Idea 2
+(fused kernel) REJECTED** — 0.1ms Python glue vs ~100ms serialization; decoder state is a Python object tree.
+
+**OPEN (decides the lever):** the queue_wait serialization is the IN-PHASE/coincident case. At the STAGGERED conc-10
+leaderboard, finals coincide rarely — local staggered conc-10 showed queue_wait ~0, lock_wait ~9 (the spread there
+was lock_wait, not queue_wait); single-proc conc-10 server finalize was tight ~66 (lock 22 + model 39, queue ~0).
+So whether the leaderboard P95 (274/401) tail is queue_wait (coincidence -> idea 1 helps), lock_wait (finalize-vs-
+steady lane contention -> a DIFFERENT lever), or the un-decomposed ~112ms client-perceived gap is NOT yet measured
+at the leaderboard config. NEXT: decompose a cloud conc-10 leaderboard run (single-proc, real client/WAN, full
+FINALIZE_PROFILE incl vad_stop->sent) to pick the lever before building.
+
 ## Value of the probe (why this is a success, not a failure)
 The probe-first plan (gate Steps 1–2 before building Steps 3–7) + the **reproducibility gate added in review R5**
 caught this for ~1 instrumentation pass + ~1 cloud run (~30 min, ~$2) — instead of building a 7-step finalize-graph
