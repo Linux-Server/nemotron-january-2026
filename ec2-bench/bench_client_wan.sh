@@ -49,7 +49,7 @@ run_one(){
   local IP; IP=$("$PY" -c "import json;print(json.load(open('$E/.instance.json'))['ip'])")
   echo "IP=$IP"
   bash $E/ec2_push.sh || { echo "push FAILED"; "$PY" $E/ec2_down.py; return 1; }
-  ssh -i "$KEY" $SSHO ubuntu@"$IP" 'cd ~/nemotron && nohup bash bootstrap.sh > bootstrap.log 2>&1 & echo started'
+  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && PYVER=${PYVER:-3.11} nohup bash bootstrap.sh > bootstrap.log 2>&1 & echo started"
   local ok=0; for _ in $(seq 1 80); do sleep 15; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -qi DONE ~/nemotron/bootstrap.log' 2>/dev/null && { ok=1; echo "bootstrap DONE"; break; }; done
   [ $ok != 1 ] && { echo "bootstrap TIMEOUT"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -20 ~/nemotron/bootstrap.log'; "$PY" $E/ec2_down.py; return 1; }
   # ONE production server, bound 0.0.0.0 (external client), cudagraph ON + lanes=2. Run in the FOREGROUND of a

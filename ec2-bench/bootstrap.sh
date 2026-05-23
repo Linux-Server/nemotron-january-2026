@@ -18,8 +18,8 @@ log "install uv"
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
-log "create venv (python 3.11)"
-uv venv --python 3.11 "$VENV"
+log "create venv (python ${PYVER:-3.11})"
+uv venv --python "${PYVER:-3.11}" "$VENV"
 
 log "pip: base runtime deps (incl. torch — unpinned, standard CUDA build)"
 uv pip install --python "$VENV" \
