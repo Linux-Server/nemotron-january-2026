@@ -28,6 +28,27 @@ if os.environ.get("NEMOTRON_FAULTHANDLER") == "1":  # debug: `kill -USR1 <pid>` 
 
     _faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=False)
 
+if os.environ.get("NEMOTRON_GC_PROFILE") == "1":  # debug: log GC stop-the-world pauses (P99-stall hypothesis)
+    import gc as _gc
+    import time as _gctime
+
+    from loguru import logger as _gclogger
+
+    _gc_state: dict = {}
+
+    def _gc_callback(phase, info):
+        if phase == "start":
+            _gc_state["t"] = _gctime.perf_counter()
+        elif phase == "stop":
+            dur_ms = (_gctime.perf_counter() - _gc_state.get("t", _gctime.perf_counter())) * 1000.0
+            if dur_ms >= 20.0:  # only meaningful pauses
+                _gclogger.warning(
+                    f"gc_pause gen={info.get('generation')} collected={info.get('collected')} "
+                    f"uncollectable={info.get('uncollectable')} dur_ms={dur_ms:.1f}"
+                )
+
+    _gc.callbacks.append(_gc_callback)
+
 try:
     from nemotron_speech.batch_primitives import (
         batch_group_key,
