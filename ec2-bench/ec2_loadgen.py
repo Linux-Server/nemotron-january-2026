@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import random
 import time
 from pathlib import Path
@@ -20,7 +21,7 @@ SAMPLE_RATE = 16000
 CHUNK_MS = 20
 CHUNK_BYTES = int(SAMPLE_RATE * CHUNK_MS / 1000) * 2  # 20ms int16
 TRAIL_MS = 200
-START_JITTER_MS = 400
+START_JITTER_MS = int(os.environ.get("LOADGEN_JITTER_MS", "400"))  # 0 = in-phase (force coincident finals -> B>1)
 KEEPUP_LAG_MS = 500.0  # proc-lag p95 below this == realtime keep-up
 
 
@@ -35,6 +36,8 @@ def load_audios(audio_dir, count):
     files = sorted(Path(audio_dir).glob("*.pcm"))
     if not files:
         raise SystemExit(f"no .pcm files in {audio_dir}")
+    if os.environ.get("LOADGEN_ALL_CLIPS"):
+        count = len(files)   # length sweep: load every distinct clip (rotated per round in _run_level)
     return [{"sid": files[i % len(files)].stem, "pcm": files[i % len(files)].read_bytes()}
             for i in range(count)]
 
@@ -111,9 +114,10 @@ async def _run_session(url, audio, delay, n_level):
 def _run_level(url, audios, n, seed_off=0):
     rnd = random.Random(1234 + n + seed_off * 997)  # vary the stagger per repeat
     delays = [rnd.uniform(0, START_JITTER_MS / 1000) for _ in range(n)]
+    rot = seed_off if os.environ.get("LOADGEN_ALL_CLIPS") else 0  # rotate clips per round -> length variety at low conc
     async def go():
         return await asyncio.wait_for(
-            asyncio.gather(*[_run_session(url, audios[i], delays[i], n) for i in range(n)]),
+            asyncio.gather(*[_run_session(url, audios[(i + rot) % len(audios)], delays[i], n) for i in range(n)]),
             timeout=480)
     return asyncio.run(go())
 
