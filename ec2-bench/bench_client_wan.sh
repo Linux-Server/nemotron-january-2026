@@ -54,7 +54,7 @@ run_one(){
   [ $ok != 1 ] && { echo "bootstrap TIMEOUT"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -20 ~/nemotron/bootstrap.log'; "$PY" $E/ec2_down.py; return 1; }
   # ONE production server, bound 0.0.0.0 (external client), cudagraph ON + lanes=2. Run in the FOREGROUND of a
   # BACKGROUNDED ssh so the server lives with the connection (one-shot `ssh "... &"` gets torn down at close).
-  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B FINALIZE_PROFILE=${FINALIZE_PROFILE:-0} BATCH_FINALIZE=${BATCH_FINALIZE:-0} BARRIER_DRAIN=${BARRIER_DRAIN:-0} FAULTHANDLER=${FAULTHANDLER:-0} bash start_prod_server.sh > srv_prod.log 2>&1" &
+  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && CUDAGRAPH_MAX_B=$CUDAGRAPH_MAX_B FINALIZE_PROFILE=${FINALIZE_PROFILE:-0} BATCH_FINALIZE=${BATCH_FINALIZE:-0} BARRIER_DRAIN=${BARRIER_DRAIN:-0} FAULTHANDLER=${FAULTHANDLER:-0} CUDAGRAPH_FINALIZE=${CUDAGRAPH_FINALIZE:-0} bash start_prod_server.sh > srv_prod.log 2>&1" &
   local SSHSRV=$!
   local sok=0; for _ in $(seq 1 90); do sleep 4; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -q "ASR server listening" ~/nemotron/srv_prod.log' 2>/dev/null && { sok=1; break; }; done
   if [ $sok != 1 ]; then echo "server FAILED to start"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -30 ~/nemotron/srv_prod.log' 2>/dev/null; kill $SSHSRV 2>/dev/null; "$PY" $E/ec2_down.py; return 1; fi

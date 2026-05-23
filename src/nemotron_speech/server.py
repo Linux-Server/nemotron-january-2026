@@ -4330,6 +4330,8 @@ class ASRServer:
                 finalize = data.get("finalize", True)
                 await self._scheduler_queue_event(session, ("reset", finalize, msg_type))
             elif msg_type == "vad_start" or msg_type == "vad_stop":
+                if msg_type == "vad_stop" and self.finalize_profile_enabled:
+                    session.continuous_vad_stop_recv_ts = time.time()  # I/O-gap probe: socket-receive vs scheduler-process
                 await self._scheduler_queue_event(session, (msg_type,))
             else:
                 logger.warning(f"Client {session.id}: unknown message type: {msg_type}")
