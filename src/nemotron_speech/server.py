@@ -22,6 +22,12 @@ import torch
 from aiohttp import ClientConnectionResetError, web, WSMsgType
 from loguru import logger
 
+if os.environ.get("NEMOTRON_FAULTHANDLER") == "1":  # debug: `kill -USR1 <pid>` dumps all thread stacks (hang diagnosis)
+    import faulthandler as _faulthandler
+    import signal as _signal
+
+    _faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=False)
+
 try:
     from nemotron_speech.batch_primitives import (
         batch_group_key,
