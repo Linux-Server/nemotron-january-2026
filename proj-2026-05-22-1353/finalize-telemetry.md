@@ -170,6 +170,35 @@ steady lane contention -> a DIFFERENT lever), or the un-decomposed ~112ms client
 at the leaderboard config. NEXT: decompose a cloud conc-10 leaderboard run (single-proc, real client/WAN, full
 FINALIZE_PROFILE incl vad_stop->sent) to pick the lever before building.
 
+## KERNEL PROFILE (idea 2 / graph): finalize is LAUNCH-BOUND — overturns the "graph useless" call
+`NEMOTRON_FINALIZE_TORCH_PROFILE=N` (default-off, observation-only, byte-exact) wraps the finalize model call in
+torch.profiler. 5 isolated finalizes (conc-1, B=1, T~51, RTX5090), consistent:
+
+| metric | value |
+|---|--:|
+| **cudaLaunchKernel / finalize** | **~1376** (+1560 as_strided, 732 view, 288 matmul … thousands of aten dispatch ops) |
+| GPU compute (self CUDA total) | **6.9 ms** |
+| CPU dispatch (self CPU total) | **12.2 ms** (profiling-inflated, but the launch COUNT is not) |
+| aten::copy_ (≈copy-family) | 250 (~763) |
+| sync ops | 20 |
+| top GPU: aten::mm 3.1 ms / cudnn_convolution 2.1 ms (the real conformer math) | |
+
+So the per-finalize is **LAUNCH-BOUND**: ~1376 serial kernel launches; the CPU dispatching them outweighs the
+~6.9 ms of actual GPU math. On the 5090's fast CPU the finalize is ~11 ms; on the cloud's slower single-thread
+Milan CPU it's ~35 ms — **the gap is launch dispatch** (the documented launch-bound knee), not GPU work. The 250
+copies + 20 syncs (cache-aware streaming copies + D2H scalar pulls) are real device traffic + stall points
+(the user's concern (a)), and each copy is itself a dispatch feeding the launch storm.
+
+**This OVERTURNS the earlier "GPU finalize encoder ~40ms STABLE under MPS -> graph useless" conclusion** — that
+mistook *stable-but-slow* for *un-speedable*. A CUDA graph is the textbook fix for 1376 serial launches: capture ->
+ONE replay, collapsing the ~12 ms dispatch toward the ~7 ms GPU floor, **biggest exactly on the launch-bound cloud
+CPU (~35->~10 ms)**. And per the serialization-drain insight, a faster per-call drains the queued finalizes faster
+(queue_wait ∝ per-call cost) — it COMPOUNDS. LEVER (ranked): (1) finalize ENCODER CUDA graph (the bulk; orig plan
+Step 2; per-(B,T) buckets since finalize T varies 44-58; `cudagraph_encoder.py` machinery exists); (2) decode
+(~2.3 ms, eager, un-graphable on Blackwell/Ada) stays small; (3) hand-fused kernel = higher-effort alternative.
+GATE before building: confirm `model_wall`'s share of the leaderboard P95 (cloud decomp). probe cut BOTH ways this
+session — killed 3 wrong hypotheses AND resurrected a wrongly-rejected lever.
+
 ## Value of the probe (why this is a success, not a failure)
 The probe-first plan (gate Steps 1–2 before building Steps 3–7) + the **reproducibility gate added in review R5**
 caught this for ~1 instrumentation pass + ~1 cloud run (~30 min, ~$2) — instead of building a 7-step finalize-graph
