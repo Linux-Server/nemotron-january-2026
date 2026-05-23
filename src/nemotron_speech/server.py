@@ -468,6 +468,7 @@ class ASRSession:
     continuous_reset_seen: bool = False
     continuous_post_stop_audio: bytearray = field(default_factory=bytearray)
     continuous_vad_stop_ts: Optional[float] = None
+    continuous_vad_stop_recv_ts: Optional[float] = None  # when the vad_stop MESSAGE arrived off the socket (I/O-gap probe)
     continuous_debounce_expiry_ts: Optional[float] = None
     eou_probe_chunk_index: int = 0
     eou_snapshot_audio: bytearray = field(default_factory=bytearray)
@@ -2047,6 +2048,7 @@ class ASRServer:
             "debounce_to_finalize_start_ms": None,   # debounce_expiry -> fork_flush_start (post-debounce pickup)
             "finalize_done_to_sent_ms": None,        # fork_flush_done -> final_sent (emit)
             "vad_stop_to_sent_ms": None,             # vad_stop -> final_sent (total server-side path)
+            "vad_stop_recv_to_process_ms": None,     # vad_stop RECEIVED off socket -> scheduler-PROCESSED (end-of-stream backlog)
             # Last-stage finalize gather (the "final gather / token Python" suspect): Python
             # stack+clone NOT otherwise broken out of fork_flush_wall; cost scales w/ hyp/token length.
             "final_gather_ms": None,                 # stack inputs + clone hyps/pred + stack (6792-6814)
@@ -2336,6 +2338,11 @@ class ASRServer:
             if vad_stop is not None and final_sent is not None:
                 profile["vad_stop_to_sent_ms"] = max(
                     0.0, (float(final_sent) - float(vad_stop)) * 1000
+                )
+            vad_stop_recv = timing.get("vad_stop_recv")
+            if vad_stop_recv is not None and vad_stop is not None:
+                profile["vad_stop_recv_to_process_ms"] = max(  # end-of-stream backlog: socket-recv -> scheduler-process
+                    0.0, (float(vad_stop) - float(vad_stop_recv)) * 1000
                 )
 
         start_perf = profile.get("_start_perf")
@@ -3791,6 +3798,8 @@ class ASRServer:
                 finalize = data.get("finalize", True)
                 await queue.put(("reset", finalize, msg_type))
             elif msg_type == "vad_start" or msg_type == "vad_stop":
+                if msg_type == "vad_stop" and self.finalize_profile_enabled:
+                    session.continuous_vad_stop_recv_ts = time.time()  # I/O-gap probe: socket-receive vs scheduler-process
                 await queue.put((msg_type,))
             else:
                 logger.warning(f"Client {session.id}: unknown message type: {msg_type}")
@@ -6103,6 +6112,7 @@ class ASRServer:
         return {
             "reason": reason,
             "vad_stop": session.continuous_vad_stop_ts,
+            "vad_stop_recv": session.continuous_vad_stop_recv_ts,
             "debounce_expiry": session.continuous_debounce_expiry_ts,
             "fork_flush_start": None,
             "fork_flush_done": None,
@@ -7101,6 +7111,7 @@ class ASRServer:
         timing: dict[str, Any] = {
             "reason": reason,
             "vad_stop": session.continuous_vad_stop_ts,
+            "vad_stop_recv": session.continuous_vad_stop_recv_ts,
             "debounce_expiry": session.continuous_debounce_expiry_ts,
             "fork_flush_start": None,
             "fork_flush_done": None,
