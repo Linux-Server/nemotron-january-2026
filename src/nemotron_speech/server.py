@@ -8853,6 +8853,19 @@ class ASRServer:
         if self.scheduler_enabled:
             self._ensure_scheduler_task()
 
+        # GC tuning (NEMOTRON_GC_TUNE=1; byte-exact — changes WHEN garbage is collected, not outputs). The default
+        # gen-2 collector does ~280ms stop-the-world pauses (it scans the ~74k long-lived model + CUDA-graph objects
+        # plus the per-utterance churn) — a confirmed P99-stall contributor. gc.freeze() moves the now-loaded
+        # startup heap (model, graphs) to the permanent generation so gen-2 only scans the runtime churn; the raised
+        # thresholds make gen-2 rarer. Called after load_model() + graph capture so the long-lived objects exist.
+        if os.environ.get("NEMOTRON_GC_TUNE", "") == "1":
+            import gc as _gc
+
+            _gc.collect()
+            _gc.freeze()
+            _gc.set_threshold(700, 100, 100)
+            logger.info(f"gc_tuned frozen_objects={_gc.get_freeze_count()} thresholds={_gc.get_threshold()}")
+
         logger.info(f"Starting streaming ASR server on ws://{self.host}:{self.port}")
 
         app = web.Application()
