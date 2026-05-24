@@ -47,10 +47,10 @@ Note the user chose NOT to freeze the Python baseline → 0.0 is re-checked agai
 |---|---|---|
 | 0.0 residual value < threshold | `< >` | **STOP** |
 | 0.1 only MPS/multi-proc overlaps (not single-process) | `< >` | likely STOP; else native-under-MPS = **tail-only**, re-run 0.0 |
-| 0.3 py3.13t closes residual + free-threaded stack stable | `< >` | **choose B4** (skip native ports) |
+| (B4 / py3.13t path) | — | **REMOVED 2026-05-24 — user rejected free-threaded Python; outcome space is B1 or STOP** |
 | 0.1 positive AND 0.6a + 0.2 + 0.8 + 0.11 pass | `< >` | **proceed B1** |
-| 0.6a fails byte/state equivalence (0.3 didn't win) | `< >` | STOP, or named T1-only native-decode risk sign-off |
-| 0.2 fails T2a / libtorch byte-exact unattainable | `< >` | no B1a → B4 if 0.3 won, else STOP / B2-risk sign-off |
+| 0.6a fails byte/state equivalence | `< >` | STOP, or named T1-only native-decode risk sign-off (no B4 fallback) |
+| 0.2 fails T2a / libtorch byte-exact unattainable | `< >` | no B1a → STOP / B2-risk sign-off (no B4 fallback) |
 | 0.8 fails native-preproc byte-exact | `< >` | STOP, or Python-preproc as named non-v1 topology |
 | 0.9 fails (can't parameterize per-call config) | `< >` | drop shared-weight density → per-lane replicas; re-run 0.0 |
 | 0.5 B stays ~1 | `< >` | drop 3–5× throughput; re-run 0.0 |
@@ -58,4 +58,4 @@ Note the user chose NOT to freeze the Python baseline → 0.0 is re-checked agai
 | 3.3 fusion unproven | `< >` | 6–10 ms finalize out of v1 scope (B1 = parity); core go/no-go unaffected |
 
 ## Final decision
-`<STOP | B4 | B1 | native-under-MPS-tail-only | proceed-to-fusion>` — rationale: `<…>`
+`<STOP | B1 | proceed-to-fusion>` — rationale: `<…>` (B4/B5 removed by the user 2026-05-24; outcome space is B1 or STOP)

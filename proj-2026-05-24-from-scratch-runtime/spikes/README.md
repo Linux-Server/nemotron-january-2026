@@ -13,18 +13,23 @@ GPU / cloud / the post-Python baseline, the harness is a skeleton with the run-s
 | 0.11 graph ownership | `0.11-graph-ownership.md` | **COMPLETE** (analysis + decision criteria; numbers TBM) | GPU for the memory measurement |
 | 0.4 decision memo | `decision-template.md` | template + filled decision tree + pre-registered-thresholds block | the spike outcomes |
 | 0.1 overlap/MPS ablation | `0.1-overlap-ablation/` | harness skeleton + ablation matrix + thresholds | GPU + post-Python baseline |
-| 0.3 py3.13t probe | `0.3-py313t/` | probe-script skeleton + README | a py3.13t env + the stack |
+| ~~0.3 py3.13t probe~~ | `0.3-py313t/` (RETIRED) | tombstone — B4 rejected 2026-05-24 | — (proof moved to 0.1b) |
+| 0.1b native launch-overlap microbench | `0.1-overlap-ablation/` | folded into 0.1 (conjunct-2 proof) | captured encoder graph + GPU |
 | 0.5 batching sim | `0.5-batching-sim/` | trace schema + pure-Python simulator skeleton + instrumentation spec | server trace capture (spec only — NOT applied) |
 | 0.7 aarch64 | `0.7-aarch64/` | version-matrix checklist template | a GB10/aarch64 box |
 
 **Run order (path-forward review re-sequenced to front-load STOP evidence — decision-value order, NOT numeric):**
+**OUTCOME SPACE: native Rust/C++ (B1) or STOP.** The user removed B4 (free-threaded Python) and B5 (in-tree extension)
+2026-05-24. Spike 0.3 (py3.13t) is RETIRED; its conjunct-2 proof moved into 0.1b (native launch-overlap microbench).
+
 1. **0.0-pre residual-ceiling arithmetic** (free, paper; do FIRST — may STOP with zero spend; see `decision-template.md`).
 2. **0.5 one-pass histogram + synthetic phase-sensitivity** (afternoon; existing 86%-B=1 data likely already kills 3–5×).
-3. **0.3 stage-1 py3.13t import probe** (1–2 days, baseline-independent, **before 0.1** — B4 is the cheap success path).
-4. wire the Python plan's **Step-5 GIL probe** into 0.1 → **0.1 reduced binary** (single-process vs MPS overlap).
-5. **0.3 stage-2** (if stage-1 + 0.1 say GIL-bound) → **0.11 GPU mem** (only if 0.5 keeps graphs) → **0.7** (non-gating).
-6. **0.4 decision memo.** Only if it says "B1/B5 path" do the Wave-2 ports get funded.
+3. wire the Python plan's **Step-5 GIL probe** into 0.1.
+4. **0.1 = (a) reduced binary** (single-process vs MPS overlap) **+ (b) native launch-overlap microbench** (the
+   conjunct-2 proof; N no-GIL threads replaying the captured encoder graph — needs the graph + a GPU).
+5. **0.11 GPU mem** (only if 0.5 keeps graphs) → **0.7** (non-gating).
+6. **0.4 decision memo.** Only if it says "B1 path" do the Wave-2 ports get funded.
 
-**Safe to start in parallel NOW (wastes nothing if 0.0 STOPs):** 0.0-pre arithmetic + threshold freeze; 0.3 stage-1
-import recon (time-boxed); 0.5 synthetic runs; making the Python Step-5 probe emit a 0.1-consumable decode-vs-glue split.
+**Safe to start in parallel NOW (wastes nothing if 0.0 STOPs):** 0.0-pre arithmetic + threshold freeze; 0.5 synthetic
+runs; making the Python Step-5 probe emit a 0.1-consumable decode-vs-glue split.
 **Do NOT start:** any native port (0.6a/0.2/0.8/0.10), Rust/C++ scaffolding, the full 0.1 ablation matrix.

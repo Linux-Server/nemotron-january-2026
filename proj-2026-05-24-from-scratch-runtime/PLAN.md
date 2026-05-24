@@ -8,11 +8,11 @@ See the Review log at the bottom.
 > **TL;DR.** A persistent native (Rust/C++) ASR serving runtime to lift the **p95/p99 tail + streams/box density** —
 > **NOT p50** (VAD+WAN-bound; only ~12–19 ms is movable by any engine). The real bottleneck is the single asyncio
 > thread + coarse `inference_lock`/exclusive-gate + GIL-bound `greedy_batch` label-looping decode — not "the GIL
-> serializing CUDA launches." **THE BET (all three must hold):** (1) the cheap Python plan (`proj-2026-05-24-0859`)
-> leaves a residual worth ~40–60 eng-wk + a second stack; (2) that residual is GIL/scheduler-bound, not
-> MPS/bandwidth-bound; (3) free-threaded Python (B4) can't capture it more cheaply. Each has an early-exit spike
-> (0.0/0.1/0.3). **Green-light Wave 1 (cheap kill-shots) only; the most likely — and correct — outcome is STOP at 0.0.**
-> Two budgets: prototype ~12–20 eng-wk, production ~26–42 eng-wk.
+> serializing CUDA launches." **Outcome space = native Rust/C++ (B1) or STOP** (user dropped free-threaded-Python B4
+> and the in-tree-extension B5, 2026-05-24). **THE BET (both must hold):** (1) the cheap Python plan
+> (`proj-2026-05-24-0859`) leaves a residual worth ~40–60 eng-wk + a second stack; (2) that residual is capturable by a
+> native runtime (GIL/scheduler-bound AND a single native process can overlap, not MPS/bandwidth-bound). Early-exits:
+> 0.0 / 0.1. **Green-light Wave 1 (cheap kill-shots) only.** Budget: prototype ~12–20 eng-wk, production ~26–42 eng-wk.
 
 > This is the "Q3 from-scratch" endgame deliberately scoped OUT of `proj-2026-05-24-0859/PLAN.md` (the near-term
 > Python-stack levers: admission, finalize priority, off-thread dispatch, host-sync compression, padded-T bucket). It
@@ -88,14 +88,18 @@ finalize priority → off-event-loop dispatch under byte-exact gates, and the ro
 from-scratch work (`roofline-COMBINED.md:66-69`). Several from-scratch phases (admission, finalize priority, padded-T,
 off-thread dispatch) **mirror** that plan. Therefore:
 
-**THE BET (state it up front).** This project lives only if **ALL THREE** hold; each conjunct has a real chance of
-being false, and each has an early-exit spike:
+**THE BET (state it up front).** Outcome space is **native Rust/C++ (B1) or STOP** — the user removed B4 (free-threaded
+Python) and B5 (in-tree extension) (2026-05-24). This project lives only if **BOTH** hold; each has an early-exit spike:
 1. The Python plan (`proj-2026-05-24-0859`) leaves a **residual density/tail gap whose business value exceeds ~40–60
    eng-wk + a second stack to maintain** (early-exit: 0.0); AND
-2. that gap is **GIL/single-thread-scheduler-bound**, not MPS/context-launch-/bandwidth-bound (else native ≈ the same
-   MPS/multi-proc topology as Python and density doesn't improve) (early-exit: 0.1); AND
-3. **B4 (free-threaded py3.13t) is insufficient or not production-stable** (else B4 wins far cheaper — it keeps NeMo's
-   Python decode and skips the entire native port) (early-exit: 0.3).
+2. that gap is capturable by a **native runtime** — i.e. it's **GIL/single-thread-scheduler-bound AND a single native
+   process can actually overlap finalize+steady**, not MPS/context-launch-/bandwidth-bound (else native ≈ the same
+   MPS/multi-proc topology as Python and density doesn't improve) (early-exit: 0.1).
+
+**B4 removal raises the bar.** With no free-threaded-Python shortcut, the *only* remedy for a real GIL/scheduler-bound
+residual is the full native build (~40–60 eng-wk + second stack) — there is no cheap intermediate. So conjunct 1's
+threshold must clear the *full* native cost, and conjunct 2 must be proven before committing (see 0.1, which now carries
+a native launch-overlap microbench since the B4 end-to-end probe that used to validate this is gone).
 
 **USER DECISIONS (2026-05-24 collaborative planning):**
 1. **Is density the right problem? → YES.** The user affirmed density/tail is a strategic priority worth pursuing *if
@@ -107,8 +111,11 @@ being false, and each has an early-exit spike:
 3. **Baseline → KEEPS MOVING (not frozen).** The native residual is measured against *whatever Python is at the time*;
    the native build must continuously out-perform the latest Python baseline. Accepted risk: the residual may shrink
    (even asymptote) as Python improves — see risk 13.
-4. **B5 (in-tree native-decode extension) → OFF THE TABLE.** The outcome space is **STOP / B4 / B1** only. A
-   decode-GIL-bound-but-full-runtime-not-worth-it result resolves to **STOP** (or B4 if it qualifies), not a middle path.
+4. **B5 (in-tree native-decode extension) → OFF THE TABLE.** No middle path.
+5. **B4 (free-threaded Python 3.13t) → OFF THE TABLE (2026-05-24).** The user is not interested in a free-threaded-Python
+   approach. **The outcome space is strictly: native Rust/C++ (B1) or STOP.** Spike 0.3 is removed; its conjunct-2
+   validation role moves into 0.1 (a native launch-overlap microbench). A decode-GIL-bound-but-full-runtime-not-worth-it
+   result now resolves to **STOP** (no cheaper remedy remains).
 
 Context still assembled (informs expectations, not a STOP prior now): p50 immovable; steady 86% B=1 (batching ~0
 cloud-GPU benefit — `streaming-batching-outcome`); density ceiling ~28/box post-Python, native upside
@@ -138,19 +145,20 @@ triple-conditional.
   2. **0.5 as a one-pass histogram + synthetic phase-sensitivity** (afternoon; existing "86% B=1 / phasing 115-vs-56"
      data + 160ms-cadence-vs-8ms-window arithmetic likely *already* kills the 3–5× batching + steady-graph claims —
      run the histogram before the full simulator; may not need the server instrumented at all for the kill direction).
-  3. **0.3 stage-1 only** (py3.13t import + one-chunk feasibility; 1–2 days, baseline-independent, **run BEFORE 0.1** —
-     B4 dominates B1 by ~30–50 eng-wk, so give it its shot first; a failed import is a cheap B4 kill).
-  4. **Wire the Python plan's Step-5 GIL probe (`proj-2026-05-24-0859:148-156`) into 0.1** — its decode-vs-glue
+  3. **Wire the Python plan's Step-5 GIL probe (`proj-2026-05-24-0859:148-156`) into 0.1** — its decode-vs-glue
      attribution pre-pays conjunct 2 for free; make it a required, 0.1-consumable deliverable, don't re-derive.
-  5. **0.1 reduced binary** (single-process-single-context vs MPS overlap — the one question the tree turns on; only
-     build the full 8-toggle ablation if there's a large residual you can't attribute).
-  6. **0.3 stage-2** (off-event-loop dispatcher end-to-end) — only if stage-1 passed and 0.1 says GIL-bound.
-  7. **0.11 GPU memory** — only if 0.5 keeps steady-graphs alive. **0.9 / 0.11 analysis is already COMPLETE** (paper).
-  8. **0.7 aarch64** — non-gating platform pre-check, whenever GB10 exists.
-- **Wave 2 — expensive byte-exact ports (FUND ONLY IF Wave 1 ⇒ "residual exists AND it's GIL-bound AND B4 insufficient
-  AND single-process/native still plausible"):** 0.6a (decode), 0.8 (preprocessor), 0.2 (encoder export), 0.10 (runtime
-  contract). These are baseline-independent (frozen fixtures) so they *can* start early, but should not be *spent*
-  before Wave 1 clears.
+  4. **0.1 = (a) reduced binary** (single-process-single-context vs MPS overlap — the one question the tree turns on)
+     **+ (b) a native launch-overlap microbench** (N OS threads, no GIL, each driving a CUDA stream replaying the
+     captured encoder graph + a mock decode) — this is the conjunct-2 PROOF that used to be B4 stage-2. It's more than
+     a py3.13t import probe but reuses the captured graph (no decode-equivalence needed) → still far cheaper than the
+     full B1 build, and it's the cheapest remaining way to prove "GIL-free native dispatch lifts the knee" BEFORE
+     committing to B1.
+  5. **0.11 GPU memory** — only if 0.5 keeps steady-graphs alive. **0.9 / 0.11 analysis is already COMPLETE** (paper).
+  6. **0.7 aarch64** — non-gating platform pre-check, whenever GB10 exists.
+- **Wave 2 — expensive byte-exact ports (FUND ONLY IF Wave 1 ⇒ "residual exists AND it's native-capturable
+  (GIL/scheduler-bound + single-process overlap proven in 0.1)"):** 0.6a (decode), 0.8 (preprocessor), 0.2 (encoder
+  export), 0.10 (runtime contract). Baseline-independent (frozen fixtures) so they *can* start early, but should not be
+  *spent* before Wave 1 clears.
 - **PRE-REGISTER the Wave-1 pass/fail thresholds BEFORE collecting data** (they are kill decisions — defining them later
   in 0.4 is too late): for **0.1** — the required overlap factor vs Python/MPS, max queue/lane wait, max added latency;
   for **0.5** — the median/p95 B target ("≫1" made numeric), the minimum exact-B graph replay hit-rate, the max
@@ -166,7 +174,7 @@ lands?); *Wave* = cost/sequencing (should it be funded before the cheap killers 
   0.8, 0.9, 0.11. Answers **"can we build it faithfully."** Most are Wave 2 (expensive) except 0.7/0.9/0.11 (cheap/paper)
   — so they *can* run now but are *funded* per the wave ordering above.
 - **Track B — post-Python residual validation (BLOCKED until the Python plan lands + traces/telemetry captured):**
-  0.1 (overlap/MPS ablation), 0.3 (py3.13t end-to-end), 0.5 (trace-sim). These answer **"is it worth building"** and
+  0.1 (overlap/MPS ablation + native launch-overlap microbench), 0.5 (trace-sim). These answer **"is it worth building"** and
   must use the post-plan baseline; pre-plan numbers are non-falsifiable for this purpose. `reviews/decision.md` must
   label every measurement as Track-A feasibility or Track-B post-plan residual.
 
@@ -246,8 +254,8 @@ scheduler/network layer is where Rust pays off. Decided by 0.1/0.2/0.4.
 | **B1b: native re-implementation of the RNNT `greedy_batch` LABEL-looping decode** | must be *proven* vs NeMo (exact `Hypothesis`/state, not just text) | **HIGH** | the GIL-bound payoff AND the un-exportable part. **The real go/no-go (Spike 0.6a — EAGER, `use_cuda_graph_decoder=False`).** Must match `LabelLoopingStateItem`, partial-hyp merge, max_symbols saturation, fork. (The Blackwell CUDA-graph decoder = 0.6b research, NOT the gate.) |
 | B2: TensorRT (encoder) + custom decode | medium (kernel/precision drift) | high | the *fusion* path; prerequisite for 6–10 ms finalize |
 | B3: hand CUDA kernels | lowest | very high | deferred; only for fp8/fusion density later |
-| B4: free-threaded CPython 3.13t | identical math | **medium (scheduler rewrite off asyncio; keeps NeMo decode/encoder)** | **the PREFERRED / cheapest SUCCESS path when it works** (not a mere fallback) — skips all the native ports; chosen if 0.3 closes the residual AND free-threaded PyTorch/NeMo is production-stable |
-| ~~B5: in-tree native-decode extension~~ | — | — | **REJECTED by the user (2026-05-24): the outcome space is STOP / B4 / B1 only; no middle path.** (Kept here as a recorded non-option.) |
+| ~~B4: free-threaded CPython 3.13t~~ | — | — | **REJECTED by the user (2026-05-24): not interested in a free-threaded-Python approach. Spike 0.3 removed.** Outcome space = B1 or STOP. (Recorded non-option.) |
+| ~~B5: in-tree native-decode extension~~ | — | — | **REJECTED by the user (2026-05-24): no middle path.** (Recorded non-option.) |
 
 **"From-scratch" = replacing the Python serving/dispatch/decode-orchestration layer**, driving the same NeMo
 weights/kernels for the encoder (B1a) while **re-implementing the RNNT `greedy_batch` label-looping decode natively
@@ -352,7 +360,7 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   `drop_extra_pre_encoded` mutate/restore (`streaming.py:41-55`) + `rel_shift` (`multi_head_attention.py:259-270`).
   **Go:** byte-exact vs the frozen same-shape fixtures (see §4 T2; whether byte-exact is *attainable* from libtorch is
   itself an output). **No-go:** export can't capture the control flow / not byte-exact → reclassify B1a as non-identical
-  (B2-risk) or fall back to B4.
+  (B2-risk). **(No B4 fallback exists anymore — if B1a isn't byte-exact, the choice is B2-risk-sign-off or STOP.)**
 - [ ] **0.6a Native DEPLOYED (eager) `greedy_batch` LABEL-looping decode equivalence (THE go/no-go).** Scope = the
   **deployed config only**: `loop_labels=True`, **`use_cuda_graph_decoder=False`** (`server.py:1463-1474`),
   `eou_probe_enabled=False` ⇒ **NO alignments/confidence**, **no n-gram LM** (assert non-null `ngram_lm_model` is
@@ -401,10 +409,12 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   and CPU thread affinity. **Report per-lane CUDA-event timelines + queue/lane wait, not just the throughput knee.**
   **Go:** isolates which serializer dominates AND shows a single native process overlaps finalize+steady ≥ a named
   factor. **No-go:** if only MPS/multi-proc overlaps, the single-process "no MPS tax"/40–48-box story is false → revise.
-- [ ] **0.3 Free-threaded CPython 3.13t thesis probe (B4).** First confirm PyTorch+NeMo run free-threaded at all
-  (C-extension `Py_mod_gil` opt-in). Then stand up a **real off-event-loop dispatcher** on py3.13t with the actual stack
-  and measure **end-to-end scheduler tail** under load vs the post-Python baseline. **This may shortcut the C++
-  rewrite.** (B4 is a scheduler rewrite, not drop-in.)
+  **PLUS (0.1b) the native launch-overlap microbench** (replaces the deleted B4 probe as the conjunct-2 proof): N OS
+  threads (no GIL — C++/Rust), each driving a CUDA stream that replays the captured encoder graph + a mock decode of the
+  right shape; measure aggregate launches/sec, GPU util, and finalize/steady overlap vs N, on each target GPU
+  (single-context vs MPS). Reuses the captured graph (no decode-equivalence needed) → far cheaper than the B1 build, and
+  it's the cheapest remaining way to PROVE "GIL-free native dispatch lifts the knee" before committing to B1.
+  **0.3 (free-threaded py3.13t) is REMOVED — the user rejected B4.**
 - [ ] **0.5 Trace-driven batching simulator (validates/kills the 3–5× claim).** *Prereq:* instrument the current server
   to emit per-tick readiness traces (batch key `batch_primitives.py:24-31` incl. fresh/established decoder-state flag
   `server.py:4789-4812`, ready predicate `:34-56`, finalize state, lane affinity, `BATCH_MAX_WAIT_MS/MAX_SIZE` `:665-670`,
@@ -422,11 +432,10 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   | Observed outcome | Decision |
   |---|---|
   | 0.0 residual value < threshold | **STOP** (archive Track-A learnings) |
-  | 0.1: only MPS/multi-proc overlaps finalize+steady (not single-process) | likely **STOP**. The only escape is *native-under-MPS* = **TAIL-ONLY** (same MPS/multi-proc topology as Python → NO density gain; per-process off-loop-dispatch tail win that `proj-2026-05-24-0859` Step 5 already chases in Python) → **re-run 0.0**; value usually below threshold |
-  | 0.3: py3.13t closes the post-Python residual AND free-threaded PyTorch/NeMo is production-stable | **choose B4** — skip 0.6a/0.2/0.8 (the native ports); cheapest success |
-  | 0.1 positive (single-process overlaps) AND 0.6a + 0.2 + 0.8 + 0.11 pass | **proceed B1** (full native) |
-  | 0.6a fails byte/state equivalence (and 0.3 didn't already win) | **STOP**, or accept a *named* T1-only (non-byte/state-exact) native-decode risk — explicit sign-off |
-  | 0.2 fails T2a / libtorch byte-exact unattainable | no B1a → **B4 if 0.3 already won**, else **STOP** or explicit B2/T1-only-risk sign-off |
+  | 0.1: only MPS/multi-proc overlaps finalize+steady (not single-process), OR the native microbench shows GIL-free dispatch does NOT lift the knee | **STOP** (the only escape, *native-under-MPS*, is TAIL-ONLY = no density gain, and `proj-2026-05-24-0859` Step 5 already chases that tail in Python → re-run 0.0, value below threshold) |
+  | 0.1 positive (single-process overlaps + microbench lifts the knee) AND 0.6a + 0.2 + 0.8 + 0.11 pass | **proceed B1** (full native) |
+  | 0.6a fails byte/state equivalence | **STOP**, or accept a *named* T1-only (non-byte/state-exact) native-decode risk — explicit sign-off (no B4 fallback) |
+  | 0.2 fails T2a / libtorch byte-exact unattainable | no B1a → **STOP** or explicit B2/T1-only-risk sign-off (no B4 fallback) |
   | 0.8 fails native-preprocessor byte-exact | no native preproc → **STOP**, or keep Python preproc as a named non-v1 topology |
   | 0.9 fails (can't make per-call config pure params) | drop **shared-weight density** → per-lane replicas; re-run 0.0 (likely **STOP**) |
   | 0.5: B stays ~1 | drop the **3–5× throughput** claim; re-run 0.0 (density-only justification) |
@@ -546,7 +555,7 @@ into a **research prototype** (may FAIL the 0.6a/0.1 gates — sunk if it does) 
 | Track A: 0.6a native EAGER label-looping equivalence | **4–8** | **high** (funding gate; stateful, fork, pack/unpack to CPU) |
 | Track A: 0.8 native preprocessor byte-exact | 2–3 | med (cuFFT determinism) |
 | Track A: 0.9 mutability audit + 0.11 graph-ownership spike + 0.7 aarch64 | 2–3 | med (graph capture/alloc rules) |
-| Track B: 0.1 ablation + 0.3 py3.13t + 0.5 trace-sim+graph-capacity | 3–4 | med (needs post-Python baseline) |
+| Track B: 0.1 ablation + native launch-overlap microbench + 0.5 trace-sim+graph-capacity | 3–4 | med (needs post-Python baseline; microbench needs the captured graph) |
 | **Prototype subtotal** | **~12–20** | — |
 
 **Budget B — production replacement (only if Budget A passes):**
@@ -578,8 +587,8 @@ start.
 | 0.9 | Model mutability audit | A | **scaffolded — analysis COMPLETE** | `spikes/0.9-mutability-audit.md`; 8 mutable surfaces enumerated + pure-param rule |
 | 0.11 | CUDA-graph ownership-model spike | A | **scaffolded — analysis done; mem TBM on GPU** | `spikes/0.11-graph-ownership.md`; per-lane vs shared-mutex vs none |
 | 0.7 | aarch64 toolchain pre-check | A | scaffolded (template) | `spikes/0.7-aarch64/`; run BLOCKED on GB10 box |
-| 0.1 | Overlap/MPS ablation matrix | B | scaffolded (skeleton) | `spikes/0.1-overlap-ablation/`; run BLOCKED on GPU + post-Python baseline |
-| 0.3 | py3.13t end-to-end off-loop probe | B | scaffolded (skeleton) | `spikes/0.3-py313t/`; run BLOCKED on py3.13t env |
+| 0.1 | Overlap/MPS ablation + native launch-overlap microbench | B | scaffolded (skeleton) | `spikes/0.1-overlap-ablation/`; 0.1b microbench now carries the conjunct-2 proof (was B4); run BLOCKED on GPU + post-Python baseline |
+| ~~0.3~~ | ~~py3.13t probe~~ | — | **REMOVED 2026-05-24** | B4 rejected; conjunct-2 proof moved to 0.1b native microbench |
 | 0.5 | Trace-driven batching sim + graph-capacity model | B | scaffolded (synthetic runs now) | `spikes/0.5-batching-sim/`; real traces BLOCKED on server instrumentation |
 | 0.4 | Decision memo | gate | scaffolded (template) | `spikes/decision-template.md`; decision tree + pre-registered thresholds block |
 | 0.10 | Runtime contract + acceptance tests | pre-1 | pending | protocol/metrics/health/drain/rollback |
@@ -670,3 +679,13 @@ start.
   (decode-throughput/tail only, no second stack); seeded **proposed numeric thresholds** in `decision-template.md`; added
   risks 13 (**moving baseline can obsolete B1 mid-build**) + 14 (**is this the right problem**). Five discussion topics
   surfaced for the user (see the session summary / collaborative-planning step).
+- **User decisions (2026-05-24)** folded: density IS the priority (not lean-STOP); 0.0 number DEFERRED until Python
+  plan lands; Python baseline NOT frozen (native beats the latest; risk 13); **B5 rejected** (no middle path).
+- **B4 removed (2026-05-24, user: "not interested in a Python 3.13 approach; do Rust/C++ or do not proceed").**
+  **Outcome space is now native Rust/C++ (B1) or STOP.** THE BET cut from 3 conjuncts to 2 (dropped "B4 insufficient");
+  **Spike 0.3 (py3.13t) removed**, its conjunct-2 validation moved into **0.1b — a native launch-overlap microbench**
+  (N no-GIL threads replaying the captured encoder graph + mock decode; reuses the graph, no decode-equivalence → far
+  cheaper than B1; the cheapest remaining proof that GIL-free native dispatch lifts the knee). Decision-tree B4 branches
+  removed (B1-fail → STOP, no fallback). **Consequence noted:** B4 also provided a cheap *end-to-end* conjunct-2 proof;
+  0.1b is the replacement, and committing to B1 is a bigger leap if 0.1b is ambiguous. B4/B5 kept as recorded
+  non-options in the backend table.
