@@ -607,7 +607,8 @@ start.
 | 0.7 | aarch64 toolchain pre-check | A | scaffolded (template) | `spikes/0.7-aarch64/`; run BLOCKED on GB10 box |
 | 0.1 | Overlap/MPS ablation + native launch-overlap microbench | B | scaffolded (skeleton) | `spikes/0.1-overlap-ablation/`; 0.1b microbench now carries the conjunct-2 proof (was B4); run BLOCKED on GPU + post-Python baseline |
 | ~~0.3~~ | ~~py3.13t probe~~ | — | **REMOVED 2026-05-24** | B4 rejected; conjunct-2 proof moved to 0.1b native microbench |
-| 0.5 | Trace-driven batching sim + graph-capacity model | B | scaffolded (synthetic runs now) | `spikes/0.5-batching-sim/`; real traces BLOCKED on server instrumentation |
+| 0.0-pre | Residual-ceiling arithmetic | gate | **DONE** | `reviews/decision.md`: ~20 streams/box ceiling (triple-conditional), no p50, vs eng-year + carry — thin prize |
+| 0.5 | Trace-driven batching sim + graph-capacity model | B | **synthetic DONE; real traces pending** | `spikes/0.5-batching-sim/FINDINGS.md`: realistic mean B≈1.5–2.1 → **3–5× claim effectively dead**; density must come from shared-weights/overlap, not batch-fill |
 | 0.4 | Decision memo | gate | scaffolded (template) | `spikes/decision-template.md`; decision tree + pre-registered thresholds block |
 | 0.10 | Runtime contract + acceptance tests | pre-1 | pending | protocol/metrics/health/drain/rollback |
 | 1.0 | State-ownership design | 1 | pending | actor/snapshot + generation rules |
