@@ -187,7 +187,7 @@ a Step-2 GO.**
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Foundation gate + in-process Session/state builder (batch-composition invariance) | done | b8c000e | GO: 84 events, 0 token/text mismatches across B=1/B=N/perm/shrink-grow; float state allclose 1e-4 (max 3.3e-6); concurrent A/B oracle VALID; NeMo 2.8.0rc0; re-run reproduced |
-| 2 | Probe (GO/NO-GO + projected floor/upside ROI) + P50 sizing at real conc-10 small-B | done — NO-GO | brlxvvedc | B=32 FULL_GRAPH crashes at B=1 (86% of workload); conc-10 decode only ~0.83ms steady/~1.7ms finalize ⇒ cannot move p50. Both FLOOR + UPSIDE fail. pivot doc written |
+| 2 | Probe (GO/NO-GO + projected floor/upside ROI) + P50 sizing at real conc-10 small-B | done — NO-GO | c0d7e01 | B=32 FULL_GRAPH crashes at B=1 (86% of workload); conc-10 decode only ~0.83ms steady/~1.7ms finalize ⇒ cannot move p50. Both FLOOR + UPSIDE fail. pivot doc written |
 | 3 | Promote shared harness to committed pytest (+ run existing graph tests) | blocked (Step-2 NO-GO) | — | not pursued |
 | 4 | Wiring A: flag plumb (INERT) + VERIFIED interlock + deferred @1507 assert | blocked (Step-2 NO-GO) | — | not pursued |
 | 5 | Wiring B: activate per-lane(-stream) warm + FULL_GRAPH verify + reinit-precheck | blocked (Step-2 NO-GO) | — | not pursued |
