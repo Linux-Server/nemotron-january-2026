@@ -36,8 +36,8 @@ IP=$("$PY" -c "import json;print(json.load(open('$E/.instance.json'))['ip'])"); 
 bash $E/ec2_push.sh || { echo "push FAILED"; exit 1; }
 scp -i "$KEY" $SSHO deploy/launch_multiproc.sh ubuntu@"$IP":~/nemotron/launch_multiproc.sh
 ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && PYVER=${PYVER:-3.11} nohup bash bootstrap.sh > bootstrap.log 2>&1 & echo started"
-ok=0; for _ in $(seq 1 80); do sleep 15; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -qi DONE ~/nemotron/bootstrap.log' 2>/dev/null && { ok=1; echo "bootstrap DONE"; break; }; done
-[ $ok != 1 ] && { echo "bootstrap TIMEOUT"; exit 1; }
+ok=0; for _ in $(seq 1 120); do sleep 15; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -qi DONE ~/nemotron/bootstrap.log' 2>/dev/null && { ok=1; echo "bootstrap DONE"; break; }; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -qiE "error|failed|Traceback" ~/nemotron/bootstrap.log' 2>/dev/null && { echo "bootstrap ERROR detected:"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -15 ~/nemotron/bootstrap.log'; break; }; done
+[ $ok != 1 ] && { echo "bootstrap TIMEOUT/FAIL"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -25 ~/nemotron/bootstrap.log' 2>/dev/null; exit 1; }
 ssh -i "$KEY" $SSHO ubuntu@"$IP" 'sudo apt-get install -y -qq haproxy >/dev/null 2>&1 && haproxy -v | head -1'
 
 "$PY" - "$K" "$FRONT" > "$OUT/haproxy_asr.cfg" <<'PY'
@@ -48,7 +48,7 @@ print(f"frontend asr_ws\n    bind *:{front}\n    default_backend asr_pool\nbacke
 PY
 scp -i "$KEY" $SSHO "$OUT/haproxy_asr.cfg" ubuntu@"$IP":~/nemotron/haproxy_asr.cfg
 
-ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && NEMOTRON_PROCS=$K NEMOTRON_BASE_PORT=8081 FINALIZE_PROFILE=1 HF_HOME=\$HOME/hf bash launch_multiproc.sh > launcher.log 2>&1" &
+ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && NEMOTRON_PROCS=$K NEMOTRON_BASE_PORT=8081 FINALIZE_PROFILE=1 ${FINALIZE_T_MIN:+FINALIZE_T_MIN=$FINALIZE_T_MIN} ${FINALIZE_T_MAX:+FINALIZE_T_MAX=$FINALIZE_T_MAX} HF_HOME=\$HOME/hf bash launch_multiproc.sh > launcher.log 2>&1" &
 SSHSRV=$!
 sok=0; for _ in $(seq 1 120); do sleep 5; n=$(ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep -l "ASR server listening" ~/nemotron/server_*.log 2>/dev/null | wc -l' 2>/dev/null); [ "${n:-0}" -ge "$K" ] 2>/dev/null && { sok=1; echo "all $K procs ready"; break; }; done
 [ $sok != 1 ] && { echo "procs FAILED ($n/$K)"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -15 ~/nemotron/server_0.log' 2>/dev/null; kill $SSHSRV 2>/dev/null; exit 1; }
@@ -60,11 +60,20 @@ for C in $CONC_LIST; do
   echo "LEVEL conc=$C start=$(date +%s)" >> "$OUT/level_windows.txt"
   timeout 1200 "$PY" proj-2026-05-19-eou-endpointing/run_full1000_conc12.py --url "ws://$IP:$FRONT" --model-tag "$tag" --concurrency "$C" --limit "$LIMIT" 2>&1 | tee "$OUT/${tag}.clientlog" | grep -E "Completed in|TTFB \(speech|server finalize"
   echo "LEVEL conc=$C end=$(date +%s)" >> "$OUT/level_windows.txt"
+  # Early-abort: ok=0 means the endpoint isn't serving (e.g. per-session OOM closing streams) -> don't burn the
+  # remaining levels; pull logs to diagnose.
+  if grep -qE "ok=0 errors=" "$OUT/${tag}.clientlog"; then echo "  !!! conc=$C ok=0 (endpoint not serving) -> abort sweep + pull logs"; break; fi
   sleep 12
 done
 
-for k in $(seq 0 $((K-1))); do ssh -i "$KEY" $SSHO ubuntu@"$IP" "grep finalize_profile_record ~/nemotron/server_$k.log" >> "$OUT/all_procs.records" 2>/dev/null; done
-echo "  pulled $(grep -c finalize_profile_record "$OUT/all_procs.records" 2>/dev/null || echo 0) records (all levels, all procs) -> $OUT/"
+# Always pull per-proc finalize records + FULL server/launcher logs + GPU mem (so failures are diagnosable).
+for k in $(seq 0 $((K-1))); do
+  ssh -i "$KEY" $SSHO ubuntu@"$IP" "grep finalize_profile_record ~/nemotron/server_$k.log" >> "$OUT/all_procs.records" 2>/dev/null
+  ssh -i "$KEY" $SSHO ubuntu@"$IP" "cat ~/nemotron/server_$k.log" > "$OUT/server_$k.log" 2>/dev/null
+done
+ssh -i "$KEY" $SSHO ubuntu@"$IP" "cat ~/nemotron/launcher.log" > "$OUT/launcher.log" 2>/dev/null
+ssh -i "$KEY" $SSHO ubuntu@"$IP" "nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader" > "$OUT/gpu_mem.txt" 2>/dev/null || true
+echo "  pulled $(grep -c finalize_profile_record "$OUT/all_procs.records" 2>/dev/null || echo 0) records + full logs; OOM lines: $(grep -hc OutOfMemory "$OUT"/server_*.log 2>/dev/null | paste -sd+ | bc 2>/dev/null || echo '?'); gpu_mem: $(cat "$OUT/gpu_mem.txt" 2>/dev/null)"
 ssh -i "$KEY" $SSHO ubuntu@"$IP" "pkill -f haproxy; pkill -f 'server.py --model'; echo quit | nvidia-cuda-mps-control" 2>/dev/null || true
 kill $SSHSRV 2>/dev/null || true
 "$PY" $E/ec2_down.py

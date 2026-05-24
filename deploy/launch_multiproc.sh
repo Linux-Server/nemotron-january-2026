@@ -47,6 +47,10 @@ SRV_ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS
 # finalize budget on the real multi-proc + MPS config). No effect on prod unless explicitly set.
 [ "${FINALIZE_PROFILE:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FINALIZE_PROFILE=1)
 [ "${FAULTHANDLER:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FAULTHANDLER=1)
+# Finalize-graph T-range trim (the documented L4/24GB fit lever — shrinks the finalize graph pool; finalize calls
+# with T outside [MIN,MAX] fail-closed to eager). Observed finalize T is 43-58 (flat); default is 42-60.
+[ -n "${FINALIZE_T_MIN:-}" ] && SRV_ENV+=("NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MIN=$FINALIZE_T_MIN")
+[ -n "${FINALIZE_T_MAX:-}" ] && SRV_ENV+=("NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX=$FINALIZE_T_MAX")
 
 cd "$APP_DIR"
 
