@@ -739,6 +739,7 @@ class ASRServer:
         self.finalize_profile_enabled = (
             os.environ.get("NEMOTRON_FINALIZE_PROFILE", "") == "1"
         )
+        self.gil_attrib_enabled = os.environ.get("NEMOTRON_GIL_ATTRIB", "") == "1"
         self.sync_compress_enabled = os.environ.get("NEMOTRON_SYNC_COMPRESS", "") == "1"
         if self.sync_compress_enabled:
             logger.info(
@@ -750,11 +751,28 @@ class ASRServer:
         self._finalize_profile_hist: dict[tuple[int, int, int | None, str], int] = {}
         self._finalize_profile_b_hist: dict[int, int] = {}
         self._finalize_profile_hist_every = 10
+        self._gil_attrib_lock = threading.Lock()
+        self._gil_attrib_tls = threading.local()
+        self._gil_attrib_samples: dict[str, dict[str, list[float]]] = {}
+        self._gil_attrib_batch_hist: dict[str, dict[int, int]] = {}
+        self._gil_attrib_paths: dict[str, dict[str, int]] = {}
+        self._gil_attrib_loop_lag_ms: list[float] = []
+        self._gil_attrib_loop_task: Optional[asyncio.Task] = None
+        self._gil_attrib_started_unix: Optional[float] = None
+        self._gil_attrib_started_perf: Optional[float] = None
+        self._gil_attrib_record_emitted = False
         if self.finalize_profile_enabled:
             logger.info(
                 "finalize_profile_enabled=True "
                 "flag=NEMOTRON_FINALIZE_PROFILE "
                 "mode=read_only syncs=profile_only"
+            )
+        if self.gil_attrib_enabled:
+            logger.info(
+                "gil_attribution_enabled=True "
+                "flag=NEMOTRON_GIL_ATTRIB "
+                "mode=probe_only schema=_continuous_finalize_timing "
+                "default_off=True"
             )
         if self.finalize_priority_enabled:
             logger.info(
@@ -2501,11 +2519,18 @@ class ASRServer:
         attr_name = "cache_aware_stream_step"
         had_instance_attr = attr_name in vars(encoder)
         original_instance_attr = vars(encoder).get(attr_name)
-        object.__setattr__(
-            encoder,
-            attr_name,
-            self._encoder_compiled_cache_aware_stream_step,
-        )
+        compiled_callable = self._encoder_compiled_cache_aware_stream_step
+
+        def cache_aware_stream_step_wrapper(*args, **call_kwargs):
+            return self._gil_attrib_timed_call(
+                "dispatch_ms",
+                compiled_callable,
+                *args,
+                cuda_event=True,
+                **call_kwargs,
+            )
+
+        object.__setattr__(encoder, attr_name, cache_aware_stream_step_wrapper)
         try:
             yield
         finally:
@@ -2530,7 +2555,13 @@ class ASRServer:
         def cache_aware_stream_step_wrapper(*args, **call_kwargs):
             if args:
                 self._encoder_cudagraph_eager_fallbacks += 1
-                return original_callable(*args, **call_kwargs)
+                return self._gil_attrib_timed_call(
+                    "dispatch_ms",
+                    original_callable,
+                    *args,
+                    cuda_event=True,
+                    **call_kwargs,
+                )
             try:
                 inputs = EncoderGraphInputs(
                     processed_signal=call_kwargs["processed_signal"],
@@ -2541,12 +2572,28 @@ class ASRServer:
                 )
             except Exception:
                 self._encoder_cudagraph_eager_fallbacks += 1
-                return original_callable(**call_kwargs)
+                return self._gil_attrib_timed_call(
+                    "dispatch_ms",
+                    original_callable,
+                    cuda_event=True,
+                    **call_kwargs,
+                )
 
-            replay_outputs = manager.replay(batch_size, inputs)
+            replay_outputs = self._gil_attrib_timed_call(
+                "dispatch_ms",
+                manager.replay,
+                batch_size,
+                inputs,
+                cuda_event=True,
+            )
             if replay_outputs is None:
                 self._encoder_cudagraph_eager_fallbacks += 1
-                return original_callable(**call_kwargs)
+                return self._gil_attrib_timed_call(
+                    "dispatch_ms",
+                    original_callable,
+                    cuda_event=True,
+                    **call_kwargs,
+                )
 
             self._encoder_cudagraph_replay_calls += 1
             if (
@@ -2610,7 +2657,13 @@ class ASRServer:
                     key,
                     reason="positional_args",
                 )
-                result = original_callable(*args, **call_kwargs)
+                result = self._gil_attrib_timed_call(
+                    "dispatch_ms",
+                    original_callable,
+                    *args,
+                    cuda_event=True,
+                    **call_kwargs,
+                )
             else:
                 real_time_steps = None
                 try:
@@ -2633,12 +2686,29 @@ class ASRServer:
                         reason="invalid_inputs",
                         real_time_steps=real_time_steps,
                     )
-                    result = original_callable(**call_kwargs)
+                    result = self._gil_attrib_timed_call(
+                        "dispatch_ms",
+                        original_callable,
+                        cuda_event=True,
+                        **call_kwargs,
+                    )
                 else:
                     if self.encoder_cudagraph_finalize_padded_requested:
-                        replay_outputs = manager.replay_finalize_padded(key, inputs)
+                        replay_outputs = self._gil_attrib_timed_call(
+                            "dispatch_ms",
+                            manager.replay_finalize_padded,
+                            key,
+                            inputs,
+                            cuda_event=True,
+                        )
                     else:
-                        replay_outputs = manager.replay_finalize(key, inputs)
+                        replay_outputs = self._gil_attrib_timed_call(
+                            "dispatch_ms",
+                            manager.replay_finalize,
+                            key,
+                            inputs,
+                            cuda_event=True,
+                        )
                     if replay_outputs is None:
                         replay_error = manager.finalize_replay_error(key)
                         if profile is not None:
@@ -2651,7 +2721,12 @@ class ASRServer:
                             reason=replay_error or "replay_returned_none",
                             real_time_steps=real_time_steps,
                         )
-                        result = original_callable(**call_kwargs)
+                        result = self._gil_attrib_timed_call(
+                            "dispatch_ms",
+                            original_callable,
+                            cuda_event=True,
+                            **call_kwargs,
+                        )
                     else:
                         state["replayed"] = True
                         if profile is not None:
@@ -2850,6 +2925,7 @@ class ASRServer:
             "batch_finalize": self._scheduler_batch_finalize_active(),
             "batch_finalize_preproc": self._scheduler_batch_finalize_preproc_active(),
             "model_lanes": self.model_lanes,
+            "gil_attrib_enabled": self.gil_attrib_enabled,
         }
 
     def _finalize_profile_cuda_synchronize(
@@ -3195,6 +3271,369 @@ class ASRServer:
             + json.dumps(payload, sort_keys=True, default=str)
         )
 
+    def _gil_attrib_current_sample(self) -> Optional[dict[str, Any]]:
+        if not self.gil_attrib_enabled:
+            return None
+        sample = getattr(self._gil_attrib_tls, "sample", None)
+        return sample if isinstance(sample, dict) else None
+
+    def _gil_attrib_begin_sample(
+        self,
+        kind: str,
+        *,
+        path: str,
+        batch_size: int,
+        inference_lock_wait_ms: float = 0.0,
+    ) -> Optional[dict[str, Any]]:
+        if not self.gil_attrib_enabled:
+            return None
+        if self._gil_attrib_current_sample() is not None:
+            return None
+        sample: dict[str, Any] = {
+            "kind": kind,
+            "path": path,
+            "batch_size": int(batch_size),
+            "start_perf": time.perf_counter(),
+            "decode_ms": 0.0,
+            "dispatch_ms": 0.0,
+            "scatter_gather_ms": 0.0,
+            "host_sync_ms": 0.0,
+            "inference_lock_wait_ms": max(0.0, float(inference_lock_wait_ms or 0.0)),
+            "gpu_cuda_event_ms": 0.0,
+            "cuda_events": [],
+            "ended": False,
+        }
+        self._gil_attrib_tls.sample = sample
+        return sample
+
+    def _gil_attrib_add_ms(self, bucket: str, elapsed_ms: float) -> None:
+        sample = self._gil_attrib_current_sample()
+        if sample is None:
+            return
+        sample[bucket] = float(sample.get(bucket) or 0.0) + max(
+            0.0,
+            float(elapsed_ms),
+        )
+
+    def _gil_attrib_cuda_event_start(self) -> Optional[tuple[Any, Any]]:
+        if self._gil_attrib_current_sample() is None or not torch.cuda.is_available():
+            return None
+        try:
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
+            return start_event, end_event
+        except Exception:
+            return None
+
+    def _gil_attrib_cuda_event_end(self, token: Optional[tuple[Any, Any]]) -> None:
+        sample = self._gil_attrib_current_sample()
+        if sample is None or token is None:
+            return
+        try:
+            _start_event, end_event = token
+            end_event.record()
+            sample["cuda_events"].append(token)
+        except Exception:
+            pass
+
+    def _gil_attrib_timed_call(self, bucket: str, fn, *args, cuda_event: bool = True, **kwargs):
+        sample = self._gil_attrib_current_sample()
+        if sample is None:
+            return fn(*args, **kwargs)
+        token = self._gil_attrib_cuda_event_start() if cuda_event else None
+        start = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self._gil_attrib_cuda_event_end(token)
+            self._gil_attrib_add_ms(bucket, (time.perf_counter() - start) * 1000.0)
+
+    def _gil_attrib_finish_sample(self, sample: Optional[dict[str, Any]]) -> None:
+        if not self.gil_attrib_enabled or sample is None:
+            return
+        if sample.get("observed"):
+            return
+
+        wall_ms = max(0.0, (time.perf_counter() - float(sample["start_perf"])) * 1000.0)
+        inference_lock_wait_ms = max(
+            0.0,
+            float(sample.get("inference_lock_wait_ms") or 0.0),
+        )
+        thread_busy_ms = wall_ms + inference_lock_wait_ms
+
+        cuda_event_ms = float(sample.get("gpu_cuda_event_ms") or 0.0)
+        for start_event, end_event in sample.get("cuda_events") or []:
+            try:
+                cuda_event_ms += float(start_event.elapsed_time(end_event))
+            except Exception:
+                pass
+
+        decode_ms = float(sample.get("decode_ms") or 0.0)
+        dispatch_ms = float(sample.get("dispatch_ms") or 0.0)
+        scatter_gather_ms = float(sample.get("scatter_gather_ms") or 0.0)
+        host_sync_ms = float(sample.get("host_sync_ms") or 0.0)
+        scheduling_socket_io_ms = (
+            thread_busy_ms
+            - decode_ms
+            - dispatch_ms
+            - scatter_gather_ms
+            - host_sync_ms
+            - inference_lock_wait_ms
+        )
+        glue_ms = (
+            scatter_gather_ms
+            + host_sync_ms
+            + inference_lock_wait_ms
+            + scheduling_socket_io_ms
+        )
+        bucket_sum_ms = decode_ms + dispatch_ms + glue_ms
+        sanity_delta_ms = thread_busy_ms - bucket_sum_ms
+        gpu_idle_pct = None
+        if thread_busy_ms > 0.0 and cuda_event_ms > 0.0:
+            gpu_idle_pct = max(0.0, min(100.0, (1.0 - cuda_event_ms / thread_busy_ms) * 100.0))
+
+        metrics = {
+            "thread_busy_ms": thread_busy_ms,
+            "body_wall_ms": wall_ms,
+            "decode_ms": decode_ms,
+            "dispatch_ms": dispatch_ms,
+            "glue_ms": glue_ms,
+            "glue_scatter_gather_ms": scatter_gather_ms,
+            "glue_host_sync_ms": host_sync_ms,
+            "glue_inference_lock_wait_ms": inference_lock_wait_ms,
+            "glue_scheduling_socket_io_ms": scheduling_socket_io_ms,
+            "bucket_sum_ms": bucket_sum_ms,
+            "bucket_sum_delta_ms": sanity_delta_ms,
+            "gpu_cuda_event_ms": cuda_event_ms,
+        }
+        if gpu_idle_pct is not None:
+            metrics["gpu_idle_pct_while_thread_busy"] = gpu_idle_pct
+        if thread_busy_ms > 0.0:
+            for key in (
+                "decode_ms",
+                "dispatch_ms",
+                "glue_ms",
+                "glue_scatter_gather_ms",
+                "glue_host_sync_ms",
+                "glue_inference_lock_wait_ms",
+                "glue_scheduling_socket_io_ms",
+            ):
+                metrics[key.replace("_ms", "_pct_thread_busy")] = (
+                    metrics[key] / thread_busy_ms
+                ) * 100.0
+
+        kind = str(sample.get("kind") or "unknown")
+        path = str(sample.get("path") or "unknown")
+        batch_size = int(sample.get("batch_size") or 0)
+        with self._gil_attrib_lock:
+            kind_metrics = self._gil_attrib_samples.setdefault(kind, {})
+            for key, value in metrics.items():
+                kind_metrics.setdefault(key, []).append(float(value))
+            self._gil_attrib_batch_hist.setdefault(kind, {})[batch_size] = (
+                self._gil_attrib_batch_hist.setdefault(kind, {}).get(batch_size, 0) + 1
+            )
+            self._gil_attrib_paths.setdefault(kind, {})[path] = (
+                self._gil_attrib_paths.setdefault(kind, {}).get(path, 0) + 1
+            )
+
+        sample["observed"] = True
+        if getattr(self._gil_attrib_tls, "sample", None) is sample:
+            self._gil_attrib_tls.sample = None
+        if getattr(self._gil_attrib_tls, "pending_sample", None) is sample:
+            self._gil_attrib_tls.pending_sample = None
+
+    def _gil_attrib_end_sample(self, sample: Optional[dict[str, Any]]) -> None:
+        if sample is None or not self.gil_attrib_enabled:
+            return
+        if sample.get("ended"):
+            return
+        sample["ended"] = True
+        if getattr(self._scheduler_model_lane_tls, "stream", None) is not None:
+            self._gil_attrib_tls.pending_sample = sample
+            return
+        self._gil_attrib_finish_sample(sample)
+
+    def _gil_attrib_finish_deferred_sample(self) -> None:
+        sample = getattr(self._gil_attrib_tls, "pending_sample", None)
+        if isinstance(sample, dict):
+            self._gil_attrib_finish_sample(sample)
+
+    def _gil_attrib_record_loop_lag(self, lag_ms: float) -> None:
+        if not self.gil_attrib_enabled:
+            return
+        with self._gil_attrib_lock:
+            self._gil_attrib_loop_lag_ms.append(max(0.0, float(lag_ms)))
+
+    async def _gil_attrib_loop_lag_probe(self) -> None:
+        interval_ms = _env_float("NEMOTRON_GIL_ATTRIB_LOOP_INTERVAL_MS", 5.0)
+        interval = max(0.001, interval_ms / 1000.0)
+        loop = asyncio.get_running_loop()
+        expected = loop.time() + interval
+        while True:
+            await asyncio.sleep(max(0.0, expected - loop.time()))
+            now = loop.time()
+            self._gil_attrib_record_loop_lag((now - expected) * 1000.0)
+            expected += interval
+            if now - expected > interval:
+                expected = now + interval
+
+    @staticmethod
+    def _gil_attrib_percentiles(values: list[float]) -> Optional[dict[str, float]]:
+        if not values:
+            return None
+        ordered = sorted(float(value) for value in values)
+        count = len(ordered)
+
+        def percentile(pct: float) -> float:
+            if count == 1:
+                return ordered[0]
+            rank = (count - 1) * (pct / 100.0)
+            lower = int(rank)
+            upper = min(lower + 1, count - 1)
+            weight = rank - lower
+            return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+        return {
+            "p50": percentile(50.0),
+            "p95": percentile(95.0),
+            "p99": percentile(99.0),
+        }
+
+    def _gil_attrib_emit_record(self, *, reason: str) -> None:
+        if not self.gil_attrib_enabled:
+            return
+        with self._gil_attrib_lock:
+            samples_snapshot = {
+                kind: {metric: list(values) for metric, values in metrics.items()}
+                for kind, metrics in self._gil_attrib_samples.items()
+            }
+            batch_hist_snapshot = {
+                kind: dict(hist) for kind, hist in self._gil_attrib_batch_hist.items()
+            }
+            paths_snapshot = {
+                kind: dict(paths) for kind, paths in self._gil_attrib_paths.items()
+            }
+            loop_lag_snapshot = list(self._gil_attrib_loop_lag_ms)
+
+        operations: dict[str, Any] = {}
+        for kind, metrics in sorted(samples_snapshot.items()):
+            metric_summary = {
+                metric: self._gil_attrib_percentiles(values)
+                for metric, values in sorted(metrics.items())
+            }
+            sample_count = len(next(iter(metrics.values()))) if metrics else 0
+            operations[kind] = {
+                "samples": sample_count,
+                "batch_size_hist": {
+                    str(key): value
+                    for key, value in sorted(batch_hist_snapshot.get(kind, {}).items())
+                },
+                "paths": dict(sorted(paths_snapshot.get(kind, {}).items())),
+                "metrics": metric_summary,
+            }
+
+        duration_ms = None
+        if self._gil_attrib_started_perf is not None:
+            duration_ms = (time.perf_counter() - self._gil_attrib_started_perf) * 1000.0
+        payload = {
+            "schema": "nemotron_gil_attribution_v1",
+            "reason": reason,
+            "flag": "NEMOTRON_GIL_ATTRIB",
+            "enabled": True,
+            "probe_only": True,
+            "source_schema": "_continuous_finalize_timing + scheduler batch/finalize telemetry",
+            "started_unix": self._gil_attrib_started_unix,
+            "duration_ms": duration_ms,
+            "config": {
+                "model_lanes": self.model_lanes,
+                "scheduler_enabled": self.scheduler_enabled,
+                "batch_enabled": self.batch_enabled,
+                "batch_finalize": self._scheduler_batch_finalize_active(),
+                "batch_finalize_preproc": self._scheduler_batch_finalize_preproc_active(),
+                "encoder_cudagraph": self.encoder_cudagraph_enabled,
+                "encoder_cudagraph_finalize": self.encoder_cudagraph_finalize_enabled,
+                "sync_compress": self.sync_compress_enabled,
+                "finalize_priority": self.finalize_priority_enabled,
+            },
+            "operations": operations,
+            "gil_wait_proxy": {
+                "source": "asyncio_event_loop_tick_lag",
+                "interval_ms": _env_float("NEMOTRON_GIL_ATTRIB_LOOP_INTERVAL_MS", 5.0),
+                "samples": len(loop_lag_snapshot),
+                "lag_ms": self._gil_attrib_percentiles(loop_lag_snapshot),
+            },
+        }
+        logger.info(
+            "gil_attribution_record "
+            + json.dumps(payload, sort_keys=True, default=str)
+        )
+        self._gil_attrib_record_emitted = True
+
+    @contextlib.contextmanager
+    def _gil_attrib_decode_installed(self, model: Any):
+        if not self.gil_attrib_enabled:
+            yield
+            return
+        decoding = getattr(model, "decoding", None)
+        if decoding is None or not hasattr(decoding, "rnnt_decoder_predictions_tensor"):
+            yield
+            return
+        attr_name = "rnnt_decoder_predictions_tensor"
+        had_instance_attr = attr_name in vars(decoding)
+        original_instance_attr = vars(decoding).get(attr_name)
+        original_callable = getattr(decoding, attr_name)
+
+        def rnnt_decode_wrapper(*args, **kwargs):
+            return self._gil_attrib_timed_call(
+                "decode_ms",
+                original_callable,
+                *args,
+                cuda_event=True,
+                **kwargs,
+            )
+
+        object.__setattr__(decoding, attr_name, rnnt_decode_wrapper)
+        try:
+            yield
+        finally:
+            if had_instance_attr:
+                object.__setattr__(decoding, attr_name, original_instance_attr)
+            else:
+                object.__delattr__(decoding, attr_name)
+
+    @contextlib.contextmanager
+    def _gil_attrib_encoder_cache_step_installed(self, model: Any):
+        if not self.gil_attrib_enabled:
+            yield
+            return
+        encoder = getattr(model, "encoder", None)
+        if encoder is None or not hasattr(encoder, "cache_aware_stream_step"):
+            yield
+            return
+        attr_name = "cache_aware_stream_step"
+        had_instance_attr = attr_name in vars(encoder)
+        original_instance_attr = vars(encoder).get(attr_name)
+        original_callable = getattr(encoder, attr_name)
+
+        def cache_aware_stream_step_wrapper(*args, **kwargs):
+            return self._gil_attrib_timed_call(
+                "dispatch_ms",
+                original_callable,
+                *args,
+                cuda_event=True,
+                **kwargs,
+            )
+
+        object.__setattr__(encoder, attr_name, cache_aware_stream_step_wrapper)
+        try:
+            yield
+        finally:
+            if had_instance_attr:
+                object.__setattr__(encoder, attr_name, original_instance_attr)
+            else:
+                object.__delattr__(encoder, attr_name)
+
     @contextlib.contextmanager
     def _finalize_profile_encoder_cache_step_installed(
         self,
@@ -3222,7 +3661,14 @@ class ASRServer:
             start = time.perf_counter()
             if start_event is not None:
                 start_event.record()
+            dispatch_start = time.perf_counter()
+            dispatch_token = self._gil_attrib_cuda_event_start()
             result = original_callable(*args, **call_kwargs)
+            self._gil_attrib_cuda_event_end(dispatch_token)
+            self._gil_attrib_add_ms(
+                "dispatch_ms",
+                (time.perf_counter() - dispatch_start) * 1000,
+            )
             if end_event is not None:
                 end_event.record()
             self._finalize_profile_cuda_synchronize(profile)
@@ -3283,6 +3729,10 @@ class ASRServer:
             )
         saw_unwarmed_bucket = False
 
+        def conformer_step_call():
+            with self._gil_attrib_decode_installed(model):
+                return model.conformer_stream_step(**kwargs)
+
         try:
             if finalize_cudagraph_key is not None and cudagraph_manager is not None:
                 if (
@@ -3301,7 +3751,7 @@ class ASRServer:
                     finalize_cudagraph_key,
                     finalize_profile,
                 ) as finalize_cudagraph_state:
-                    result = model.conformer_stream_step(**kwargs)
+                    result = conformer_step_call()
                 if finalize_cudagraph_state.get("replayed"):
                     result_list = list(result)
                     for result_index in (2, 3, 4):
@@ -3315,7 +3765,7 @@ class ASRServer:
                     model,
                     finalize_profile,
                 ):
-                    return model.conformer_stream_step(**kwargs)
+                    return conformer_step_call()
 
             if cudagraph_bucket is not None and cudagraph_manager is not None:
                 if (
@@ -3333,7 +3783,7 @@ class ASRServer:
                     cudagraph_manager,
                     cudagraph_bucket,
                 ):
-                    result = model.conformer_stream_step(**kwargs)
+                    result = conformer_step_call()
                 result_list = list(result)
                 for result_index in (2, 3, 4):
                     if result_index < len(result_list) and torch.is_tensor(result_list[result_index]):
@@ -3341,7 +3791,8 @@ class ASRServer:
                 return tuple(result_list)
 
             if bucket is None:
-                return model.conformer_stream_step(**kwargs)
+                with self._gil_attrib_encoder_cache_step_installed(model):
+                    return conformer_step_call()
 
             self._encoder_compile_calls += 1
             if (
@@ -3371,7 +3822,7 @@ class ASRServer:
             if mark_step_begin is not None:
                 mark_step_begin()
             with self._compiled_encoder_cache_step_installed():
-                result = model.conformer_stream_step(**kwargs)
+                result = conformer_step_call()
             result_list = list(result)
             for result_index in (2, 3, 4):
                 if result_index < len(result_list) and torch.is_tensor(result_list[result_index]):
@@ -3500,9 +3951,16 @@ class ASRServer:
                 return fn(*args)
             with torch.cuda.stream(stream):
                 result = fn(*args)
+            sync_start = time.perf_counter() if self._gil_attrib_current_sample() is not None else None
             stream.synchronize()
+            if sync_start is not None:
+                self._gil_attrib_add_ms(
+                    "host_sync_ms",
+                    (time.perf_counter() - sync_start) * 1000.0,
+                )
             return result
         finally:
+            self._gil_attrib_finish_deferred_sample()
             self._scheduler_model_lane_tls.stream = previous_stream
             self._scheduler_model_lane_tls.model = previous_model
 
@@ -3530,11 +3988,17 @@ class ASRServer:
     def _cuda_synchronize_for_current_model_lane(self) -> None:
         if not torch.cuda.is_available():
             return
+        sync_start = time.perf_counter() if self._gil_attrib_current_sample() is not None else None
         stream = getattr(self._scheduler_model_lane_tls, "stream", None)
         if stream is None:
             torch.cuda.synchronize()
         else:
             stream.synchronize()
+        if sync_start is not None:
+            self._gil_attrib_add_ms(
+                "host_sync_ms",
+                (time.perf_counter() - sync_start) * 1000.0,
+            )
 
     @contextlib.asynccontextmanager
     async def _scheduler_exclusive_model_path(self, reason: str):
@@ -4068,10 +4532,14 @@ class ASRServer:
             )
         audio_tensor = torch.from_numpy(np.ascontiguousarray(audio)).unsqueeze(0).cuda()
         audio_len = torch.tensor([valid_samples], device='cuda', dtype=torch.long)
-        return self._current_inference_model().preprocessor(
-            input_signal=audio_tensor,
-            length=audio_len,
-        )
+        token = self._gil_attrib_cuda_event_start()
+        try:
+            return self._current_inference_model().preprocessor(
+                input_signal=audio_tensor,
+                length=audio_len,
+            )
+        finally:
+            self._gil_attrib_cuda_event_end(token)
 
     def _build_fixed_preprocess_audio(
         self,
@@ -5628,6 +6096,7 @@ class ASRServer:
                     texts = await self._run_inference_call(
                         self._process_ready_batch,
                         live_sessions,
+                        lane_wait_ms,
                     )
             finally:
                 for session in valid_sessions:
@@ -5835,6 +6304,7 @@ class ASRServer:
                             lane_id,
                             self._process_ready_batch,
                             live_sessions,
+                            lane_wait_ms,
                         )
                 finally:
                     for session in valid_sessions:
@@ -5947,6 +6417,7 @@ class ASRServer:
                         text = await self._run_scheduler_exclusive_inference_call(
                             self._process_chunk,
                             session,
+                            lane_wait_ms,
                             lane_id=lane_id,
                         )
             else:
@@ -5958,7 +6429,11 @@ class ASRServer:
                             f"reason={reason} gen={generation} current={session.scheduler_generation}"
                         )
                         return False
-                    text = await self._run_inference_call(self._process_chunk, session)
+                    text = await self._run_inference_call(
+                        self._process_chunk,
+                        session,
+                        lane_wait_ms,
+                    )
         finally:
             session.scheduler_inflight_generation = None
 
@@ -7234,6 +7709,7 @@ class ASRServer:
             "fork_flush_done": None,
             "final_sent": None,
             "inference_lock_acquire_wait_ms": None,
+            "gil_attrib_enabled": self.gil_attrib_enabled,
         }
 
     def _continuous_prepare_finalize_item_locked(
@@ -7639,10 +8115,14 @@ class ASRServer:
 
         audio_tensor = torch.from_numpy(audio_batch).cuda()
         audio_len = torch.tensor(valid_samples, device='cuda', dtype=torch.long)
-        mel, _mel_len = self._current_inference_model().preprocessor(
-            input_signal=audio_tensor,
-            length=audio_len,
-        )
+        token = self._gil_attrib_cuda_event_start()
+        try:
+            mel, _mel_len = self._current_inference_model().preprocessor(
+                input_signal=audio_tensor,
+                length=audio_len,
+            )
+        finally:
+            self._gil_attrib_cuda_event_end(token)
         start = self.first_preprocess_mel_frame
         end = start + frames_this_call
         return [
@@ -7912,6 +8392,17 @@ class ASRServer:
         self,
         items: list[SchedulerFinalizeItem],
     ) -> dict[str, Optional[str]]:
+        lock_wait_ms = 0.0
+        for item in items:
+            value = item.timing.get("inference_lock_acquire_wait_ms")
+            if isinstance(value, (int, float)):
+                lock_wait_ms = max(lock_wait_ms, float(value))
+        gil_sample = self._gil_attrib_begin_sample(
+            "finalize",
+            path="batch_finalize",
+            batch_size=len(items),
+            inference_lock_wait_ms=lock_wait_ms,
+        )
         try:
             if not items:
                 return {}
@@ -7974,12 +8465,19 @@ class ASRServer:
             import traceback
             logger.error(traceback.format_exc())
             return {item.session.id: None for item in items}
+        finally:
+            self._gil_attrib_end_sample(gil_sample)
 
     def _process_final_batch_rows(
         self,
         rows: list[SchedulerFinalizeBatchRow],
         key: tuple,
     ) -> dict[str, Optional[str]]:
+        gil_sample = self._gil_attrib_begin_sample(
+            "finalize",
+            path="finalize_batch_rows",
+            batch_size=len(rows),
+        )
         gather_start = time.perf_counter()
         final_gather_ms = None
         clone_hyp_flush_ms = None
@@ -8009,14 +8507,17 @@ class ASRServer:
             flat_hypotheses = stack_hypotheses(previous_hypotheses)
             flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
             final_gather_ms = (time.perf_counter() - gather_start) * 1000.0
+            self._gil_attrib_add_ms("scatter_gather_ms", final_gather_ms)
         except Exception as e:
             if len(rows) > 1:
+                self._gil_attrib_end_sample(gil_sample)
                 return self._process_final_batch_solo_fallback(
                     rows,
                     key=key,
                     reason="unsafe_stack",
                     error=e,
                 )
+            self._gil_attrib_end_sample(gil_sample)
             raise
 
         if self.prompted_model:
@@ -8130,14 +8631,20 @@ class ASRServer:
                 texts[row.item.session.id] = text
         except Exception as e:
             if len(rows) > 1:
+                self._gil_attrib_end_sample(gil_sample)
                 return self._process_final_batch_solo_fallback(
                     rows,
                     key=key,
                     reason="unsafe_scatter",
                     error=e,
                 )
+            self._gil_attrib_end_sample(gil_sample)
             raise
 
+        self._gil_attrib_add_ms(
+            "scatter_gather_ms",
+            (time.perf_counter() - scatter_start) * 1000.0,
+        )
         if self.finalize_profile_enabled:
             self._finalize_profile_cuda_synchronize_many(
                 [row.item.finalize_profile for row in rows]
@@ -8154,6 +8661,7 @@ class ASRServer:
             model_ms=model_ms,
             scatter_ms=scatter_ms,
         )
+        self._gil_attrib_end_sample(gil_sample)
         return texts
 
     def _process_final_batch_solo_fallback(
@@ -8233,6 +8741,7 @@ class ASRServer:
             "fork_flush_done": None,
             "final_sent": None,
             "inference_lock_acquire_wait_ms": None,
+            "gil_attrib_enabled": self.gil_attrib_enabled,
         }
         logger.debug(
             f"Session {session.id} continuous finalize ({reason}): "
@@ -8313,12 +8822,15 @@ class ASRServer:
                                     self._process_final_chunk,
                                     fork,
                                     finalize_profile,
+                                    timing["inference_lock_acquire_wait_ms"] or 0.0,
                                 )
                             else:
                                 text = await self._run_scheduler_model_lane_call(
                                     reserved_lane_id,
                                     self._process_final_chunk,
                                     fork,
+                                    None,
+                                    timing["inference_lock_acquire_wait_ms"] or 0.0,
                                 )
                             if text is not None:
                                 final_text = text
@@ -8352,12 +8864,15 @@ class ASRServer:
                                         self._process_final_chunk,
                                         fork,
                                         finalize_profile,
+                                        timing["inference_lock_acquire_wait_ms"] or 0.0,
                                         lane_id=lane_id,
                                     )
                                 else:
                                     text = await self._run_scheduler_exclusive_inference_call(
                                         self._process_final_chunk,
                                         fork,
+                                        None,
+                                        timing["inference_lock_acquire_wait_ms"] or 0.0,
                                         lane_id=lane_id,
                                     )
                                 if text is not None:
@@ -8391,11 +8906,14 @@ class ASRServer:
                                 self._process_final_chunk,
                                 fork,
                                 finalize_profile,
+                                timing["inference_lock_acquire_wait_ms"] or 0.0,
                             )
                         else:
                             text = await self._run_inference_call(
                                 self._process_final_chunk,
                                 fork,
+                                None,
+                                timing["inference_lock_acquire_wait_ms"] or 0.0,
                             )
                         if text is not None:
                             final_text = text
@@ -8702,10 +9220,14 @@ class ASRServer:
 
         audio_tensor = torch.from_numpy(audio_batch).cuda()
         audio_len = torch.tensor(valid_samples, device='cuda', dtype=torch.long)
-        mel, _mel_len = self._current_inference_model().preprocessor(
-            input_signal=audio_tensor,
-            length=audio_len,
-        )
+        token = self._gil_attrib_cuda_event_start()
+        try:
+            mel, _mel_len = self._current_inference_model().preprocessor(
+                input_signal=audio_tensor,
+                length=audio_len,
+            )
+        finally:
+            self._gil_attrib_cuda_event_end(token)
         start = self.first_preprocess_mel_frame
         end = start + self.shift_frames
         return [
@@ -8841,8 +9363,18 @@ class ASRServer:
             f"num_ooms={mem_after['num_ooms']}"
         )
 
-    def _process_ready_batch(self, sessions: list[ASRSession]) -> dict[str, Optional[str]]:
+    def _process_ready_batch(
+        self,
+        sessions: list[ASRSession],
+        gil_lock_wait_ms: float = 0.0,
+    ) -> dict[str, Optional[str]]:
         """Process one scheduler batch of same-group ready normal chunks."""
+        gil_sample = self._gil_attrib_begin_sample(
+            "chunk",
+            path="scheduler_batch",
+            batch_size=len(sessions),
+            inference_lock_wait_ms=gil_lock_wait_ms,
+        )
         try:
             if not sessions:
                 return {}
@@ -8894,6 +9426,7 @@ class ASRServer:
                 if not rows:
                     return {session.id: session.current_text for session in sessions}
 
+                stack_start = time.perf_counter()
                 try:
                     drop_extras = {row.drop_extra for row in rows}
                     if len(drop_extras) != 1:
@@ -8923,6 +9456,10 @@ class ASRServer:
                     ]
                     flat_hypotheses = stack_hypotheses(previous_hypotheses)
                     flat_pred_out = stack_pred_out(previous_pred_out, rnnt=True)
+                    self._gil_attrib_add_ms(
+                        "scatter_gather_ms",
+                        (time.perf_counter() - stack_start) * 1000.0,
+                    )
                 except Exception as e:
                     if len(rows) > 1:
                         return self._process_ready_batch_solo_fallback(
@@ -9025,6 +9562,10 @@ class ASRServer:
                     self._write_eou_snapshot_chunk(session, row.eou_probe_snapshot)
                     texts[session.id] = text
 
+                self._gil_attrib_add_ms(
+                    "scatter_gather_ms",
+                    (time.perf_counter() - scatter_start) * 1000.0,
+                )
                 self._cuda_synchronize_for_current_model_lane()
                 scatter_ms = (time.perf_counter() - scatter_start) * 1000.0
                 mem_after = self._cuda_memory_snapshot()
@@ -9055,9 +9596,21 @@ class ASRServer:
             import traceback
             logger.error(traceback.format_exc())
             return {session.id: None for session in sessions}
+        finally:
+            self._gil_attrib_end_sample(gil_sample)
 
-    def _process_chunk(self, session: ASRSession) -> Optional[str]:
+    def _process_chunk(
+        self,
+        session: ASRSession,
+        gil_lock_wait_ms: float = 0.0,
+    ) -> Optional[str]:
         """Process one fixed-plan audio window and run streaming inference."""
+        gil_sample = self._gil_attrib_begin_sample(
+            "chunk",
+            path="serial_chunk",
+            batch_size=1,
+            inference_lock_wait_ms=gil_lock_wait_ms,
+        )
         try:
             if len(session.pending_audio) < self.preprocess_new_audio_samples:
                 return session.current_text
@@ -9172,6 +9725,8 @@ class ASRServer:
             import traceback
             logger.error(traceback.format_exc())
             return None
+        finally:
+            self._gil_attrib_end_sample(gil_sample)
 
     async def _reset_session(self, session: ASRSession, finalize: bool = True):
         """Handle reset with soft or hard finalization.
@@ -9306,8 +9861,15 @@ class ASRServer:
         self,
         session: ASRSession,
         finalize_profile: Optional[dict[str, Any]] = None,
+        gil_lock_wait_ms: float = 0.0,
     ) -> Optional[str]:
         """Process remaining pending audio with fixed-plan preprocessing."""
+        gil_sample = self._gil_attrib_begin_sample(
+            "finalize",
+            path="serial_finalize",
+            batch_size=1,
+            inference_lock_wait_ms=gil_lock_wait_ms,
+        )
         try:
             if len(session.pending_audio) == 0:
                 if finalize_profile is not None:
@@ -9467,6 +10029,8 @@ class ASRServer:
             import traceback
             logger.error(traceback.format_exc())
             return None
+        finally:
+            self._gil_attrib_end_sample(gil_sample)
 
     async def health_handler(self, request: web.Request) -> web.Response:
         """Health check endpoint."""
@@ -9484,6 +10048,13 @@ class ASRServer:
         self.model_loaded = True
         if self.scheduler_enabled:
             self._ensure_scheduler_task()
+        if self.gil_attrib_enabled:
+            self._gil_attrib_started_unix = time.time()
+            self._gil_attrib_started_perf = time.perf_counter()
+            self._gil_attrib_loop_task = asyncio.create_task(
+                self._gil_attrib_loop_lag_probe(),
+                name="nemotron-gil-attrib-loop-lag",
+            )
 
         # GC tuning (NEMOTRON_GC_TUNE=1; byte-exact — changes WHEN garbage is collected, not outputs). The default
         # gen-2 collector does ~280ms stop-the-world pauses (it scans the ~74k long-lived model + CUDA-graph objects
@@ -9514,6 +10085,11 @@ class ASRServer:
         try:
             await asyncio.Future()  # Run forever
         finally:
+            if self._gil_attrib_loop_task is not None:
+                self._gil_attrib_loop_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._gil_attrib_loop_task
+            self._gil_attrib_emit_record(reason="shutdown")
             self._log_finalize_profile_histogram(reason="shutdown")
 
 

@@ -147,7 +147,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   operating-point sweep → p95/p99 finalize lane/lock-wait share drops.
   Key files: `src/nemotron_speech/server.py`
 
-- [ ] **5. GIL-attribution PROBE — decode vs glue at the operating point (decides from-scratch `conjunct 2`; probe-only)**
+- [x] **5. GIL-attribution PROBE — decode vs glue at the operating point (decides from-scratch `conjunct 2`; probe-only)** — VERDICT: **conjunct 2 SURVIVES (medium conf)**; steady path is DECODE-bound (decode 78.6/82.2/83.7% of thread-busy p50/p95/p99, dispatch <2%, host-sync ~0); finalize p95/p99 glue = pinned-lane/inference-lock wait (49-54%), not dispatch. GIL-wait via event-loop-lag PROXY (0.53/1.04/1.32ms — py-spy --gil ptrace-blocked locally) → recheck GIL-starvation with ptrace py-spy on the cloud box before treating that sub-claim as proven.
   GOAL: split the time the scheduler/event-loop (GIL-holding) thread spends holding the GIL into **decode vs glue at
   the operating-point load**, so `proj-2026-05-24-from-scratch-runtime`/0.1 can decide **conjunct 2** (residual is
   GIL/decode-bound → native dispatch + on-GPU decode FIXES it; MPS/launch/bandwidth-bound → STOP, native ≈ Python
@@ -172,11 +172,15 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   Key files: `proj-2026-05-24-0859/gil-attribution.md`, `src/nemotron_speech/server.py` (the timing-schema logging add)
 
 - [ ] **6. Combined cloud validation + deploy update + rollout readiness**
-  Verified levers ON (each flagged) on L40S (+ L4 where it fits): keep-up sweep (in-budget streams/proc), operating-
-  point p95/p99 tail, overload test (cliff gone, attempted-vs-admitted), K=4 in-budget density (~28/box, no OOM). No
-  p50 regression. Update `launch_multiproc.sh` (flags where proven; `auto_pick_K`→L40S=4 if 2b verified) +
-  `DEPLOYMENT.md` (in-budget/box honest numbers, K-sizing, the L4-poor-for-SLO finding) + memory. Staged-rollout
-  checklist. ALWAYS terminate; leak check.
+  Verified levers ON (each flagged) on L40S (+ L4): keep-up sweep (in-budget streams/proc), operating-point p95/p99
+  tail, overload test (cliff gone, attempted-vs-admitted), **L40S K=4 in-budget density (~28/box, no OOM)** with the
+  padded bucket. **ALSO: L4 K=2 with FINALIZE_PADDED=1 no-OOM check on g6.4xlarge** — confirm the padded bucket
+  obsoletes the per-T finalize trim (full finalize-graph coverage fits 24 GB at K=2, ~1.5 GB headroom projected from
+  the ~19× local drop); note L4 capacity stays keep-up-bound ~7/box regardless (NOT a capacity gain). No p50
+  regression anywhere. Update `launch_multiproc.sh` (flags where proven; `auto_pick_K`→L40S=4 if 2b verified;
+  drop the L4 finalize-T-trim recommendation in favor of padded) + `DEPLOYMENT.md` (in-budget/box honest numbers,
+  K-sizing, padded-replaces-L4-trim, the L4-poor-for-SLO finding) + memory. Staged-rollout checklist. ALWAYS
+  terminate; leak check.
   Key files: `ec2-bench/bench_prod_sweep.sh`, `deploy/launch_multiproc.sh`, `deploy/DEPLOYMENT.md`, `proj-2026-05-24-0859/validation.md`
 
 ## Progress
@@ -186,6 +190,6 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 | 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | done — GO | 67f3ce7 | tokens/text/encoded_len byte-exact all T 42..60, tensors allclose 1.5e-7; ONLY cache_len diverged (fork [48] vs [46/47]) but it's on the DISPOSABLE fork — continuation probe CONFIRMED session keeps its own cache ([41]→[41]/[57]→[57]), post-finalize byte-exact. GO for 2b |
 | 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | done (local) | 7cc434d | built: padded replay + single-key switch + B>1→eager + dual-T telem + per-manager startup canary. Local gate: padded graph byte-exact lanes1+2 all T + continuation (canary_ok self.model+lane0+lane1); per-T absent; ~19-21× mem drop (476→25MB/mgr); default-off identical. K=4 cloud verify → Step 6 |
 | 3 | Remove safely-removable host syncs (small) | done (local) | 5c8dbc6 | NEMOTRON_SYNC_COMPRESS gates 2 entry pre-syncs (finalize @7687 elif, steady @8611); both telemetry/CPU-state only (real fences kept). Byte-exact: identical-SHA concurrent canary flag-on==flag-off, lanes1+2, FORK_ASSERT; default-off identical (elif preserves original). keep-up delta → Step 6. CUDA-event stretch noted, not built |
-| 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | done (local) | — | NEMOTRON_FINALIZE_PRIORITY excludes OTHER sessions' steady from a pending finalize's pinned lane (excluded_lanes.difference); gated (empty when off → identical); intra-session ordering + no-same-session-in-flight guard kept. Byte-exact: identical per-session SHA flag-on==flag-off lanes1+2 (sessions finalizing mid-stream). tail measure → Step 6 |
-| 5 | GIL-attribution probe (decode vs glue at operating point → from-scratch conjunct 2) | pending | — | buckets sum to thread-busy (decode/dispatch/glue) + GPU-idle% + py-spy --gil; ONE JSON record via _continuous_finalize_timing; decode≫glue+GIL-wait→native helps, MPS/BW-bound→STOP; cheap, one run |
+| 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | done (local) | 5ebec20 | NEMOTRON_FINALIZE_PRIORITY excludes OTHER sessions' steady from a pending finalize's pinned lane (excluded_lanes.difference); gated (empty when off → identical); intra-session ordering + no-same-session-in-flight guard kept. Byte-exact: identical per-session SHA flag-on==flag-off lanes1+2 (sessions finalizing mid-stream). tail measure → Step 6 |
+| 5 | GIL-attribution probe (decode vs glue at operating point → from-scratch conjunct 2) | done — conjunct 2 SURVIVES (med conf) | — | NEMOTRON_GIL_ATTRIB=1 default-off; one gil_attribution_record JSON at shutdown via existing timing surface; buckets SUM to thread-busy (delta 0.0ms). Decode-bound: chunk decode 78.6/82.2/83.7%, dispatch <2%, host-sync ~0; finalize p95/p99 glue=inference-lock/pinned-lane wait 49-54%. GPU-idle-while-busy chunk 17-26%. GIL-wait=event-loop-lag PROXY 0.53/1.04/1.32ms (py-spy --gil ptrace-blocked → recheck on cloud). Default-off identity by construction (timed_call pass-through, context-mgrs no-op-yield, output untouched); flag-on run ok=48/0err. → native dispatch+on-GPU decode direction kept for proj-2026-05-24-from-scratch-runtime/0.1 |
 | 6 | Combined cloud validation + deploy update | pending | — | success = tail↓ + in-budget density↑ + cliff-gone; NOT p50; honest ~28/box |
