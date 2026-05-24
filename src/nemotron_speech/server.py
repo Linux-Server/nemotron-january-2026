@@ -609,6 +609,9 @@ class ASRServer:
         self.batch_finalize_preproc_requested = (
             os.environ.get("NEMOTRON_BATCH_FINALIZE_PREPROC", "") == "1"
         )
+        self.finalize_priority_enabled = (
+            os.environ.get("NEMOTRON_FINALIZE_PRIORITY", "") == "1"
+        )
         self.batch_fallback_reason: Optional[str] = None
         self.model_lanes_requested = _env_int("NEMOTRON_MODEL_LANES", 1)
         if self.model_lanes_requested <= 0:
@@ -710,6 +713,7 @@ class ASRServer:
         self._scheduler_finalize_batch_size_hist: dict[int, int] = {}
         self._scheduler_finalize_serial_fallback_calls = 0
         self._scheduler_finalize_fallback_counts: dict[str, int] = {}
+        self._scheduler_priority_finalize_events: list[SchedulerFinalizeEvent] = []
         self._scheduler_lane_wait_ms_total = 0.0
         self._scheduler_lane_wait_ms_max = 0.0
         self._scheduler_model_lane_executors: list[concurrent.futures.ThreadPoolExecutor] = []
@@ -751,6 +755,12 @@ class ASRServer:
                 "finalize_profile_enabled=True "
                 "flag=NEMOTRON_FINALIZE_PROFILE "
                 "mode=read_only syncs=profile_only"
+            )
+        if self.finalize_priority_enabled:
+            logger.info(
+                "finalize_priority_enabled=True "
+                "flag=NEMOTRON_FINALIZE_PRIORITY "
+                "mode=cross_session_submit_priority"
             )
         self._prof_n = 0
         self._prof_pre_ms = 0.0
@@ -1641,6 +1651,7 @@ class ASRServer:
             f"batch_finalize={self._scheduler_batch_finalize_active()} "
             f"batch_finalize_preproc_requested={self.batch_finalize_preproc_requested} "
             f"batch_finalize_preproc={self._scheduler_batch_finalize_preproc_active()} "
+            f"finalize_priority={self._scheduler_finalize_priority_active()} "
             f"batch_fallback_reason={self.batch_fallback_reason or 'none'} "
             f"decoder_strategy={self.decoder_strategy} "
             f"encoder_compile_enabled={self.encoder_compile_enabled} "
@@ -3578,19 +3589,27 @@ class ASRServer:
             return (prompt_key, drop_extra)
         return None
 
-    def _scheduler_model_lane_key_can_dispatch(self, key: tuple) -> bool:
+    def _scheduler_model_lane_key_can_dispatch(
+        self,
+        key: tuple,
+        *,
+        excluded_lanes: Optional[set[int]] = None,
+    ) -> bool:
         if self.model_lanes <= 1:
             return True
         if self._scheduler_model_lane_exclusive_active:
             return False
+        available_lanes = self._scheduler_available_model_lanes
+        if excluded_lanes:
+            available_lanes = available_lanes.difference(excluded_lanes)
         parallel_key = self._scheduler_batch_key_parallel_lane_key(key)
         if parallel_key is None:
             return (
                 not self._scheduler_inflight_model_lane_tasks
-                and bool(self._scheduler_available_model_lanes)
+                and bool(available_lanes)
             )
         return (
-            bool(self._scheduler_available_model_lanes)
+            bool(available_lanes)
             and (
                 self._scheduler_model_lane_active_key is None
                 or self._scheduler_model_lane_active_key == parallel_key
@@ -3601,11 +3620,16 @@ class ASRServer:
         self,
         session: ASRSession,
         key: tuple,
+        *,
+        excluded_lanes: Optional[set[int]] = None,
     ) -> bool:
         if self.model_lanes <= 1:
             return True
         lane_id = self._scheduler_session_model_lane_affinity.get(session.id)
-        return lane_id is None or lane_id in self._scheduler_available_model_lanes
+        available_lanes = self._scheduler_available_model_lanes
+        if excluded_lanes:
+            available_lanes = available_lanes.difference(excluded_lanes)
+        return lane_id is None or lane_id in available_lanes
 
     def _scheduler_assign_session_model_lane(self, session: ASRSession) -> int:
         if self.model_lanes <= 1:
@@ -3625,6 +3649,7 @@ class ASRServer:
     def _scheduler_ready_has_model_lane_compatible_key(self) -> bool:
         if self.model_lanes <= 1:
             return True
+        excluded_lanes = self._scheduler_finalize_priority_pending_lanes()
         for session_id in list(self._scheduler_ready):
             if session_id in self._scheduler_inflight_sessions:
                 continue
@@ -3633,8 +3658,15 @@ class ASRServer:
                 continue
             key = self._scheduler_batch_group_key_for_session(session)
             if (
-                self._scheduler_model_lane_key_can_dispatch(key)
-                and self._scheduler_session_affinity_allows_dispatch(session, key)
+                self._scheduler_model_lane_key_can_dispatch(
+                    key,
+                    excluded_lanes=excluded_lanes,
+                )
+                and self._scheduler_session_affinity_allows_dispatch(
+                    session,
+                    key,
+                    excluded_lanes=excluded_lanes,
+                )
             ):
                 return True
         return False
@@ -3656,10 +3688,14 @@ class ASRServer:
         self,
         key: tuple,
         sessions: list[ASRSession],
+        *,
+        excluded_lanes: Optional[set[int]] = None,
     ) -> list[ASRSession]:
         if self.model_lanes <= 1:
             return sessions
         available = self._scheduler_available_model_lanes
+        if excluded_lanes:
+            available = available.difference(excluded_lanes)
         if not available:
             return []
 
@@ -3687,30 +3723,37 @@ class ASRServer:
         key: tuple,
         *,
         preferred_lane: Optional[int] = None,
+        excluded_lanes: Optional[set[int]] = None,
     ) -> Optional[tuple[int, bool]]:
         if self.model_lanes <= 1:
             return None
-        if not self._scheduler_model_lane_key_can_dispatch(key):
+        if not self._scheduler_model_lane_key_can_dispatch(
+            key,
+            excluded_lanes=excluded_lanes,
+        ):
             return None
 
+        available_lanes = self._scheduler_available_model_lanes
+        if excluded_lanes:
+            available_lanes = available_lanes.difference(excluded_lanes)
         parallel_key = self._scheduler_batch_key_parallel_lane_key(key)
         if parallel_key is None:
             if preferred_lane is not None:
-                if preferred_lane not in self._scheduler_available_model_lanes:
+                if preferred_lane not in available_lanes:
                     return None
                 lane_id = preferred_lane
             else:
-                lane_id = min(self._scheduler_available_model_lanes)
+                lane_id = min(available_lanes)
             self._scheduler_available_model_lanes.remove(lane_id)
             self._scheduler_model_lane_exclusive_active = True
             return lane_id, True
 
         if preferred_lane is not None:
-            if preferred_lane not in self._scheduler_available_model_lanes:
+            if preferred_lane not in available_lanes:
                 return None
             lane_id = preferred_lane
         else:
-            lane_id = min(self._scheduler_available_model_lanes)
+            lane_id = min(available_lanes)
         self._scheduler_available_model_lanes.remove(lane_id)
         self._scheduler_model_lane_active_key = parallel_key
         return lane_id, False
@@ -4702,6 +4745,7 @@ class ASRServer:
                 f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
                 f"batch_finalize={self._scheduler_batch_finalize_active()} "
                 f"batch_finalize_preproc={self._scheduler_batch_finalize_preproc_active()} "
+                f"finalize_priority={self._scheduler_finalize_priority_active()} "
                 f"model_lanes={self.model_lanes} "
                 f"batch_max_wait_ms={self.batch_max_wait_ms} "
                 f"batch_max_size={self.batch_max_size}"
@@ -4765,9 +4809,13 @@ class ASRServer:
             return None
         if self.model_lanes <= 1:
             return min(self._scheduler_batch_first_ready.values())
+        excluded_lanes = self._scheduler_finalize_priority_pending_lanes()
         compatible_deadlines = []
         for key, deadline in self._scheduler_batch_first_ready.items():
-            if not self._scheduler_model_lane_key_can_dispatch(key):
+            if not self._scheduler_model_lane_key_can_dispatch(
+                key,
+                excluded_lanes=excluded_lanes,
+            ):
                 continue
             for session_id in list(self._scheduler_ready):
                 if session_id in self._scheduler_inflight_sessions:
@@ -4777,7 +4825,11 @@ class ASRServer:
                     continue
                 if (
                     self._scheduler_batch_group_key_for_session(session) == key
-                    and self._scheduler_session_affinity_allows_dispatch(session, key)
+                    and self._scheduler_session_affinity_allows_dispatch(
+                        session,
+                        key,
+                        excluded_lanes=excluded_lanes,
+                    )
                 ):
                     compatible_deadlines.append(deadline)
                     break
@@ -4811,6 +4863,148 @@ class ASRServer:
             and self._scheduler_batch_finalize_active()
         )
 
+    def _scheduler_finalize_priority_active(self) -> bool:
+        return (
+            self.finalize_priority_enabled
+            and self._scheduler_batch_finalize_active()
+        )
+
+    def _scheduler_finalize_priority_pending_lanes(self) -> set[int]:
+        if (
+            not self._scheduler_finalize_priority_active()
+            or self.model_lanes <= 1
+            or not self._scheduler_priority_finalize_events
+        ):
+            return set()
+
+        lanes: set[int] = set()
+        for finalize_event in self._scheduler_priority_finalize_events:
+            session = finalize_event.session
+            if session.scheduler_closed:
+                continue
+            lanes.add(self._scheduler_assign_session_model_lane(session))
+        return lanes
+
+    async def _scheduler_process_priority_finalize_events(self) -> bool:
+        if (
+            not self._scheduler_finalize_priority_active()
+            or not self._scheduler_priority_finalize_events
+        ):
+            return False
+
+        ready_to_finalize: list[SchedulerFinalizeEvent] = []
+        still_pending: list[SchedulerFinalizeEvent] = []
+        for finalize_event in self._scheduler_priority_finalize_events:
+            session = finalize_event.session
+            if session.id in self._scheduler_inflight_sessions:
+                still_pending.append(finalize_event)
+                continue
+
+            async with session.state_lock:
+                if self._scheduler_session_ready(session):
+                    self._scheduler_mark_ready_if_ready_locked(session)
+                    still_pending.append(finalize_event)
+                    continue
+                ready_to_finalize.append(finalize_event)
+
+        self._scheduler_priority_finalize_events = still_pending
+        if not ready_to_finalize:
+            return False
+
+        await self._scheduler_process_finalize_event_batch(ready_to_finalize)
+        return True
+
+    async def _scheduler_process_priority_finalize_ready_pass(self) -> bool:
+        if (
+            not self._scheduler_finalize_priority_active()
+            or not self._scheduler_priority_finalize_events
+        ):
+            return False
+
+        for finalize_event in list(self._scheduler_priority_finalize_events):
+            session = finalize_event.session
+            if session.id in self._scheduler_inflight_sessions:
+                continue
+
+            async with session.state_lock:
+                if not self._scheduler_session_ready(session):
+                    continue
+                key = self._scheduler_batch_group_key_for_session(session)
+
+            processed = await self._scheduler_process_ready_batch_locked_sessions(
+                key,
+                [session],
+                reason="finalize_priority_ready",
+                ready_count=1,
+                eligible_count=1,
+                excluded_lanes=set(),
+            )
+            if processed:
+                return True
+
+        return False
+
+    async def _scheduler_process_priority_finalize_before_ready(self) -> bool:
+        if not self._scheduler_finalize_priority_active():
+            return False
+
+        progressed = await self._scheduler_process_priority_finalize_events()
+        if self._scheduler_priority_finalize_events:
+            progressed = (
+                await self._scheduler_process_priority_finalize_ready_pass()
+                or progressed
+            )
+        if self._scheduler_priority_finalize_events:
+            progressed = (
+                await self._scheduler_process_priority_finalize_events()
+                or progressed
+            )
+        return progressed
+
+    async def _scheduler_stage_finalize_events_before_ready(
+        self,
+        finalize_events: list[SchedulerFinalizeEvent],
+    ) -> bool:
+        if not finalize_events:
+            return False
+
+        if not self._scheduler_finalize_priority_active():
+            await self._scheduler_process_finalize_event_batch(finalize_events)
+            return True
+
+        self._scheduler_priority_finalize_events.extend(finalize_events)
+        return await self._scheduler_process_priority_finalize_before_ready()
+
+    def _scheduler_priority_finalize_has_runnable_work(self) -> bool:
+        if (
+            not self._scheduler_finalize_priority_active()
+            or not self._scheduler_priority_finalize_events
+        ):
+            return False
+
+        for finalize_event in self._scheduler_priority_finalize_events:
+            session = finalize_event.session
+            if session.scheduler_closed:
+                continue
+            if session.id in self._scheduler_inflight_sessions:
+                continue
+            if self.model_lanes <= 1:
+                return True
+
+            lane_id = self._scheduler_assign_session_model_lane(session)
+            if (
+                self._scheduler_model_lane_exclusive_active
+                or lane_id not in self._scheduler_available_model_lanes
+            ):
+                continue
+            if self._scheduler_session_ready(session):
+                key = self._scheduler_batch_group_key_for_session(session)
+                if self._scheduler_model_lane_key_can_dispatch(key):
+                    return True
+                continue
+            return True
+        return False
+
     def _scheduler_has_queued_events(self) -> bool:
         for session in list(self.sessions.values()):
             if (
@@ -4829,6 +5023,8 @@ class ASRServer:
         return False
 
     def _scheduler_has_work_or_due_timer(self) -> bool:
+        if self._scheduler_priority_finalize_has_runnable_work():
+            return True
         if self._scheduler_has_queued_events():
             return True
         if self._scheduler_ready:
@@ -4851,6 +5047,7 @@ class ASRServer:
             f"batch_barrier_drain={self._scheduler_batch_barrier_drain_active()} "
             f"batch_finalize={self._scheduler_batch_finalize_active()} "
             f"batch_finalize_preproc={self._scheduler_batch_finalize_preproc_active()} "
+            f"finalize_priority={self._scheduler_finalize_priority_active()} "
             f"model_lanes={self.model_lanes} "
             f"batch_max_wait_ms={self.batch_max_wait_ms} "
             f"batch_max_size={self.batch_max_size}"
@@ -4902,7 +5099,7 @@ class ASRServer:
         if self._scheduler_batch_barrier_drain_active():
             return await self._scheduler_drain_once_batched_barrier()
 
-        progressed = False
+        progressed = await self._scheduler_process_priority_finalize_before_ready()
         finalize_events: list[SchedulerFinalizeEvent] = []
         for session in list(self.sessions.values()):
             if session.id in self._scheduler_inflight_sessions:
@@ -4932,15 +5129,30 @@ class ASRServer:
             progressed = True
 
         if finalize_events:
-            await self._scheduler_process_finalize_event_batch(finalize_events)
+            progressed = (
+                await self._scheduler_stage_finalize_events_before_ready(finalize_events)
+                or progressed
+            )
 
-        if self._scheduler_ready:
+        progressed = (
+            await self._scheduler_process_priority_finalize_before_ready()
+            or progressed
+        )
+
+        if (
+            self._scheduler_ready
+            and not (
+                self._scheduler_finalize_priority_active()
+                and self.model_lanes <= 1
+                and self._scheduler_priority_finalize_events
+            )
+        ):
             progressed = await self._scheduler_process_ready_pass() or progressed
 
         return progressed
 
     async def _scheduler_drain_once_batched_barrier(self) -> bool:
-        progressed = False
+        progressed = await self._scheduler_process_priority_finalize_before_ready()
         finalize_events: list[SchedulerFinalizeEvent] = []
 
         for session in list(self.sessions.values()):
@@ -5016,9 +5228,24 @@ class ASRServer:
             progressed = True
 
         if finalize_events:
-            await self._scheduler_process_finalize_event_batch(finalize_events)
+            progressed = (
+                await self._scheduler_stage_finalize_events_before_ready(finalize_events)
+                or progressed
+            )
 
-        if self._scheduler_ready:
+        progressed = (
+            await self._scheduler_process_priority_finalize_before_ready()
+            or progressed
+        )
+
+        if (
+            self._scheduler_ready
+            and not (
+                self._scheduler_finalize_priority_active()
+                and self.model_lanes <= 1
+                and self._scheduler_priority_finalize_events
+            )
+        ):
             progressed = await self._scheduler_process_ready_pass() or progressed
 
         return progressed
@@ -5253,6 +5480,7 @@ class ASRServer:
             return False
 
         now = time.monotonic()
+        excluded_lanes = self._scheduler_finalize_priority_pending_lanes()
         candidates: list[tuple[int, float, str, tuple, list[ASRSession], str, int, int]] = []
         for key, sessions in ready_groups.items():
             sessions.sort(key=lambda s: (s.scheduler_ready_since or now, s.id))
@@ -5276,7 +5504,10 @@ class ASRServer:
 
             if (
                 self.model_lanes > 1
-                and not self._scheduler_model_lane_key_can_dispatch(key)
+                and not self._scheduler_model_lane_key_can_dispatch(
+                    key,
+                    excluded_lanes=excluded_lanes,
+                )
             ):
                 continue
 
@@ -5285,6 +5516,7 @@ class ASRServer:
                 selected_sessions = self._scheduler_select_lane_affine_sessions(
                     key,
                     selected_sessions,
+                    excluded_lanes=excluded_lanes,
                 )
                 if not selected_sessions:
                     continue
@@ -5323,6 +5555,7 @@ class ASRServer:
             reason=reason,
             ready_count=ready_count,
             eligible_count=active_count,
+            excluded_lanes=excluded_lanes,
         )
 
     async def _scheduler_process_ready_batch_locked_sessions(
@@ -5333,6 +5566,7 @@ class ASRServer:
         reason: str,
         ready_count: int,
         eligible_count: int,
+        excluded_lanes: Optional[set[int]] = None,
     ) -> bool:
         if not sessions:
             return False
@@ -5343,6 +5577,7 @@ class ASRServer:
                 reason=reason,
                 ready_count=ready_count,
                 eligible_count=eligible_count,
+                excluded_lanes=excluded_lanes,
             )
 
         async with contextlib.AsyncExitStack() as stack:
@@ -5473,6 +5708,7 @@ class ASRServer:
         reason: str,
         ready_count: int,
         eligible_count: int,
+        excluded_lanes: Optional[set[int]] = None,
     ) -> bool:
         async with contextlib.AsyncExitStack() as stack:
             for session in sorted(sessions, key=lambda s: s.id):
@@ -5500,6 +5736,7 @@ class ASRServer:
             reservation = self._scheduler_reserve_model_lane_for_key(
                 key,
                 preferred_lane=preferred_lane,
+                excluded_lanes=excluded_lanes,
             )
             if reservation is None:
                 return False

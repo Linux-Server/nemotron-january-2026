@@ -19,6 +19,7 @@ ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200
 [ "${CUDAGRAPH_FINALIZE:-0}" = 1 ] && ENV+=(NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1)   # idea 2: finalize encoder CUDA graph
 [ "${CUDAGRAPH_FINALIZE_PADDED:-0}" = 1 ] && ENV+=(NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=1)   # Step 2b: single padded T_max finalize graph
 [ "${SYNC_COMPRESS:-0}" = 1 ] && ENV+=(NEMOTRON_SYNC_COMPRESS=1)   # Step 3: skip safely-removable entry telemetry pre-syncs
+[ "${FINALIZE_PRIORITY:-0}" = 1 ] && ENV+=(NEMOTRON_FINALIZE_PRIORITY=1)   # Step 4: due-finalize submit priority over other sessions' steady work
 [ "${GC_PROFILE:-0}" = 1 ] && ENV+=(NEMOTRON_GC_PROFILE=1)   # log GC stop-the-world pauses (P99-stall probe)
 [ "${GC_TUNE:-0}" = 1 ] && ENV+=(NEMOTRON_GC_TUNE=1)   # gc.freeze() + raised thresholds (P99-stall GC fix)
 [ -n "${ADMISSION_MAX_BACKLOG:-}" ] && ENV+=("NEMOTRON_ADMISSION_MAX_BACKLOG=$ADMISSION_MAX_BACKLOG")   # WS-close new connects above backlog cap

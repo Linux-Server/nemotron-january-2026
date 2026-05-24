@@ -138,7 +138,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   byte-exact at concurrency, profiling OFF. **Cloud**: keep-up sweep delta.
   Key files: `src/nemotron_speech/server.py`
 
-- [ ] **4. Priority finalize-lane queue-jump (CROSS-SESSION, submit-time only)**
+- [x] **4. Priority finalize-lane queue-jump (CROSS-SESSION, submit-time only)** — built + per-session byte-exact; tail measure → Step 6
   Let a due finalize jump AHEAD of OTHER sessions' not-yet-submitted steady work for the lane (it cannot preempt a
   running lane call — single-worker @3155, availability removed @3389; expected win ≈ one steady-batch wait, not
   many). Flag `NEMOTRON_FINALIZE_PRIORITY=1` (default off). MUST obey pinned-affinity (@3295-3308/5117-5128) + the
@@ -185,7 +185,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 | 1 | Admission on always-on backlog signal + lower HAProxy maxconn | done (local) | 6a427fa | default-off identity runtime-confirmed; flag-on reject logic correct; always-on composite signal (qsize+ready+age); WS-close 1013 before admit; maxconn 7(L40S)/3-4(L4); HAPROXY_MAXCONN env. Cloud attempted-vs-admitted sweep → Step 6 |
 | 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | done — GO | 67f3ce7 | tokens/text/encoded_len byte-exact all T 42..60, tensors allclose 1.5e-7; ONLY cache_len diverged (fork [48] vs [46/47]) but it's on the DISPOSABLE fork — continuation probe CONFIRMED session keeps its own cache ([41]→[41]/[57]→[57]), post-finalize byte-exact. GO for 2b |
 | 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | done (local) | 7cc434d | built: padded replay + single-key switch + B>1→eager + dual-T telem + per-manager startup canary. Local gate: padded graph byte-exact lanes1+2 all T + continuation (canary_ok self.model+lane0+lane1); per-T absent; ~19-21× mem drop (476→25MB/mgr); default-off identical. K=4 cloud verify → Step 6 |
-| 3 | Remove safely-removable host syncs (small) | done (local) | — | NEMOTRON_SYNC_COMPRESS gates 2 entry pre-syncs (finalize @7687 elif, steady @8611); both telemetry/CPU-state only (real fences kept). Byte-exact: identical-SHA concurrent canary flag-on==flag-off, lanes1+2, FORK_ASSERT; default-off identical (elif preserves original). keep-up delta → Step 6. CUDA-event stretch noted, not built |
-| 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | pending | — | cannot preempt running work; win ≈ one steady-batch |
+| 3 | Remove safely-removable host syncs (small) | done (local) | 5c8dbc6 | NEMOTRON_SYNC_COMPRESS gates 2 entry pre-syncs (finalize @7687 elif, steady @8611); both telemetry/CPU-state only (real fences kept). Byte-exact: identical-SHA concurrent canary flag-on==flag-off, lanes1+2, FORK_ASSERT; default-off identical (elif preserves original). keep-up delta → Step 6. CUDA-event stretch noted, not built |
+| 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | done (local) | — | NEMOTRON_FINALIZE_PRIORITY excludes OTHER sessions' steady from a pending finalize's pinned lane (excluded_lanes.difference); gated (empty when off → identical); intra-session ordering + no-same-session-in-flight guard kept. Byte-exact: identical per-session SHA flag-on==flag-off lanes1+2 (sessions finalizing mid-stream). tail measure → Step 6 |
 | 5 | GIL-attribution probe (decode vs glue at operating point → from-scratch conjunct 2) | pending | — | buckets sum to thread-busy (decode/dispatch/glue) + GPU-idle% + py-spy --gil; ONE JSON record via _continuous_finalize_timing; decode≫glue+GIL-wait→native helps, MPS/BW-bound→STOP; cheap, one run |
 | 6 | Combined cloud validation + deploy update | pending | — | success = tail↓ + in-budget density↑ + cliff-gone; NOT p50; honest ~28/box |
