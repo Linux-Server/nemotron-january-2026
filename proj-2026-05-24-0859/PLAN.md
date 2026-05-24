@@ -67,9 +67,11 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   padded flag on any mismatch (not per-call).**
 - **Step 4**: **priority = queue-jump at SUBMIT only (cannot preempt a running lane call)**, CROSS-SESSION only — never
   jump a session's own ready/in-flight steady; obey pinned-affinity + no-same-session-in-flight.
-- **Step 5**: PROBE-ONLY unless the probe explicitly approves a NeMo-patch path. The in-tree "fixes" (fixed-trip
-  decode = replacing NeMo label-loop control flow; actor redesign = large rewrite that still doesn't remove the decode
-  GIL) are NOT small server edits — default outcome is DEFER to the from-scratch core.
+- **Step 5**: a GIL-ATTRIBUTION probe (decode vs glue, buckets summing to thread-busy, + GPU-idle% + GIL-wait) whose
+  ONE structured record decides the from-scratch project's `conjunct 2` (GIL/decode-bound → native helps; MPS/launch/
+  bandwidth-bound → STOP). PROBE-ONLY: emit via the existing `_continuous_finalize_timing` schema (a logging add); do
+  NOT attempt the native rewrite / NeMo-decode replacement / lock-domain redesign here (that is the from-scratch
+  project, gated on this record).
 ### Measurement / capacity honesty (avoid double-counting)
 - maxconn/admission **ENFORCE the in-budget operating point + shed** — they do NOT raise capacity. Step 2b adds the
   4th proc (K=4 → ~28/box in-budget, +~33% vs 21), NOT 64. Step 5 is the only per-proc keep-up lever (deferred).
@@ -94,7 +96,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   reporting **attempted vs admitted** → admitted streams in-budget, cliff bounded.
   Key files: `src/nemotron_speech/server.py`, `deploy/haproxy.cfg.example`, `deploy/DEPLOYMENT.md`, `ec2-bench/{start_prod_server.sh,bench_prod_sweep.sh}`
 
-- [ ] **2a. Padded-T byte-exactness PROBE (GO/NO-GO, local, no cloud)**
+- [x] **2a. Padded-T byte-exactness PROBE (GO/NO-GO, local, no cloud)** — VERDICT: GO (cache_len divergence empirically confirmed dead)
   Harness: REUSE `proj-2026-05-23-1731/decoder_graph_harness.py` (@528-630 builds real sessions + finalize forks +
   drives final rows) + NEW padded infra (the current manager rejects exact-T vs T_max @582-599; `stack_processed`
   @batch_primitives.py:59-75 sets length=physical T so the padded path needs custom length handling). For every real
@@ -145,15 +147,29 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   operating-point sweep → p95/p99 finalize lane/lock-wait share drops.
   Key files: `src/nemotron_speech/server.py`
 
-- [ ] **5. GIL-contention PROBE (probe-only; decode-vs-glue attribution; likely DEFER)**
-  Dispatch is already in executors — confirm the keep-up wall is GIL contention and ATTRIBUTE it between (a) the
-  eager-decode `.item()` loops on the lane threads (@rnnt_label_looping.py:357/409/718) and (b) the scheduler-loop
-  Python glue on the event-loop thread (batch assembly + per-row clone/stack/scatter). Measure GIL-wait (decode stub /
-  `sys.setswitchinterval` / py-spy GIL). The probe DECIDES scope: (a) fixed-trip/GIL-light decode = a NeMo label-loop
-  control-flow replacement, byte-exact-gated — NOT a small in-tree edit; (b) vectorize the scheduler glue (if glue is a
-  big share — cheaper, in-tree); (c) actor redesign / **DEFER to the from-scratch C++/no-GIL core**. Do NOT attempt the
-  NeMo rewrite or the lock-domain redesign speculatively. Deliverable = the attribution + the recommended path.
-  Key files: `proj-2026-05-24-0859/gil_probe.md`, (only if the probe approves a cheap in-tree glue win) `src/nemotron_speech/server.py`
+- [ ] **5. GIL-attribution PROBE — decode vs glue at the operating point (decides from-scratch `conjunct 2`; probe-only)**
+  GOAL: split the time the scheduler/event-loop (GIL-holding) thread spends holding the GIL into **decode vs glue at
+  the operating-point load**, so `proj-2026-05-24-from-scratch-runtime`/0.1 can decide **conjunct 2** (residual is
+  GIL/decode-bound → native dispatch + on-GPU decode FIXES it; MPS/launch/bandwidth-bound → STOP, native ≈ Python
+  topology) WITHOUT re-deriving it from a fresh ablation.
+  MEASURE (per chunk + per finalize, under load, **p50/p95/p99**) wall-time on the GIL-holding thread, **bucketed so
+  the buckets SUM to thread-busy time**:
+  - **decode** — the NeMo `greedy_batch` label-looping call (the per-frame `.item()` loop, rnnt_label_looping.py:357/409/718) — the hypothesized wall;
+  - **model dispatch** — encoder graph replay / kernel launch;
+  - **glue** — split into: scatter/gather (`batch_primitives` stack/scatter), host syncs (`stream.synchronize`), `inference_lock` acquire-wait, scheduling + socket I/O.
+  PLUS **GPU-idle % while the thread is busy** and **GIL-wait seen by other lanes/coroutines** (`py-spy --gil`
+  sampling) — this is what distinguishes "GIL-serialized" from "MPS/launch-serialized."
+  OUTPUT (what 0.1 consumes): ONE structured **JSON record per operating point**, emitted through the EXISTING timing
+  schema (`_continuous_finalize_timing` + batch/finalize telemetry — the same fields 0.10 mandates parity with), with
+  the named buckets as **ms + % of thread-busy time**. A logging ADD, not new plumbing.
+  DECISION the record must support: **decode ≫ glue + high GIL-wait + GPU-idle attributable to single-thread
+  serialization → conjunct 2 SURVIVES** (native dispatch + on-GPU decode helps); **glue dominated by
+  MPS/context-launch, or the work is bandwidth-bound, + GPU not idle-on-GIL → conjunct 2 DIES → STOP** (native ≈
+  Python topology).
+  KEEP IT CHEAP: prefer a **sampling profiler (`py-spy --gil`) + `perf_counter` brackets** around decode-vs-rest over
+  heavy instrumentation; **ONE run at the operating point** is enough for the kill/keep direction. Probe-only — do NOT
+  attempt the native rewrite / lock-domain redesign here (that is the from-scratch project, gated on this record).
+  Key files: `proj-2026-05-24-0859/gil-attribution.md`, `src/nemotron_speech/server.py` (the timing-schema logging add)
 
 - [ ] **6. Combined cloud validation + deploy update + rollout readiness**
   Verified levers ON (each flagged) on L40S (+ L4 where it fits): keep-up sweep (in-budget streams/proc), operating-
@@ -166,10 +182,10 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Admission on always-on backlog signal + lower HAProxy maxconn | done (local) | — | default-off identity runtime-confirmed; flag-on reject logic correct; always-on composite signal (qsize+ready+age); WS-close 1013 before admit; maxconn 7(L40S)/3-4(L4); HAPROXY_MAXCONN env. Cloud attempted-vs-admitted sweep → Step 6 |
-| 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | pending | — | relaxed gate: tokens byte-exact + encoded_len/cache_len exact + tensors allclose; new harness infra |
+| 1 | Admission on always-on backlog signal + lower HAProxy maxconn | done (local) | 6a427fa | default-off identity runtime-confirmed; flag-on reject logic correct; always-on composite signal (qsize+ready+age); WS-close 1013 before admit; maxconn 7(L40S)/3-4(L4); HAPROXY_MAXCONN env. Cloud attempted-vs-admitted sweep → Step 6 |
+| 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | done — GO | — | tokens/text/encoded_len byte-exact all T 42..60, tensors allclose 1.5e-7; ONLY cache_len diverged (fork [48] vs [46/47]) but it's on the DISPOSABLE fork — continuation probe CONFIRMED session keeps its own cache ([41]→[41]/[57]→[57]), post-finalize byte-exact. GO for 2b |
 | 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | pending | — | switch not coexist; startup-canary fail-closed (not per-call); ~28/box NOT 64 |
 | 3 | Remove safely-removable host syncs (small) | pending | — | only @8223/7300; stretch (CUDA-event @3177) needs lane-busy state |
 | 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | pending | — | cannot preempt running work; win ≈ one steady-batch |
-| 5 | GIL probe (probe-only; decode-vs-glue; likely DEFER) | pending | — | dispatch already off-thread; in-tree fixes are NeMo rewrite/large; glue-vectorize is the only cheap candidate |
+| 5 | GIL-attribution probe (decode vs glue at operating point → from-scratch conjunct 2) | pending | — | buckets sum to thread-busy (decode/dispatch/glue) + GPU-idle% + py-spy --gil; ONE JSON record via _continuous_finalize_timing; decode≫glue+GIL-wait→native helps, MPS/BW-bound→STOP; cheap, one run |
 | 6 | Combined cloud validation + deploy update | pending | — | success = tail↓ + in-budget density↑ + cliff-gone; NOT p50; honest ~28/box |
