@@ -767,11 +767,15 @@ class ASRServer:
         self.encoder_cudagraph_finalize_requested = (
             os.environ.get("NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE", "") == "1"
         )
+        self.encoder_cudagraph_finalize_padded_requested = (
+            os.environ.get("NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED", "") == "1"
+        )
         self.encoder_cudagraph_finalize_enabled = False
         self.encoder_cudagraph_finalize_t_min = 42
         self.encoder_cudagraph_finalize_t_max = 60
         self.encoder_cudagraph_finalize_drop_extra = 2
         self._encoder_cudagraph_finalize_config_error: Optional[str] = None
+        self._encoder_cudagraph_finalize_padded_canary_failed: Optional[str] = None
         if self.encoder_cudagraph_finalize_requested:
             try:
                 self.encoder_cudagraph_finalize_t_min = _env_int(
@@ -822,8 +826,8 @@ class ASRServer:
         self._encoder_cudagraph_eager_fallbacks = 0
         self._encoder_finalize_cudagraph_replay_calls = 0
         self._encoder_finalize_cudagraph_eager_fallbacks = 0
-        self._encoder_finalize_cudagraph_replay_hist: dict[tuple[int, int, int], int] = {}
-        self._encoder_finalize_cudagraph_fallback_hist: dict[tuple[int, int, int], int] = {}
+        self._encoder_finalize_cudagraph_replay_hist: dict[tuple[int, int, int, int], int] = {}
+        self._encoder_finalize_cudagraph_fallback_hist: dict[tuple[int, int, int, int], int] = {}
         self._encoder_cudagraph_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._encoder_cudagraph_thread_id: Optional[int] = None
         self.eou_probe_tag = _telemetry_run_tag() or "eou_probe"
@@ -1636,6 +1640,7 @@ class ASRServer:
             f"encoder_cudagraph_requested={self.encoder_cudagraph_requested} "
             f"encoder_cudagraph_max_B={self.encoder_cudagraph_max_b} "
             f"encoder_cudagraph_finalize_requested={self.encoder_cudagraph_finalize_requested} "
+            f"encoder_cudagraph_finalize_padded_requested={self.encoder_cudagraph_finalize_padded_requested} "
             f"encoder_cudagraph_finalize_T={self.encoder_cudagraph_finalize_t_min}..{self.encoder_cudagraph_finalize_t_max} "
             f"model_lanes_requested={self.model_lanes_requested} "
             f"model_lanes={self.model_lanes} "
@@ -1709,7 +1714,157 @@ class ASRServer:
             logger=logging.getLogger("nemotron_speech.cudagraph_encoder"),
         )
         self._capture_encoder_cudagraph_finalize_buckets(manager, label=label)
+        self._run_encoder_finalize_padded_canary(manager, label=label)
         return manager
+
+    def _encoder_finalize_cudagraph_padded_key(self) -> FinalizeEncoderGraphKey:
+        return FinalizeEncoderGraphKey(
+            batch_size=1,
+            time_steps=int(self.encoder_cudagraph_finalize_t_max),
+            drop_extra=int(self.encoder_cudagraph_finalize_drop_extra),
+            keep_all_outputs=True,
+        )
+
+    @staticmethod
+    def _hypothesis_token_tuple(hyp: Any) -> tuple[int, ...]:
+        if hyp is None:
+            return ()
+        sequence = getattr(hyp, "y_sequence", None)
+        if sequence is None:
+            return ()
+        try:
+            if torch.is_tensor(sequence):
+                values = sequence.detach().cpu().reshape(-1).tolist()
+            elif isinstance(sequence, np.ndarray):
+                values = sequence.reshape(-1).tolist()
+            else:
+                values = list(sequence)
+            return tuple(int(value) for value in values)
+        except Exception:
+            return ()
+
+    def _finalize_canary_signature(self, result: Any) -> tuple[tuple[int, ...], str]:
+        hyps = None
+        if isinstance(result, (tuple, list)) and len(result) > 5:
+            hyps = result[5]
+        hyp = hyps[0] if isinstance(hyps, (tuple, list)) and hyps else hyps
+        if hyp is None:
+            return (), ""
+        return self._hypothesis_token_tuple(hyp), self._extract_hypothesis_text(hyp)
+
+    def _disable_encoder_finalize_padded_fail_closed(self, *, label: str, reason: str) -> None:
+        if self._encoder_cudagraph_finalize_padded_canary_failed is not None:
+            return
+        self._encoder_cudagraph_finalize_padded_canary_failed = reason
+        self.encoder_cudagraph_finalize_padded_requested = False
+        self.encoder_cudagraph_finalize_requested = False
+        self.encoder_cudagraph_finalize_enabled = False
+        self._encoder_cudagraph_finalize_keys = ()
+        logger.warning(
+            "encoder_finalize_cuda_graph_padded_disabled_fail_closed "
+            f"label={label} reason={reason} fallback=eager"
+        )
+
+    def _run_encoder_finalize_padded_canary(
+        self,
+        manager: BucketedCudaGraphEncoder,
+        *,
+        label: str,
+    ) -> None:
+        if not (
+            self.encoder_cudagraph_finalize_requested
+            and self.encoder_cudagraph_finalize_padded_requested
+        ):
+            return
+        key = self._encoder_finalize_cudagraph_padded_key()
+        if not manager.finalize_captured(key):
+            self._disable_encoder_finalize_padded_fail_closed(
+                label=label,
+                reason="canary_bucket_not_captured",
+            )
+            return
+
+        real_t = int(self.encoder_cudagraph_finalize_t_min)
+        real_t = max(1, min(real_t, int(self.encoder_cudagraph_finalize_t_max)))
+        model = self._current_inference_model()
+        try:
+            cache = model.encoder.get_initial_cache_state(batch_size=1)
+            device = cache[0].device
+            dtype = cache[0].dtype
+            features = int(model.cfg.preprocessor.features)
+            processed_signal = torch.zeros(
+                (1, features, real_t),
+                device=device,
+                dtype=dtype,
+            )
+            processed_signal_length = torch.full(
+                (1,),
+                real_t,
+                device=device,
+                dtype=torch.long,
+            )
+
+            def clone_cache() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                return (
+                    cache[0].detach().clone(),
+                    cache[1].detach().clone(),
+                    cache[2].detach().clone(),
+                )
+
+            eager_cache = clone_cache()
+            graph_cache = clone_cache()
+            common_kwargs = {
+                "processed_signal": processed_signal,
+                "processed_signal_length": processed_signal_length,
+                "keep_all_outputs": True,
+                "previous_hypotheses": None,
+                "previous_pred_out": None,
+                "drop_extra_pre_encoded": int(key.drop_extra),
+                "return_transcription": True,
+            }
+            with torch.inference_mode():
+                eager_result = model.conformer_stream_step(
+                    **common_kwargs,
+                    cache_last_channel=eager_cache[0],
+                    cache_last_time=eager_cache[1],
+                    cache_last_channel_len=eager_cache[2],
+                )
+                with self._finalize_cudagraph_encoder_cache_step_installed(
+                    model,
+                    manager,
+                    key,
+                    None,
+                ):
+                    graph_result = model.conformer_stream_step(
+                        **common_kwargs,
+                        cache_last_channel=graph_cache[0],
+                        cache_last_time=graph_cache[1],
+                        cache_last_channel_len=graph_cache[2],
+                    )
+            self._cuda_synchronize_for_current_model_lane()
+            eager_tokens, eager_text = self._finalize_canary_signature(eager_result)
+            graph_tokens, graph_text = self._finalize_canary_signature(graph_result)
+            if eager_tokens != graph_tokens or eager_text != graph_text:
+                self._disable_encoder_finalize_padded_fail_closed(
+                    label=label,
+                    reason=(
+                        "canary_tokens_or_text_mismatch "
+                        f"real_T={real_t} graph_T={key.time_steps} "
+                        f"eager_tokens={list(eager_tokens)} graph_tokens={list(graph_tokens)} "
+                        f"eager_text={eager_text!r} graph_text={graph_text!r}"
+                    ),
+                )
+                return
+            logger.info(
+                "encoder_finalize_cuda_graph_padded_canary_ok "
+                f"label={label} B=1 real_T={real_t} graph_T={key.time_steps} "
+                f"drop_extra={key.drop_extra} tokens={len(eager_tokens)}"
+            )
+        except Exception as exc:
+            self._disable_encoder_finalize_padded_fail_closed(
+                label=label,
+                reason=f"canary_exception {type(exc).__name__}: {exc}",
+            )
 
     def _encoder_cudagraph_finalize_requested_keys(
         self,
@@ -1717,6 +1872,11 @@ class ASRServer:
         if not self.encoder_cudagraph_finalize_requested:
             return ()
         if self._encoder_cudagraph_finalize_keys:
+            return self._encoder_cudagraph_finalize_keys
+        if self.encoder_cudagraph_finalize_padded_requested:
+            self._encoder_cudagraph_finalize_keys = (
+                self._encoder_finalize_cudagraph_padded_key(),
+            )
             return self._encoder_cudagraph_finalize_keys
         self._encoder_cudagraph_finalize_keys = tuple(
             FinalizeEncoderGraphKey(
@@ -1817,15 +1977,37 @@ class ASRServer:
                 if value is not None
             ]
             finalize_memory = manager.finalize_capture_memory_bytes()
+            padded_mode = bool(self.encoder_cudagraph_finalize_padded_requested)
+            per_t_absent = (
+                not padded_mode
+                or all(
+                    int(key.batch_size) == 1
+                    and int(key.time_steps) == int(self.encoder_cudagraph_finalize_t_max)
+                    for key in finalize_captured
+                )
+            )
             logger.info(
                 "encoder_finalize_cuda_graph_manager_captured "
                 f"label={label} stream={stream_label} "
+                f"mode={'padded_T_max' if padded_mode else 'per_T'} "
                 f"captured_keys={[str(key) for key in finalize_captured]} "
                 f"uncaptured_keys={[str(key) for key in finalize_uncaptured]} "
+                f"padded_per_T_absent={per_t_absent} "
                 f"capture_ms_total={sum(finalize_capture_ms):.1f} "
                 f"allocated_bytes={finalize_memory.get('allocated_bytes', 0)} "
                 f"reserved_bytes={finalize_memory.get('reserved_bytes', 0)}"
             )
+            if padded_mode and not per_t_absent:
+                logger.warning(
+                    "encoder_finalize_cuda_graph_padded_disabled_fail_closed "
+                    f"label={label} reason=per_T_finalize_buckets_present "
+                    f"captured_keys={[str(key) for key in finalize_captured]} "
+                    "fallback=eager"
+                )
+                self.encoder_cudagraph_finalize_padded_requested = False
+                self.encoder_cudagraph_finalize_requested = False
+                self.encoder_cudagraph_finalize_enabled = False
+                self._encoder_cudagraph_finalize_keys = ()
             if finalize_uncaptured:
                 logger.warning(
                     "encoder_finalize_cuda_graph_manager_incomplete_fail_closed "
@@ -1848,6 +2030,14 @@ class ASRServer:
                 "encoder_finalize_cuda_graph_enabled=False requested=True "
                 "reason=invalid_finalize_bucket_config_fail_closed "
                 f"error={self._encoder_cudagraph_finalize_config_error}"
+            )
+        if (
+            self.encoder_cudagraph_finalize_padded_requested
+            and not self.encoder_cudagraph_finalize_requested
+        ):
+            logger.warning(
+                "encoder_finalize_cuda_graph_padded_enabled=False requested=True "
+                "reason=finalize_cudagraph_disabled_fail_closed"
             )
 
         if not self.encoder_cudagraph_requested:
@@ -1899,13 +2089,23 @@ class ASRServer:
                     f"model_drop_extra={self.drop_extra} "
                     f"captured_drop_extra={self.encoder_cudagraph_finalize_drop_extra}"
                 )
-            logger.info(
-                "encoder_finalize_cuda_graph_capture_requested "
-                "capture_set=B1 "
-                f"T={self.encoder_cudagraph_finalize_t_min}..{self.encoder_cudagraph_finalize_t_max} "
-                f"drop_extra={self.encoder_cudagraph_finalize_drop_extra} "
-                "keep_all_outputs=True"
-            )
+            if self.encoder_cudagraph_finalize_padded_requested:
+                logger.info(
+                    "encoder_finalize_cuda_graph_capture_requested "
+                    "mode=padded_T_max capture_set=B1 "
+                    f"real_T={self.encoder_cudagraph_finalize_t_min}..{self.encoder_cudagraph_finalize_t_max} "
+                    f"graph_T={self.encoder_cudagraph_finalize_t_max} "
+                    f"drop_extra={self.encoder_cudagraph_finalize_drop_extra} "
+                    "keep_all_outputs=True"
+                )
+            else:
+                logger.info(
+                    "encoder_finalize_cuda_graph_capture_requested "
+                    "mode=per_T capture_set=B1 "
+                    f"T={self.encoder_cudagraph_finalize_t_min}..{self.encoder_cudagraph_finalize_t_max} "
+                    f"drop_extra={self.encoder_cudagraph_finalize_drop_extra} "
+                    "keep_all_outputs=True"
+                )
 
         default_manager_stored = False
         self._encoder_cudagraph_executor = concurrent.futures.ThreadPoolExecutor(
@@ -1989,10 +2189,22 @@ class ASRServer:
         finalize_captured_key_count = sum(
             len(manager.captured_finalize_keys) for manager in all_managers
         )
+        finalize_padded_per_t_absent = (
+            not self.encoder_cudagraph_finalize_padded_requested
+            or all(
+                all(
+                    int(key.batch_size) == 1
+                    and int(key.time_steps) == int(self.encoder_cudagraph_finalize_t_max)
+                    for key in manager.captured_finalize_keys
+                )
+                for manager in all_managers
+            )
+        )
         self.encoder_cudagraph_finalize_enabled = (
             self.encoder_cudagraph_enabled
             and self.encoder_cudagraph_finalize_requested
             and finalize_manager_count > 0
+            and finalize_padded_per_t_absent
         )
         logger.info(
             "encoder_cuda_graph_enabled="
@@ -2006,10 +2218,14 @@ class ASRServer:
             "encoder_finalize_cuda_graph_enabled="
             f"{self.encoder_cudagraph_finalize_enabled} "
             f"requested={self.encoder_cudagraph_finalize_requested} "
+            f"padded_requested={self.encoder_cudagraph_finalize_padded_requested} "
+            f"padded_canary_failed={self._encoder_cudagraph_finalize_padded_canary_failed is not None} "
             f"T={self.encoder_cudagraph_finalize_t_min}..{self.encoder_cudagraph_finalize_t_max} "
+            f"graph_T={self.encoder_cudagraph_finalize_t_max if self.encoder_cudagraph_finalize_padded_requested else 'per_T'} "
             f"drop_extra={self.encoder_cudagraph_finalize_drop_extra} "
             f"captured_managers={finalize_manager_count} "
-            f"captured_key_count={finalize_captured_key_count}"
+            f"captured_key_count={finalize_captured_key_count} "
+            f"padded_per_T_absent={finalize_padded_per_t_absent}"
         )
         self._encoder_cudagraph_startup_logged = True
 
@@ -2114,8 +2330,12 @@ class ASRServer:
     def _record_encoder_finalize_cudagraph_replay(
         self,
         key: FinalizeEncoderGraphKey,
+        *,
+        real_time_steps: Optional[int] = None,
     ) -> None:
-        hist_key = (int(key.batch_size), int(key.time_steps), int(key.drop_extra))
+        graph_t = int(key.time_steps)
+        real_t = graph_t if real_time_steps is None else int(real_time_steps)
+        hist_key = (int(key.batch_size), graph_t, real_t, int(key.drop_extra))
         self._encoder_finalize_cudagraph_replay_calls += 1
         self._encoder_finalize_cudagraph_replay_hist[hist_key] = (
             self._encoder_finalize_cudagraph_replay_hist.get(hist_key, 0) + 1
@@ -2128,7 +2348,9 @@ class ASRServer:
                 "encoder_finalize_cuda_graph_status "
                 f"replays={self._encoder_finalize_cudagraph_replay_calls} "
                 f"fallbacks={self._encoder_finalize_cudagraph_eager_fallbacks} "
-                f"B={key.batch_size} T={key.time_steps} drop_extra={key.drop_extra}"
+                f"B={key.batch_size} graph_T={graph_t} real_T={real_t} "
+                f"drop_extra={key.drop_extra} "
+                f"mode={'padded_T_max' if self.encoder_cudagraph_finalize_padded_requested else 'per_T'}"
             )
 
     def _record_encoder_finalize_cudagraph_fallback(
@@ -2136,9 +2358,12 @@ class ASRServer:
         key: Optional[FinalizeEncoderGraphKey],
         *,
         reason: str,
+        real_time_steps: Optional[int] = None,
     ) -> None:
         if key is not None:
-            hist_key = (int(key.batch_size), int(key.time_steps), int(key.drop_extra))
+            graph_t = int(key.time_steps)
+            real_t = graph_t if real_time_steps is None else int(real_time_steps)
+            hist_key = (int(key.batch_size), graph_t, real_t, int(key.drop_extra))
             self._encoder_finalize_cudagraph_fallback_hist[hist_key] = (
                 self._encoder_finalize_cudagraph_fallback_hist.get(hist_key, 0) + 1
             )
@@ -2148,17 +2373,21 @@ class ASRServer:
             or self._encoder_finalize_cudagraph_eager_fallbacks % 50 == 0
         ):
             if key is None:
-                key_text = "B=? T=? drop_extra=?"
+                key_text = "B=? graph_T=? real_T=? drop_extra=?"
             else:
+                graph_t = int(key.time_steps)
+                real_t = graph_t if real_time_steps is None else int(real_time_steps)
                 key_text = (
-                    f"B={key.batch_size} T={key.time_steps} "
+                    f"B={key.batch_size} graph_T={graph_t} real_T={real_t} "
                     f"drop_extra={key.drop_extra}"
                 )
             logger.info(
                 "encoder_finalize_cuda_graph_fallback "
                 f"replays={self._encoder_finalize_cudagraph_replay_calls} "
                 f"fallbacks={self._encoder_finalize_cudagraph_eager_fallbacks} "
-                f"{key_text} reason={reason}"
+                f"{key_text} "
+                f"mode={'padded_T_max' if self.encoder_cudagraph_finalize_padded_requested else 'per_T'} "
+                f"reason={reason}"
             )
 
     def _encoder_finalize_cudagraph_key_for_call(
@@ -2180,9 +2409,16 @@ class ASRServer:
             return None
 
         try:
+            batch_size = int(processed_signal.shape[0])
+            real_time_steps = int(processed_signal.shape[-1])
+            graph_time_steps = (
+                int(self.encoder_cudagraph_finalize_t_max)
+                if self.encoder_cudagraph_finalize_padded_requested
+                else real_time_steps
+            )
             key = FinalizeEncoderGraphKey(
-                batch_size=int(processed_signal.shape[0]),
-                time_steps=int(processed_signal.shape[-1]),
+                batch_size=batch_size,
+                time_steps=graph_time_steps,
                 drop_extra=int(kwargs.get("drop_extra_pre_encoded")),
                 keep_all_outputs=True,
             )
@@ -2197,40 +2433,46 @@ class ASRServer:
             self._record_encoder_finalize_cudagraph_fallback(
                 key,
                 reason="bypass_pre_encode",
+                real_time_steps=real_time_steps,
             )
             return None
         if not self.encoder_cudagraph_finalize_enabled or manager is None:
             self._record_encoder_finalize_cudagraph_fallback(
                 key,
                 reason="manager_unavailable",
+                real_time_steps=real_time_steps,
             )
             return None
         if int(key.batch_size) != 1:
             self._record_encoder_finalize_cudagraph_fallback(
                 key,
                 reason="uncaptured_batch_size",
+                real_time_steps=real_time_steps,
             )
             return None
         if int(key.drop_extra) != int(self.encoder_cudagraph_finalize_drop_extra):
             self._record_encoder_finalize_cudagraph_fallback(
                 key,
                 reason="uncaptured_drop_extra",
+                real_time_steps=real_time_steps,
             )
             return None
         if not (
             int(self.encoder_cudagraph_finalize_t_min)
-            <= int(key.time_steps)
+            <= int(real_time_steps)
             <= int(self.encoder_cudagraph_finalize_t_max)
         ):
             self._record_encoder_finalize_cudagraph_fallback(
                 key,
                 reason="uncaptured_time_steps",
+                real_time_steps=real_time_steps,
             )
             return None
         if not manager.finalize_captured(key):
             self._record_encoder_finalize_cudagraph_fallback(
                 key,
                 reason="bucket_not_captured",
+                real_time_steps=real_time_steps,
             )
             return None
         return key
@@ -2352,9 +2594,13 @@ class ASRServer:
                 )
                 result = original_callable(*args, **call_kwargs)
             else:
+                real_time_steps = None
                 try:
+                    processed_signal = call_kwargs["processed_signal"]
+                    if torch.is_tensor(processed_signal) and processed_signal.ndim >= 1:
+                        real_time_steps = int(processed_signal.shape[-1])
                     inputs = EncoderGraphInputs(
-                        processed_signal=call_kwargs["processed_signal"],
+                        processed_signal=processed_signal,
                         processed_signal_length=call_kwargs["processed_signal_length"],
                         cache_last_channel=call_kwargs["cache_last_channel"],
                         cache_last_time=call_kwargs["cache_last_time"],
@@ -2367,10 +2613,14 @@ class ASRServer:
                     self._record_encoder_finalize_cudagraph_fallback(
                         key,
                         reason="invalid_inputs",
+                        real_time_steps=real_time_steps,
                     )
                     result = original_callable(**call_kwargs)
                 else:
-                    replay_outputs = manager.replay_finalize(key, inputs)
+                    if self.encoder_cudagraph_finalize_padded_requested:
+                        replay_outputs = manager.replay_finalize_padded(key, inputs)
+                    else:
+                        replay_outputs = manager.replay_finalize(key, inputs)
                     if replay_outputs is None:
                         replay_error = manager.finalize_replay_error(key)
                         if profile is not None:
@@ -2381,18 +2631,38 @@ class ASRServer:
                         self._record_encoder_finalize_cudagraph_fallback(
                             key,
                             reason=replay_error or "replay_returned_none",
+                            real_time_steps=real_time_steps,
                         )
                         result = original_callable(**call_kwargs)
                     else:
                         state["replayed"] = True
                         if profile is not None:
                             profile["encoder_finalize_cudagraph"] = "replay"
+                            profile["real_T"] = (
+                                int(real_time_steps)
+                                if real_time_steps is not None
+                                else int(key.time_steps)
+                            )
+                            profile["graph_T"] = int(key.time_steps)
                             profile["encoder_finalize_cudagraph_key"] = {
                                 "B": int(key.batch_size),
-                                "T": int(key.time_steps),
+                                "graph_T": int(key.time_steps),
+                                "real_T": (
+                                    int(real_time_steps)
+                                    if real_time_steps is not None
+                                    else int(key.time_steps)
+                                ),
                                 "drop_extra": int(key.drop_extra),
+                                "mode": (
+                                    "padded_T_max"
+                                    if self.encoder_cudagraph_finalize_padded_requested
+                                    else "per_T"
+                                ),
                             }
-                        self._record_encoder_finalize_cudagraph_replay(key)
+                        self._record_encoder_finalize_cudagraph_replay(
+                            key,
+                            real_time_steps=real_time_steps,
+                        )
                         result = replay_outputs
 
             if end_event is not None:
@@ -2538,6 +2808,8 @@ class ASRServer:
             "encoder_finalize_cudagraph": None,
             "encoder_finalize_cudagraph_key": None,
             "encoder_finalize_cudagraph_reason": None,
+            "real_T": None,
+            "graph_T": None,
             "decode_wall_ms": None,
             "cuda_sync_ms": 0.0,
             "cuda_sync_invocations": 0,
@@ -2632,6 +2904,7 @@ class ASRServer:
         if torch.is_tensor(processed_signal) and processed_signal.ndim >= 3:
             profile["B"] = int(processed_signal.shape[0])
             profile["T"] = int(processed_signal.shape[-1])
+            profile["real_T"] = int(processed_signal.shape[-1])
         profile["processed_signal_length"] = self._finalize_profile_tensor_value(
             processed_signal_length,
             index=row_index,
@@ -2752,11 +3025,16 @@ class ASRServer:
             "encoder_finalize_cudagraph",
             "encoder_finalize_cudagraph_key",
             "encoder_finalize_cudagraph_reason",
+            "real_T",
+            "graph_T",
             "decode_wall_ms",
             "cuda_sync_ms",
             "cuda_sync_invocations",
         ):
-            dst[key] = src.get(key)
+            value = src.get(key)
+            if key in ("real_T", "graph_T") and value is None:
+                continue
+            dst[key] = value
 
         encoded_shape = src.get("encoded_shape")
         if isinstance(encoded_shape, list):
@@ -2833,6 +3111,8 @@ class ASRServer:
         profile["bucket_key"] = {
             "B": int(profile.get("B") or 0),
             "T": int(profile.get("T") or 0),
+            "real_T": int(profile.get("real_T") or profile.get("T") or 0),
+            "graph_T": profile.get("graph_T"),
             "drop_extra": profile.get("drop_extra"),
             "first": self._finalize_profile_first_key(profile.get("first")),
         }

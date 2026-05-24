@@ -269,8 +269,35 @@ class _CudaGraphEncoderBucket:
             and inputs.cache_last_channel_len.shape == self.static_clcl.shape
         )
 
+    def padded_time_input_shapes_match(self, inputs: EncoderGraphInputs) -> bool:
+        if inputs.processed_signal.ndim != self.static_processed.ndim:
+            return False
+        if inputs.processed_signal.shape[:-1] != self.static_processed.shape[:-1]:
+            return False
+        if int(inputs.processed_signal.shape[-1]) > int(self.static_processed.shape[-1]):
+            return False
+        return (
+            inputs.processed_signal_length.shape == self.static_len.shape
+            and inputs.cache_last_channel.shape == self.static_clc.shape
+            and inputs.cache_last_time.shape == self.static_clt.shape
+            and inputs.cache_last_channel_len.shape == self.static_clcl.shape
+        )
+
     def replay(self, inputs: EncoderGraphInputs) -> EncoderGraphOutputs:
         self.static_processed.copy_(inputs.processed_signal)
+        self.static_len.copy_(inputs.processed_signal_length)
+        self.static_clc.copy_(inputs.cache_last_channel)
+        self.static_clt.copy_(inputs.cache_last_time)
+        self.static_clcl.copy_(inputs.cache_last_channel_len)
+        self.graph.replay()
+        self.replays += 1
+        assert self.static_outputs is not None
+        return self.static_outputs
+
+    def replay_padded_time(self, inputs: EncoderGraphInputs) -> EncoderGraphOutputs:
+        real_time_steps = int(inputs.processed_signal.shape[-1])
+        self.static_processed.zero_()
+        self.static_processed[..., :real_time_steps].copy_(inputs.processed_signal)
         self.static_len.copy_(inputs.processed_signal_length)
         self.static_clc.copy_(inputs.cache_last_channel)
         self.static_clt.copy_(inputs.cache_last_time)
@@ -292,8 +319,10 @@ class BucketedCudaGraphEncoder:
 
     Finalize encoder buckets are optional and default off via
     ``NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE``. They are keyed by exact
-    ``(B, T, drop_extra, keep_all_outputs=True)`` and never pad T. Use
-    ``warmup_finalize`` or ``capture_finalize`` to capture them explicitly.
+    ``(B, T, drop_extra, keep_all_outputs=True)``. The normal
+    ``replay_finalize`` path is exact-shape; ``replay_finalize_padded`` pads a
+    shorter finalize input into the captured T bucket before replay. Use
+    ``warmup_finalize`` or ``capture_finalize`` to capture buckets explicitly.
     """
 
     def __init__(
@@ -606,6 +635,59 @@ class BucketedCudaGraphEncoder:
             self._finalize_replay_errors[key] = f"{type(exc).__name__}: {exc}"
             self.logger.warning(
                 "encoder_finalize_cuda_graph_replay_failed key=%s error=%s",
+                key,
+                self._finalize_replay_errors[key],
+            )
+            return None
+
+    def replay_finalize_padded(
+        self,
+        key_or_batch_size: FinalizeEncoderGraphKey | Sequence[Any] | Any,
+        inputs: EncoderGraphInputs | Sequence[torch.Tensor],
+        time_steps: Any = None,
+        drop_extra: Any = None,
+    ) -> Optional[EncoderGraphOutputs]:
+        """Replay a finalize bucket with T padded to the captured static width."""
+
+        key = _coerce_finalize_key(key_or_batch_size, time_steps, drop_extra)
+        if key is None:
+            return None
+        bucket = self._finalize_buckets.get(key)
+        if bucket is None:
+            return None
+
+        coerced_inputs = _coerce_inputs(inputs)
+        if coerced_inputs is None:
+            self._finalize_replay_errors[key] = "invalid input container"
+            return None
+        try:
+            input_shapes_match = bucket.padded_time_input_shapes_match(coerced_inputs)
+        except Exception as exc:
+            self._finalize_replay_errors[key] = f"invalid input tensors: {type(exc).__name__}: {exc}"
+            return None
+        if not input_shapes_match:
+            self._finalize_replay_errors[key] = (
+                "padded input shape mismatch: "
+                f"processed={tuple(coerced_inputs.processed_signal.shape)} "
+                f"expected_prefix={tuple(bucket.static_processed.shape[:-1])} "
+                f"expected_T_max={int(bucket.static_processed.shape[-1])} "
+                f"clc={tuple(coerced_inputs.cache_last_channel.shape)} "
+                f"expected_clc={tuple(bucket.static_clc.shape)} "
+                f"clt={tuple(coerced_inputs.cache_last_time.shape)} "
+                f"expected_clt={tuple(bucket.static_clt.shape)} "
+                f"clcl={tuple(coerced_inputs.cache_last_channel_len.shape)} "
+                f"expected_clcl={tuple(bucket.static_clcl.shape)}"
+            )
+            return None
+
+        try:
+            with torch.inference_mode():
+                return bucket.replay_padded_time(coerced_inputs)
+        except Exception as exc:  # Fail closed: future calls to this key use eager.
+            self._finalize_buckets.pop(key, None)
+            self._finalize_replay_errors[key] = f"{type(exc).__name__}: {exc}"
+            self.logger.warning(
+                "encoder_finalize_cuda_graph_replay_failed key=%s mode=padded_T error=%s",
                 key,
                 self._finalize_replay_errors[key],
             )

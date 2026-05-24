@@ -17,6 +17,7 @@ ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200
 [ "${BARRIER_DRAIN:-0}" = 1 ] && ENV+=(NEMOTRON_BATCH_BARRIER_DRAIN=1)   # match prod (launch_multiproc) for the steady path
 [ "${FAULTHANDLER:-0}" = 1 ] && ENV+=(NEMOTRON_FAULTHANDLER=1)   # kill -USR1 dumps all thread stacks (hang diagnosis)
 [ "${CUDAGRAPH_FINALIZE:-0}" = 1 ] && ENV+=(NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1)   # idea 2: finalize encoder CUDA graph
+[ "${CUDAGRAPH_FINALIZE_PADDED:-0}" = 1 ] && ENV+=(NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=1)   # Step 2b: single padded T_max finalize graph
 [ "${GC_PROFILE:-0}" = 1 ] && ENV+=(NEMOTRON_GC_PROFILE=1)   # log GC stop-the-world pauses (P99-stall probe)
 [ "${GC_TUNE:-0}" = 1 ] && ENV+=(NEMOTRON_GC_TUNE=1)   # gc.freeze() + raised thresholds (P99-stall GC fix)
 [ -n "${ADMISSION_MAX_BACKLOG:-}" ] && ENV+=("NEMOTRON_ADMISSION_MAX_BACKLOG=$ADMISSION_MAX_BACKLOG")   # WS-close new connects above backlog cap

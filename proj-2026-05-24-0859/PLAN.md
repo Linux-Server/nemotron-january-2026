@@ -107,7 +107,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   length) → **NO-GO: keep per-T; address K=4 OOM another way (trim T-range / accept K=3)**. Only GO → 2b.
   Key files: `proj-2026-05-24-0859/padded_t_probe.py`, `proj-2026-05-24-0859/padded-t-findings.md`
 
-- [ ] **2b. Single padded-T_max finalize bucket REPLACING the per-T buckets (recover K=4 ≈ 28/box) — only on 2a GO**
+- [x] **2b. Single padded-T_max finalize bucket REPLACING the per-T buckets (recover K=4 ≈ 28/box) — only on 2a GO** — built + local-gated; K=4 cloud verify → Step 6
   Add padded capture/replay to `cudagraph_encoder.py`. **B POLICY (must-fix): capture ONE B=1 × T_max bucket only**
   — finalize is ~99.9% B=1 (measured across all configs incl. the 12/proc operating point; the current finalize graph
   is already B=1-only @1693/2180) — and **B>1 (rare storms, ~0.1%) falls back to eager** (this keeps the K=4 memory
@@ -183,8 +183,8 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Admission on always-on backlog signal + lower HAProxy maxconn | done (local) | 6a427fa | default-off identity runtime-confirmed; flag-on reject logic correct; always-on composite signal (qsize+ready+age); WS-close 1013 before admit; maxconn 7(L40S)/3-4(L4); HAPROXY_MAXCONN env. Cloud attempted-vs-admitted sweep → Step 6 |
-| 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | done — GO | — | tokens/text/encoded_len byte-exact all T 42..60, tensors allclose 1.5e-7; ONLY cache_len diverged (fork [48] vs [46/47]) but it's on the DISPOSABLE fork — continuation probe CONFIRMED session keeps its own cache ([41]→[41]/[57]→[57]), post-finalize byte-exact. GO for 2b |
-| 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | pending | — | switch not coexist; startup-canary fail-closed (not per-call); ~28/box NOT 64 |
+| 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | done — GO | 67f3ce7 | tokens/text/encoded_len byte-exact all T 42..60, tensors allclose 1.5e-7; ONLY cache_len diverged (fork [48] vs [46/47]) but it's on the DISPOSABLE fork — continuation probe CONFIRMED session keeps its own cache ([41]→[41]/[57]→[57]), post-finalize byte-exact. GO for 2b |
+| 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | done (local) | — | built: padded replay + single-key switch + B>1→eager + dual-T telem + per-manager startup canary. Local gate: padded graph byte-exact lanes1+2 all T + continuation (canary_ok self.model+lane0+lane1); per-T absent; ~19-21× mem drop (476→25MB/mgr); default-off identical. K=4 cloud verify → Step 6 |
 | 3 | Remove safely-removable host syncs (small) | pending | — | only @8223/7300; stretch (CUDA-event @3177) needs lane-busy state |
 | 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | pending | — | cannot preempt running work; win ≈ one steady-batch |
 | 5 | GIL-attribution probe (decode vs glue at operating point → from-scratch conjunct 2) | pending | — | buckets sum to thread-busy (decode/dispatch/glue) + GPU-idle% + py-spy --gil; ONE JSON record via _continuous_finalize_timing; decode≫glue+GIL-wait→native helps, MPS/BW-bound→STOP; cheap, one run |
