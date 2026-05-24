@@ -130,7 +130,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
   only after verified.
   Key files: `src/nemotron_speech/cudagraph_encoder.py`, `src/nemotron_speech/server.py`, `deploy/launch_multiproc.sh`, `deploy/DEPLOYMENT.md`
 
-- [ ] **3. Remove the safely-removable host syncs (small, byte-exact)**
+- [x] **3. Remove the safely-removable host syncs (small, byte-exact)** — built + concurrent byte-exact (identical-SHA); keep-up delta → Step 6
   Remove ONLY the telemetry pre-syncs @8223/7300 under `NEMOTRON_SYNC_COMPRESS=1` (default off). Do NOT touch the
   load-bearing fences (@3177/8399/7513/8329/7430). STRETCH (separate, optional): replace lane-exit `stream.synchronize`
   @3177 with a CUDA-event + a lane-busy state so the scheduler does NOT release the lane until the event completes
@@ -184,8 +184,8 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 |---|------|--------|--------|-------|
 | 1 | Admission on always-on backlog signal + lower HAProxy maxconn | done (local) | 6a427fa | default-off identity runtime-confirmed; flag-on reject logic correct; always-on composite signal (qsize+ready+age); WS-close 1013 before admit; maxconn 7(L40S)/3-4(L4); HAPROXY_MAXCONN env. Cloud attempted-vs-admitted sweep → Step 6 |
 | 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | done — GO | 67f3ce7 | tokens/text/encoded_len byte-exact all T 42..60, tensors allclose 1.5e-7; ONLY cache_len diverged (fork [48] vs [46/47]) but it's on the DISPOSABLE fork — continuation probe CONFIRMED session keeps its own cache ([41]→[41]/[57]→[57]), post-finalize byte-exact. GO for 2b |
-| 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | done (local) | — | built: padded replay + single-key switch + B>1→eager + dual-T telem + per-manager startup canary. Local gate: padded graph byte-exact lanes1+2 all T + continuation (canary_ok self.model+lane0+lane1); per-T absent; ~19-21× mem drop (476→25MB/mgr); default-off identical. K=4 cloud verify → Step 6 |
-| 3 | Remove safely-removable host syncs (small) | pending | — | only @8223/7300; stretch (CUDA-event @3177) needs lane-busy state |
+| 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | done (local) | 7cc434d | built: padded replay + single-key switch + B>1→eager + dual-T telem + per-manager startup canary. Local gate: padded graph byte-exact lanes1+2 all T + continuation (canary_ok self.model+lane0+lane1); per-T absent; ~19-21× mem drop (476→25MB/mgr); default-off identical. K=4 cloud verify → Step 6 |
+| 3 | Remove safely-removable host syncs (small) | done (local) | — | NEMOTRON_SYNC_COMPRESS gates 2 entry pre-syncs (finalize @7687 elif, steady @8611); both telemetry/CPU-state only (real fences kept). Byte-exact: identical-SHA concurrent canary flag-on==flag-off, lanes1+2, FORK_ASSERT; default-off identical (elif preserves original). keep-up delta → Step 6. CUDA-event stretch noted, not built |
 | 4 | Priority finalize-lane queue-jump (CROSS-SESSION, submit-time) | pending | — | cannot preempt running work; win ≈ one steady-batch |
 | 5 | GIL-attribution probe (decode vs glue at operating point → from-scratch conjunct 2) | pending | — | buckets sum to thread-busy (decode/dispatch/glue) + GPU-idle% + py-spy --gil; ONE JSON record via _continuous_finalize_timing; decode≫glue+GIL-wait→native helps, MPS/BW-bound→STOP; cheap, one run |
 | 6 | Combined cloud validation + deploy update | pending | — | success = tail↓ + in-budget density↑ + cliff-gone; NOT p50; honest ~28/box |

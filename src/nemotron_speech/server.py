@@ -735,6 +735,13 @@ class ASRServer:
         self.finalize_profile_enabled = (
             os.environ.get("NEMOTRON_FINALIZE_PROFILE", "") == "1"
         )
+        self.sync_compress_enabled = os.environ.get("NEMOTRON_SYNC_COMPRESS", "") == "1"
+        if self.sync_compress_enabled:
+            logger.info(
+                "sync_compress_enabled=True "
+                "flag=NEMOTRON_SYNC_COMPRESS "
+                "mode=skip_entry_telemetry_pre_syncs"
+            )
         self._finalize_profile_records = 0
         self._finalize_profile_hist: dict[tuple[int, int, int | None, str], int] = {}
         self._finalize_profile_b_hist: dict[int, int] = {}
@@ -7680,7 +7687,7 @@ class ASRServer:
                     self._finalize_profile_cuda_synchronize_many(
                         [item.finalize_profile for item in items]
                     )
-                else:
+                elif not self.sync_compress_enabled:
                     self._cuda_synchronize_for_current_model_lane()
                 live_items: list[SchedulerFinalizeItem] = []
                 for item in items:
@@ -8604,7 +8611,8 @@ class ASRServer:
                 return {}
 
             with torch.inference_mode():
-                self._cuda_synchronize_for_current_model_lane()
+                if not self.sync_compress_enabled:
+                    self._cuda_synchronize_for_current_model_lane()
                 mem_before = self._cuda_memory_snapshot()
                 pre_start = time.perf_counter()
                 preprocess_inputs: list[tuple[ASRSession, np.ndarray, int]] = []
