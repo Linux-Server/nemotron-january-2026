@@ -244,8 +244,17 @@ L4 (AWS g6, 300 GB/s), L40S (AWS g6e, 864 GB/s).
 | Concurrency safety (the whole point) | borrow checker prevents data races | manual; TSan/ASan needed |
 
 Candidate shapes (pick in 0.4): (1) all-C++; (2) **Rust front + C++ model-worker `cdylib` over a thin off-hot-path FFI
-(submit-batch/poll-completion)**; (3) all-Rust (`tch-rs`+`cudarc`). Lean: model worker wants native C++; the
-scheduler/network layer is where Rust pays off. Decided by 0.1/0.2/0.4.
+(submit-batch/poll-completion)**; (3) all-Rust (`tch-rs`+`cudarc`).
+
+**The Rust-vs-C++ decision is made on a concrete tch-rs evaluation, not preference (user direction 2026-05-24).
+All-Rust (3) is the DEFAULT if-and-only-if `tch-rs`(+`cudarc`), *at a libtorch version that clears the version-selection
+constraints*, exposes the hot-path surface — decisively, CUDA-graph capture/replay against libtorch-*allocated* tensors,
+per-lane stream/event control, the capture-mode allocator, and the ATen ops the decode needs.** If any of those is
+missing or tch-rs lags the required libtorch version, you'd write `unsafe extern "C"` shims to the missing C++ symbols
+inside the Rust crate (hand-binding C++ anyway) → prefer shape (2) the thin C++ worker, or (1) all-C++. The decisive box
+is the allocator-coupled graph capture (raw `cudarc` graphs over separately-allocated memory don't count). The full
+checklist + libtorch version constraints (Blackwell/sm_120, NeMo range, same-version-for-export+fixtures+runtime, C++
+ABI flag) live in `spikes/decision-template.md`; the probe is part of Spike 0.2; the call is recorded at 0.4.
 
 ### Axis B — model-execution backend
 | Option | Fidelity | Effort | Notes |
@@ -379,6 +388,12 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   **Go:** byte-exact vs the frozen same-shape fixtures (see §4 T2; whether byte-exact is *attainable* from libtorch is
   itself an output). **No-go:** export can't capture the control flow / not byte-exact → reclassify B1a as non-identical
   (B2-risk). **(No B4 fallback exists anymore — if B1a isn't byte-exact, the choice is B2-risk-sign-off or STOP.)**
+  **ALSO IN 0.2 — the tch-rs / Rust-vs-C++ evaluation** (decides Axis A; user direction): first pin the **newest viable
+  libtorch** per the version-selection checklist (Blackwell/sm_120 across 5090/L4/L40S/GB10, NeMo-supported torch range,
+  same version for export+fixtures+runtime, C++ ABI flag — `spikes/decision-template.md`). Then run the **tch-rs
+  coverage probe** against that version: does `tch-rs`(+`cudarc`) bind it (not lagging) and expose CUDA-graph capture
+  **against libtorch-allocated tensors** (decisive), per-lane streams/events, the capture-mode allocator, and the
+  decode's ATen ops? **All ✓ → all-Rust; any ✗ → Rust-front+C++-worker or all-C++.** Record the failing box at 0.4.
 - [ ] **0.6a Native DEPLOYED (eager) `greedy_batch` LABEL-looping decode equivalence (THE go/no-go).** Scope = the
   **deployed config only**: `loop_labels=True`, **`use_cuda_graph_decoder=False`** (`server.py:1463-1474`),
   `eou_probe_enabled=False` ⇒ **NO alignments/confidence**, **no n-gram LM** (assert non-null `ngram_lm_model` is
@@ -415,7 +430,9 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   density lever** (today's per-lane replicas `server.py:3109-3137` dodge these races at a memory cost).
 - [ ] **0.7 aarch64 toolchain pre-check (gates 4.2).** Build minimal libtorch+CUDA on aarch64, load a trivial exported
   module, run one CUDA-graph capture/replay; record CUDA/driver/libtorch/compiler/ABI versions + a cross-arch
-  determinism note. No DGX Spark work until this artifact exists.
+  determinism note. **Must confirm the *pinned* libtorch+CUDA (version-selection checklist, `decision-template.md`) has a
+  working aarch64 build that emits the GB10 arch** — i.e. the same pinned version spans 5090/L4/L40S *and* GB10, or the
+  version pin is wrong. No DGX Spark work until this artifact exists.
 
 **Track B — post-Python residual validation (BLOCKED on the Python plan landing + traces captured):**
 - [ ] **0.1 Overlap/MPS ablation matrix (thesis test + "no MPS tax" resolution).** NOT a single comparison and NOT a
