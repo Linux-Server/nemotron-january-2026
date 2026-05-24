@@ -97,6 +97,20 @@ being false, and each has an early-exit spike:
 3. **B4 (free-threaded py3.13t) is insufficient or not production-stable** (else B4 wins far cheaper — it keeps NeMo's
    Python decode and skips the entire native port) (early-exit: 0.3).
 
+**THE PRIOR (path-forward review — both advisors).** The honest prior is that this project **STOPs**, and the most
+valuable thing is to confirm that *cheaply* and redirect the engineer-year. Evidence already assembled: p50 immovable;
+steady is 86% B=1 (batching showed ~0 cloud-GPU benefit — `streaming-batching-outcome`); the density ceiling is ~28/box
+post-Python with native upside triple-conditional; L4 is already cheapest $/stream and scales horizontally. So:
+
+- [ ] **0.0-pre — Residual-CEILING arithmetic (FREE / paper; the cheapest kill; do FIRST, before any spike spend).**
+  Bound the prize from above *today*: best-case native delta = **~48 (aspirational) − ~28 (post-Python K=4) ≈ 20
+  streams/box, AND only if 0.1+0.9+0.11 all clear** — a small, triple-conditional prize against an engineer-year **plus
+  the ongoing dual-stack carry** (every NeMo upgrade / model swap / CUDA bump now hits two codebases — the ~40–60 eng-wk
+  is BUILD only, not carry). If that ceiling can't clear the (written) threshold even assuming all native gates pass,
+  **STOP without spending on spikes.** Write it into `reviews/decision.md`. **Strategic framing:** density is a COGS
+  lever — quantify projected-scale COGS and compare against (a) just adding cheap L4 boxes, (b) spending the eng-year on
+  multilingual quality / the front-drop bug [[multilingual-front-drop-bug]] / a p50-moving VAD.
+
 - [ ] **0.0 Worth-it gate (value-based, NOT target-based).** Do NOT fund the expensive ports (Wave 2) until: (i) the
   Python levers have landed + been measured on L4/L40S; (ii) a **named, quantified residual** (p95/p99 ms gap AND
   streams/box delta) is established vs the *measured* Python result — **note the realistic density is ~28 in-budget
@@ -106,9 +120,21 @@ being false, and each has an early-exit spike:
   numbers + the exact Python baseline commit in `reviews/decision.md`.
 
 **Spike waves (round 4 — separate "can run early" from "should FUND early"; Budget-A ports are 12–20 eng-wk, §9):**
-- **Wave 1 — cheap existence/path killers (run first; gate Wave 2):** 0.0 (after Python plan), 0.1 (overlap/MPS
-  ablation), 0.3 (py3.13t end-to-end), 0.5 (trace-sim + graph capacity), 0.9 (mutability audit, paper), 0.11
-  (graph-ownership, paper/proto), 0.7 (aarch64, cheap).
+- **Wave 1 — cheap existence/path killers, in DECISION-VALUE order (path-forward review re-sequenced this to front-load
+  the STOP evidence — the rounds put it last):**
+  1. **0.0-pre ceiling arithmetic** (free; may STOP here with zero spend).
+  2. **0.5 as a one-pass histogram + synthetic phase-sensitivity** (afternoon; existing "86% B=1 / phasing 115-vs-56"
+     data + 160ms-cadence-vs-8ms-window arithmetic likely *already* kills the 3–5× batching + steady-graph claims —
+     run the histogram before the full simulator; may not need the server instrumented at all for the kill direction).
+  3. **0.3 stage-1 only** (py3.13t import + one-chunk feasibility; 1–2 days, baseline-independent, **run BEFORE 0.1** —
+     B4 dominates B1 by ~30–50 eng-wk, so give it its shot first; a failed import is a cheap B4 kill).
+  4. **Wire the Python plan's Step-5 GIL probe (`proj-2026-05-24-0859:148-156`) into 0.1** — its decode-vs-glue
+     attribution pre-pays conjunct 2 for free; make it a required, 0.1-consumable deliverable, don't re-derive.
+  5. **0.1 reduced binary** (single-process-single-context vs MPS overlap — the one question the tree turns on; only
+     build the full 8-toggle ablation if there's a large residual you can't attribute).
+  6. **0.3 stage-2** (off-event-loop dispatcher end-to-end) — only if stage-1 passed and 0.1 says GIL-bound.
+  7. **0.11 GPU memory** — only if 0.5 keeps steady-graphs alive. **0.9 / 0.11 analysis is already COMPLETE** (paper).
+  8. **0.7 aarch64** — non-gating platform pre-check, whenever GB10 exists.
 - **Wave 2 — expensive byte-exact ports (FUND ONLY IF Wave 1 ⇒ "residual exists AND it's GIL-bound AND B4 insufficient
   AND single-process/native still plausible"):** 0.6a (decode), 0.8 (preprocessor), 0.2 (encoder export), 0.10 (runtime
   contract). These are baseline-independent (frozen fixtures) so they *can* start early, but should not be *spent*
@@ -209,6 +235,7 @@ scheduler/network layer is where Rust pays off. Decided by 0.1/0.2/0.4.
 | B2: TensorRT (encoder) + custom decode | medium (kernel/precision drift) | high | the *fusion* path; prerequisite for 6–10 ms finalize |
 | B3: hand CUDA kernels | lowest | very high | deferred; only for fp8/fusion density later |
 | B4: free-threaded CPython 3.13t | identical math | **medium (scheduler rewrite off asyncio; keeps NeMo decode/encoder)** | **the PREFERRED / cheapest SUCCESS path when it works** (not a mere fallback) — skips all the native ports; chosen if 0.3 closes the residual AND free-threaded PyTorch/NeMo is production-stable |
+| **B5: in-tree native-decode extension (5th option; path-forward review)** | needs 0.6a state-equivalence (decode is intrinsic) | medium (NO second stack) | a **pybind C++/CUDA extension for ONLY the label-looping decode, inside today's Python server** — targets the *likely-true* decode-GIL wall while inheriting deploy/metrics/protocol/admission/scheduler. Does **NOT** deliver shared-weight density or fix the MPS/exclusive-gate topology → a **tail/decode-throughput play only**. The answer if Step-5 says "decode-GIL-bound" AND 0.3 kills B4 AND full-B1 isn't worth it. |
 
 **"From-scratch" = replacing the Python serving/dispatch/decode-orchestration layer**, driving the same NeMo
 weights/kernels for the encoder (B1a) while **re-implementing the RNNT `greedy_batch` label-looping decode natively
@@ -392,6 +419,7 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   | 0.9 fails (can't make per-call config pure params) | drop **shared-weight density** → per-lane replicas; re-run 0.0 (likely **STOP**) |
   | 0.5: B stays ~1 | drop the **3–5× throughput** claim; re-run 0.0 (density-only justification) |
   | 0.5/0.11: B>1 but poor exact-B graph hit-rate / high eager fallback / no memory headroom | drop **steady-graph throughput+density** claims → B1-without-steady-graphs or revise topology; re-run 0.0 |
+  | Step-5/0.1 says decode-GIL-bound AND 0.3 kills B4 AND full-B1 not worth it | **choose B5** (in-tree native-decode extension — tail/decode-throughput only, no density, no second stack) |
   | 3.3 fusion unproven | the **6–10 ms finalize** headline is out of v1 scope (B1 target = parity); does NOT affect the core go/no-go |
 
 ### Phase 0.5 — Runtime contract (before Phase 1)
@@ -485,6 +513,13 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
     already closes the gap.
 11. **Multilingual/prompted serving** is a separate surface → v1 = EN-only; stated as explicit scope reduction.
 12. **aarch64 toolchain** unknowns → Spike 0.7 pre-check gates 4.2.
+13. **The baseline is a MOVING target that the Python plan is actively shrinking** (finalize graph already landed
+    246/279; K=4 + finalize-priority coming) → a fast-improving Python baseline can make B1 obsolete *mid-build*.
+    **Decide explicitly (discussion topic): freeze the Python residual at a commit, or accept the residual may asymptote
+    to zero before the native build finishes.**
+14. **Is this the right problem at all?** (strategic prior) Density is a COGS lever; ~20 best-case extra streams/box may
+    lose to just adding cheap L4 boxes or spending the eng-year on multilingual quality / p50-moving VAD / the
+    front-drop bug. → quantify projected-scale COGS before funding (0.0-pre).
 
 ## 9. Effort sizing (two budgets; ±50–100% — so §0 is an evaluable comparison)
 
@@ -612,3 +647,13 @@ start.
   post-Python / 40–48 aspirational) and flagged the launcher's legacy `48/64` comments as over-budget (not in-budget);
   clarified **4.4 shadow-traffic supplements (does not gate) the Phase-1 fixture-based T1**; fixed the stale round-1
   log frame-looping sentence. **No remaining blockers.**
+- **Path-forward review** (folded): `reviews/codex-pathforward.md` + `reviews/opus-pathforward.md` (advisory, post-v6).
+  Both: keep the gate, STOP is the likely+correct outcome, write numeric thresholds *before* measuring, cheapest kills
+  first, B4-before-B1. Changes: added **0.0-pre residual-ceiling arithmetic** (free; ~20 streams/box triple-conditional
+  upside — the cheapest kill, do first) + the **strategic prior** (density is a COGS lever; compare vs adding L4 boxes /
+  multilingual / p50-VAD; price the **dual-stack carry**, not just build); **re-sequenced Wave 1** into decision-value
+  order (0.0-pre → 0.5 histogram → 0.3 stage-1 → wire Python Step-5 into 0.1 → 0.1 reduced binary → 0.3 stage-2 → 0.11 →
+  0.7; **0.3 before 0.1**); added **B5 (in-tree native-decode pybind extension)** as a 5th backend + decision-tree row
+  (decode-throughput/tail only, no second stack); seeded **proposed numeric thresholds** in `decision-template.md`; added
+  risks 13 (**moving baseline can obsolete B1 mid-build**) + 14 (**is this the right problem**). Five discussion topics
+  surfaced for the user (see the session summary / collaborative-planning step).

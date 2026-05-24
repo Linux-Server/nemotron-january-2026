@@ -12,23 +12,32 @@ feasibility or Track-B post-plan residual.**
 
 ## PRE-REGISTERED Wave-1 thresholds (REGISTER BEFORE COLLECTING 0.1/0.5 DATA)
 > These are kill decisions; defining them after seeing data is invalid. Fill the numbers, freeze, THEN run.
+> The values below are **proposed STARTING points from the path-forward review** — replace with the user's actual
+> business numbers before any data collection. If no one will write these down → STOP/defer.
 
-**0.1 overlap/MPS ablation:**
-- Required single-process finalize+steady overlap factor vs Python/MPS baseline: `<≥ X×>`
-- Max acceptable queue/lane wait at the operating point: `<X ms>`
-- Max added per-chunk latency from the new dispatch: `<X ms>`
+**0.0-pre ceiling (do FIRST, free):** best-case native upside ≈ 48 − 28 ≈ **~20 streams/box**, triple-conditional, vs
+~40–60 eng-wk BUILD **+ ongoing dual-stack carry**. If the *ceiling* can't clear the 0.0 threshold below assuming all
+gates pass → STOP now.
 
-**0.5 batching sim + graph capacity:**
-- Median / p95 batch B target ("≫1" made numeric): `<median ≥ X, p95 ≥ Y>`
-- Min exact-B graph replay hit-rate: `<≥ X%>`
-- Max eager-fallback rate: `<≤ X%>`
-- Max added wait to form a batch: `<X ms>`
-- Required L4 / L40S graph-pool memory headroom at target K×lanes: `<≥ X GB free>`
+**0.0 worth-it threshold (proposed; set to real business values):**
+- Min in-budget streams/box delta vs Python's ~28/box (K=4): proposed `≥ +12 streams/box` at equivalent tail.
+- OR min p99 server-side tail reduction at the same *admitted* load: proposed `≥ 150–200 ms`.
+- Value-vs-cost: residual must justify `~40–60 eng-wk + a 2nd stack + carry`. **Distinguish attempted vs admitted load**
+  — admission-only p99 wins (shedding traffic) do NOT justify a rewrite unless that's the intended tradeoff.
 
-**0.0 worth-it threshold:**
-- Min residual p95/p99 gap vs measured Python: `<X ms>`
-- Min in-budget streams/box delta vs Python's ~28/box (K=4): `<+X streams/box>`
-- Value-vs-cost: residual must justify `~40–60 eng-wk + a 2nd stack`.
+**0.1 overlap/MPS ablation (proposed):**
+- Required single-process finalize+steady overlap factor vs Python/MPS baseline: `≥ 1.5×`
+- Max acceptable queue/lane wait at the operating point: `<X ms>` (set from the operating point)
+- Max added per-chunk latency from the new dispatch: `≤ 5–10 ms`
+- **Input:** the Python plan's Step-5 GIL probe decode-vs-glue attribution (`proj-2026-05-24-0859:148-156`) — consume,
+  don't re-derive.
+
+**0.5 batching sim + graph capacity (proposed):**
+- Median / p95 batch B target: `median ≥ 2, p95 ≥ 4`
+- Min exact-B graph replay hit-rate: `≥ 90–95%`
+- Max eager-fallback rate: `≤ 5–10%`
+- Max added wait to form a batch: `≤ 5 ms` (unless explicitly traded for tail)
+- Required L4 / L40S graph-pool memory headroom at target K×lanes: `≥ 2 GB or ≥ 10%, whichever larger`
 
 ## DECISION TREE (fill the "Observed" column with measured outcomes)
 
