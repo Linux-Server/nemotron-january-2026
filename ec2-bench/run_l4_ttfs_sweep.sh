@@ -4,7 +4,7 @@
 # level. Finds the max streams that hold p50 < P50_MAX AND p95 < P95_MAX on the WORST of the K processes.
 # Per-box streams = K * N_PER. Env knobs: K (default 2), LANES (2), N_LIST, ROUNDS, P50_MAX/P95_MAX,
 # CUDAGRAPH (0/1 -> NEMOTRON_ENCODER_CUDAGRAPH=1), CUDAGRAPH_MAX_B. Used for the L4 sweep (K=2) AND the
-# cudagraph cloud retest (graph-off vs graph-on; L40S K=3/4).
+# cudagraph cloud retest (graph-off vs graph-on; L40S K=3 — memory-bound by the finalize graph, see DEPLOYMENT.md).
 set -uo pipefail
 VENV=$HOME/nemo-venv; cd "$HOME/nemotron"; export HF_HOME=$HOME/hf
 N_LIST="${N_LIST:-6,8,10,12,14,16}"; K="${K:-2}"; LANES="${LANES:-2}"

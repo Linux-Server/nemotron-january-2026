@@ -3,7 +3,10 @@
 #
 # Starts CUDA MPS + K Nemotron ASR server processes (each NEMOTRON_MODEL_LANES=2) on one box, with
 # crash-restart supervision. K + config come from the per-GPU matrix (see deploy/DEPLOYMENT.md), which the
-# benchmarks established: L4 -> K~2 (~32/box), L40S -> K~4 (~64/box, GPU-bound), lanes=2/process is the unit.
+# benchmarks established: L4 -> K~2 (~32/box). L40S -> K=3 (~48/box) WITH the finalize encoder graph on (the
+# default 246/279 latency win): each proc is ~11 GB (model + 2-lane STEADY + FINALIZE graph pools), so K=4 OOMs
+# the 44 GB L40S (4x11~=44 GB; measured 2026-05-23). L40S is GPU-COMPUTE-capable of K~4/~64 but MEMORY-bound to
+# K=3 with the finalize graph. lanes=2/process is the unit.
 #
 # This is the REFERENCE launcher to adapt to your substrate (systemd template / container entrypoint / ECS
 # task). Substrate-dependent + production-hardening items are marked TODO and discussed in DEPLOYMENT.md.
@@ -13,11 +16,14 @@ APP_DIR="${NEMOTRON_APP_DIR:-$HOME/nemotron}"          # holds server.py + batch
 VENV="${NEMOTRON_VENV:-$HOME/nemo-venv}"
 MODEL="${NEMOTRON_MODEL:-nvidia/nemotron-speech-streaming-en-0.6b}"
 # Step 4: per-GPU config matrix + guarded auto-select (override with NEMOTRON_PROCS). Measured matrix:
-#   L4 -> K=2 (GPU-bound, ~32/box); L40S -> K=4 if >=~32 vCPU (~64/box, GPU ceiling) else K=3 (~48, vCPU-bound).
-auto_pick_K(){ local g c; g=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1); c=$(nproc)
+#   L4 -> K=2 (GPU-bound, ~32/box); L40S -> K=3 (~48/box) — MEMORY-bound: each proc ~11 GB with the FINALIZE
+#   encoder graph on (default), so K=4 OOMs the 44 GB L40S (measured 2026-05-23). To run K=4 you must shrink the
+#   per-proc graph pool first (lower NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX / _MAX_B) and re-verify it fits.
+auto_pick_K(){ local g; g=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
   case "$g" in
+    *L40S*) echo 3 ;;                                   # MUST precede *L4* (the glob *L4* also matches "L40S").
+                                                        # memory-bound by the finalize graph (was 4 pre-finalize-graph)
     *L4*)   echo 2 ;;
-    *L40S*) [ "${c:-0}" -ge 24 ] && echo 4 || echo 3 ;;
     *)      echo 2 ;;                                   # unknown GPU: conservative — measure with ec2-bench first
   esac; }
 K="${NEMOTRON_PROCS:-$(auto_pick_K)}"                   # processes/box (auto from GPU+vCPU; see DEPLOYMENT.md)
@@ -37,6 +43,10 @@ SRV_ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS
          NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_BATCH_MAX_SIZE=32 NEMOTRON_BATCH_MAX_WAIT_MS=8
          "NEMOTRON_MODEL_LANES=$LANES" NEMOTRON_BATCH_BARRIER_DRAIN=1 NEMOTRON_BATCH_FINALIZE=1
          NEMOTRON_ENCODER_CUDAGRAPH=1 NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=8 NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1)
+# Optional measurement passthroughs (default OFF; used by ec2-bench/bench_prod_multiproc.sh to decompose the
+# finalize budget on the real multi-proc + MPS config). No effect on prod unless explicitly set.
+[ "${FINALIZE_PROFILE:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FINALIZE_PROFILE=1)
+[ "${FAULTHANDLER:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FAULTHANDLER=1)
 
 cd "$APP_DIR"
 

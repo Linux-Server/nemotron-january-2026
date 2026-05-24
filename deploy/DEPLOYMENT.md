@@ -22,12 +22,19 @@ fills the GPU via MPS; fleet scale = N boxes behind the LB.
 | GPU | instance | lanes/proc | K | per-box knee | bound by | ~$/stream-hr |
 |---|---|---:|---:|---:|---|---:|
 | L4 | g6.2xlarge | 2 | 2 | ~32 | GPU | **$0.031** |
-| L40S | g6e.4xlarge | 2 | 3 | 48 | vCPU | $0.063 |
-| L40S | g6e.8xlarge | 2 | 4 | **64 (L40S ceiling)** | GPU | $0.071 |
+| L40S | g6e.4xlarge | 2 | 3 | 48 | vCPU + GPU-mem | $0.063 |
+| L40S | g6e.8xlarge | 2 | 3 | 48 | **GPU memory** | ~$0.095 |
 
 - **lanes=2/process** is the unit (>2 regresses on the GIL; 1 wastes per-process overhead).
 - **MPS is required for K>2** (turns time-slice contention into concurrent SM sharing).
 - **Operate each process at ~12 streams** (75% of the 16 knee) for the <400 ms TTFS headroom — set LB `maxconn 12`.
+- **L40S is MEMORY-bound to K=3 with the finalize encoder graph on** (the default 246/279 latency win). Each proc is
+  **~11 GB** (model + 2-lane STEADY + FINALIZE graph pools), so K=4 OOMs the 44 GB L40S (4×11≈44 GB; measured
+  2026-05-23 — `ok=56/944` error cascade). The 64/box "GPU ceiling" was the pre-finalize-graph *compute* knee; with
+  the finalize graph the GPU runs out of **memory** before compute. **Consequence: g6e.8xlarge's extra vCPU buys
+  nothing now (the 48 GB GPU, not vCPU, is the limit) → prefer the cheaper g6e.4xlarge for L40S (same K=3/48).** To
+  recover K=4/64 on g6e.8xlarge, first shrink the per-proc graph pool (lower `NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX`,
+  observed finalize T is 43-58, and/or `_MAX_B`) and re-verify it fits with streaming headroom.
 - (L4 K, and the L4 confound-free numbers, are being confirmed in Step 1.)
 
 ## Substrate decision (Step 7)
@@ -58,9 +65,10 @@ warm headroom or pre-warm new boxes before adding to the LB.
 
 ## $/stream summary
 **L4 (g6.2xlarge) ≈ $0.031/stream is cheapest → cost-optimized + horizontal scale.** L40S (g6e) is the
-density play (48–64/box, fewer instances) at ~2× $/stream. Choose L4-multi-box unless ops strongly prefers
-fewer/denser boxes. Spot pricing ~halves both (keeps the ratio); use spot for stateless capacity with drain on
-interruption.
+density play (**48/box at K=3**, fewer instances) at ~3× $/stream — its density shrank because the finalize graph
+caps L40S at K=3 (memory), so use the cheaper **g6e.4xlarge** (not g6e.8xlarge) when you do want L40S density.
+Choose L4-multi-box unless ops strongly prefers fewer/denser boxes. Spot pricing ~halves both (keeps the ratio);
+use spot for stateless capacity with drain on interruption.
 
 ## Artifacts
 - `deploy/launch_multiproc.sh` — multi-process + MPS launcher (Step 2).
