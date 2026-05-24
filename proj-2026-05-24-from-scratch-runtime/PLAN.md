@@ -97,10 +97,22 @@ being false, and each has an early-exit spike:
 3. **B4 (free-threaded py3.13t) is insufficient or not production-stable** (else B4 wins far cheaper — it keeps NeMo's
    Python decode and skips the entire native port) (early-exit: 0.3).
 
-**THE PRIOR (path-forward review — both advisors).** The honest prior is that this project **STOPs**, and the most
-valuable thing is to confirm that *cheaply* and redirect the engineer-year. Evidence already assembled: p50 immovable;
-steady is 86% B=1 (batching showed ~0 cloud-GPU benefit — `streaming-batching-outcome`); the density ceiling is ~28/box
-post-Python with native upside triple-conditional; L4 is already cheapest $/stream and scales horizontally. So:
+**USER DECISIONS (2026-05-24 collaborative planning):**
+1. **Is density the right problem? → YES.** The user affirmed density/tail is a strategic priority worth pursuing *if
+   the residual is real*. So this is NOT a lean-STOP project; we proceed toward the gate. (The 0.0-pre ceiling arithmetic
+   stays as an expectations check, not as a STOP prior.)
+2. **The 0.0 threshold number → DEFERRED** until the Python plan lands and gives a measured baseline. The proposed
+   numeric thresholds in `decision-template.md` are **reference-only** until then; freeze them *before* collecting
+   Wave-1 data, set them *after* the Python baseline exists.
+3. **Baseline → KEEPS MOVING (not frozen).** The native residual is measured against *whatever Python is at the time*;
+   the native build must continuously out-perform the latest Python baseline. Accepted risk: the residual may shrink
+   (even asymptote) as Python improves — see risk 13.
+4. **B5 (in-tree native-decode extension) → OFF THE TABLE.** The outcome space is **STOP / B4 / B1** only. A
+   decode-GIL-bound-but-full-runtime-not-worth-it result resolves to **STOP** (or B4 if it qualifies), not a middle path.
+
+Context still assembled (informs expectations, not a STOP prior now): p50 immovable; steady 86% B=1 (batching ~0
+cloud-GPU benefit — `streaming-batching-outcome`); density ceiling ~28/box post-Python, native upside
+triple-conditional.
 
 - [ ] **0.0-pre — Residual-CEILING arithmetic (FREE / paper; the cheapest kill; do FIRST, before any spike spend).**
   Bound the prize from above *today*: best-case native delta = **~48 (aspirational) − ~28 (post-Python K=4) ≈ 20
@@ -235,7 +247,7 @@ scheduler/network layer is where Rust pays off. Decided by 0.1/0.2/0.4.
 | B2: TensorRT (encoder) + custom decode | medium (kernel/precision drift) | high | the *fusion* path; prerequisite for 6–10 ms finalize |
 | B3: hand CUDA kernels | lowest | very high | deferred; only for fp8/fusion density later |
 | B4: free-threaded CPython 3.13t | identical math | **medium (scheduler rewrite off asyncio; keeps NeMo decode/encoder)** | **the PREFERRED / cheapest SUCCESS path when it works** (not a mere fallback) — skips all the native ports; chosen if 0.3 closes the residual AND free-threaded PyTorch/NeMo is production-stable |
-| **B5: in-tree native-decode extension (5th option; path-forward review)** | needs 0.6a state-equivalence (decode is intrinsic) | medium (NO second stack) | a **pybind C++/CUDA extension for ONLY the label-looping decode, inside today's Python server** — targets the *likely-true* decode-GIL wall while inheriting deploy/metrics/protocol/admission/scheduler. Does **NOT** deliver shared-weight density or fix the MPS/exclusive-gate topology → a **tail/decode-throughput play only**. The answer if Step-5 says "decode-GIL-bound" AND 0.3 kills B4 AND full-B1 isn't worth it. |
+| ~~B5: in-tree native-decode extension~~ | — | — | **REJECTED by the user (2026-05-24): the outcome space is STOP / B4 / B1 only; no middle path.** (Kept here as a recorded non-option.) |
 
 **"From-scratch" = replacing the Python serving/dispatch/decode-orchestration layer**, driving the same NeMo
 weights/kernels for the encoder (B1a) while **re-implementing the RNNT `greedy_batch` label-looping decode natively
@@ -419,7 +431,7 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
   | 0.9 fails (can't make per-call config pure params) | drop **shared-weight density** → per-lane replicas; re-run 0.0 (likely **STOP**) |
   | 0.5: B stays ~1 | drop the **3–5× throughput** claim; re-run 0.0 (density-only justification) |
   | 0.5/0.11: B>1 but poor exact-B graph hit-rate / high eager fallback / no memory headroom | drop **steady-graph throughput+density** claims → B1-without-steady-graphs or revise topology; re-run 0.0 |
-  | Step-5/0.1 says decode-GIL-bound AND 0.3 kills B4 AND full-B1 not worth it | **choose B5** (in-tree native-decode extension — tail/decode-throughput only, no density, no second stack) |
+  | decode-GIL-bound but full-B1 residual not worth the cost (and B4 didn't win) | **STOP** (user rejected the in-tree-extension middle path 2026-05-24) |
   | 3.3 fusion unproven | the **6–10 ms finalize** headline is out of v1 scope (B1 target = parity); does NOT affect the core go/no-go |
 
 ### Phase 0.5 — Runtime contract (before Phase 1)
@@ -513,13 +525,14 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
     already closes the gap.
 11. **Multilingual/prompted serving** is a separate surface → v1 = EN-only; stated as explicit scope reduction.
 12. **aarch64 toolchain** unknowns → Spike 0.7 pre-check gates 4.2.
-13. **The baseline is a MOVING target that the Python plan is actively shrinking** (finalize graph already landed
-    246/279; K=4 + finalize-priority coming) → a fast-improving Python baseline can make B1 obsolete *mid-build*.
-    **Decide explicitly (discussion topic): freeze the Python residual at a commit, or accept the residual may asymptote
-    to zero before the native build finishes.**
-14. **Is this the right problem at all?** (strategic prior) Density is a COGS lever; ~20 best-case extra streams/box may
-    lose to just adding cheap L4 boxes or spending the eng-year on multilingual quality / p50-moving VAD / the
-    front-drop bug. → quantify projected-scale COGS before funding (0.0-pre).
+13. **The baseline is a MOVING target — and the user DECIDED not to freeze it (2026-05-24).** The Python plan keeps
+    shrinking the native residual (finalize graph landed 246/279; K=4 + finalize-priority coming). **Accepted risk:** a
+    fast-improving Python baseline can shrink the residual (even asymptote) *mid-build* → the native build must
+    continuously out-perform the *latest* Python baseline, and 0.0 must be re-checked against it as Python advances. Each
+    gate records the baseline commit it beat (so the shrink is visible).
+14. **Is this the right problem? — user DECIDED YES (2026-05-24): density/tail is a strategic priority.** So this is not
+    a lean-STOP project. The 0.0-pre ceiling arithmetic remains an expectations check (density is a COGS lever; ~20
+    best-case extra streams/box), but the directional call to pursue density *if the residual is real* is made.
 
 ## 9. Effort sizing (two budgets; ±50–100% — so §0 is an evaluable comparison)
 

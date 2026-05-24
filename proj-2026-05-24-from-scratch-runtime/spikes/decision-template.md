@@ -19,7 +19,9 @@ feasibility or Track-B post-plan residual.**
 ~40–60 eng-wk BUILD **+ ongoing dual-stack carry**. If the *ceiling* can't clear the 0.0 threshold below assuming all
 gates pass → STOP now.
 
-**0.0 worth-it threshold (proposed; set to real business values):**
+**0.0 worth-it threshold — DEFERRED by the user (2026-05-24) until the Python plan lands + gives a measured baseline.**
+The values below are reference-only proposals; freeze the real numbers *before* Wave-1 data, *after* the baseline exists.
+Note the user chose NOT to freeze the Python baseline → 0.0 is re-checked against the *latest* Python result as it improves.
 - Min in-budget streams/box delta vs Python's ~28/box (K=4): proposed `≥ +12 streams/box` at equivalent tail.
 - OR min p99 server-side tail reduction at the same *admitted* load: proposed `≥ 150–200 ms`.
 - Value-vs-cost: residual must justify `~40–60 eng-wk + a 2nd stack + carry`. **Distinguish attempted vs admitted load**
