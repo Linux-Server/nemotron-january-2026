@@ -82,7 +82,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 
 ## Steps
 
-- [ ] **1. Admission/backpressure on an ALWAYS-ON backlog signal + lower HAProxy maxconn**
+- [x] **1. Admission/backpressure on an ALWAYS-ON backlog signal + lower HAProxy maxconn**
   (a) Cheapest: lower HAProxy `maxconn` 12→ the in-budget value (~7 L40S, ~3-4 L4) in `haproxy.cfg.example` +
   `DEPLOYMENT.md` + parametrize `bench_prod_sweep.sh:47` (zero server code). (b) Server-side defense: a configurable
   cap keyed on an **always-on backlog signal = the composite** `sum(continuous_event_queue.qsize())` +
@@ -166,7 +166,7 @@ could push higher, and it is probe-only.** OVERRIDING CONSTRAINT: byte-exact per
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Admission on always-on backlog signal + lower HAProxy maxconn | pending | — | NOT vad_stop (profiling-only) NOR count; WS-close; attempted-vs-admitted; enforces in-budget (doesn't raise capacity) |
+| 1 | Admission on always-on backlog signal + lower HAProxy maxconn | done (local) | — | default-off identity runtime-confirmed; flag-on reject logic correct; always-on composite signal (qsize+ready+age); WS-close 1013 before admit; maxconn 7(L40S)/3-4(L4); HAPROXY_MAXCONN env. Cloud attempted-vs-admitted sweep → Step 6 |
 | 2a | Padded-T byte-exactness PROBE (GO/NO-GO) | pending | — | relaxed gate: tokens byte-exact + encoded_len/cache_len exact + tensors allclose; new harness infra |
 | 2b | Padded-T_max bucket REPLACING per-T (recover K=4 ≈ 28/box) | pending | — | switch not coexist; startup-canary fail-closed (not per-call); ~28/box NOT 64 |
 | 3 | Remove safely-removable host syncs (small) | pending | — | only @8223/7300; stretch (CUDA-event @3177) needs lane-busy state |

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Production per-proc LOAD SWEEP: how do client TTFB + finalize lock_wait grow as each proc fills toward its
-# maxconn=12 operating point? ONE g6e.8xlarge (L40S) running K=3 procs lanes=2 + MPS + HAProxy(leastconn,maxconn12),
+# HAProxy cap? ONE g6e.8xlarge (L40S) running K=3 procs lanes=2 + MPS + HAProxy(leastconn,maxconn),
 # then the full-1000 client (--limit LIMIT) at CONC_LIST = "10 20 30 36" (=> ~3.3/8.3/10/12 streams per proc).
-# conc-36 saturates the box (3 procs x maxconn 12). Records are binned to each level by timestamp (post-step).
+# HAPROXY_MAXCONN defaults to 12 to preserve historical sweep behavior; set 7 for the L40S in-budget cap
+# or 3-4 for L4 overload-shedding sweeps. Records are binned to each level by timestamp (post-step).
 # ALWAYS terminates. Run as a FILE.
 set -uo pipefail
 cd /home/khkramer/src/nemotron-january-2026
@@ -12,6 +13,7 @@ PROFILE=AWSAdministratorAccess-419599258555; REGION=us-west-2
 MYIP="${MYIP:-$(curl -s https://checkip.amazonaws.com)}"
 ITYPE="${ITYPE:-g6e.8xlarge}"; K="${K:-3}"; FRONT=8080
 CONC_LIST="${CONC_LIST:-10 20 30 36}"; LIMIT="${LIMIT:-500}"
+HAPROXY_MAXCONN="${HAPROXY_MAXCONN:-12}"
 OUT=$E/prodsweep_$(date +%H%M); mkdir -p "$OUT"; : > "$OUT/level_windows.txt"
 
 SG=$("$PY" - <<PY
@@ -40,11 +42,11 @@ ok=0; for _ in $(seq 1 120); do sleep 15; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'grep
 [ $ok != 1 ] && { echo "bootstrap TIMEOUT/FAIL"; ssh -i "$KEY" $SSHO ubuntu@"$IP" 'tail -25 ~/nemotron/bootstrap.log' 2>/dev/null; exit 1; }
 ssh -i "$KEY" $SSHO ubuntu@"$IP" 'sudo apt-get install -y -qq haproxy >/dev/null 2>&1 && haproxy -v | head -1'
 
-"$PY" - "$K" "$FRONT" > "$OUT/haproxy_asr.cfg" <<'PY'
-import sys; K, front = int(sys.argv[1]), int(sys.argv[2])
+"$PY" - "$K" "$FRONT" "$HAPROXY_MAXCONN" > "$OUT/haproxy_asr.cfg" <<'PY'
+import sys; K, front, maxconn = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 print("global\n    maxconn 100000\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h")
 print(f"frontend asr_ws\n    bind *:{front}\n    default_backend asr_pool\nbackend asr_pool\n    balance leastconn")
-[print(f"    server p{k} 127.0.0.1:{8081+k} check maxconn 12") for k in range(K)]
+[print(f"    server p{k} 127.0.0.1:{8081+k} check maxconn {maxconn}") for k in range(K)]
 PY
 scp -i "$KEY" $SSHO "$OUT/haproxy_asr.cfg" ubuntu@"$IP":~/nemotron/haproxy_asr.cfg
 

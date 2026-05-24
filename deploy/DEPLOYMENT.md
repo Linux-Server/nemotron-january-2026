@@ -7,7 +7,7 @@ the reference artifacts + the substrate decision, not a live cluster.
 
 ## Architecture
 ```
-            Load balancer (HAProxy / AWS ALB)   leastconn + maxconn≈12/process, /health, drain
+            Load balancer (HAProxy / AWS ALB)   leastconn + maxconn≈7/process on L40S, ≈3-4 on L4, /health, drain
            /              |               \
    box (g6/g6e)       box (g6/g6e)      box ...        ← autoscaling group / ECS service
    ├ CUDA MPS daemon                                    each box:
@@ -27,7 +27,15 @@ fills the GPU via MPS; fleet scale = N boxes behind the LB.
 
 - **lanes=2/process** is the unit (>2 regresses on the GIL; 1 wastes per-process overhead).
 - **MPS is required for K>2** (turns time-slice contention into concurrent SM sharing).
-- **Operate each process at ~12 streams** (75% of the 16 knee) for the <400 ms TTFS headroom — set LB `maxconn 12`.
+- **Operate each process at the measured in-budget point and shed above it**: L40S is ~6.7 streams/proc, so set
+  HAProxy `maxconn 7`; L4 is ~3.5 streams/proc, so use `maxconn 3` or `4` depending on SLO margin. This enforces the
+  latency-safe operating point; it does **not** increase capacity. The old `maxconn 12` setting is above the
+  in-budget point and can drive the scheduler backlog cliff.
+- Server-side defense-in-depth is available via `NEMOTRON_ADMISSION_MAX_BACKLOG` and optional
+  `NEMOTRON_ADMISSION_MAX_READY_AGE_MS` (both default effectively off). It WS-closes new connections when the
+  always-on backlog signal exceeds the cap: queued per-session scheduler events + scheduler-ready sessions, with
+  oldest-ready age included for age-based caps. When enabled, `/health` reports `admission.attempted`,
+  `admission.admitted`, and `admission.rejected` plus the live signal.
 - **L40S is MEMORY-bound to K=3 with the finalize encoder graph on** (the default 246/279 latency win). Each proc is
   **~11 GB** (model + 2-lane STEADY + FINALIZE graph pools), so K=4 OOMs the 44 GB L40S (4×11≈44 GB; measured
   2026-05-23 — `ok=56/944` error cascade). The 64/box "GPU ceiling" was the pre-finalize-graph *compute* knee; with

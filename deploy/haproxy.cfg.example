@@ -1,8 +1,8 @@
 # HAProxy routing — DESIGN ARTIFACT for Step 3 of proj-2026-05-21-inference-opt/PLAN.md.
 #
 # Routes WebSocket ASR streams across the K server processes (and across boxes) by LEAST-CONNECTIONS,
-# capping each process at ~12 concurrent (= 75% of the ~16-stream per-process knee, leaving headroom for the
-# <400 ms TTFS budget — don't run at the queueing cliff), with health-checks + connection draining.
+# capping each process at the measured in-budget point (L40S: ~7 concurrent; L4: ~3-4), with
+# health-checks + connection draining.
 #
 # WHY this works with no custom code: 1 WS connection = 1 stream = 1 unit of capacity, so connection-count
 # routing IS stream-count routing. WS streams are stateful + sticky-for-life (the LB picks a process at connect;
@@ -28,14 +28,15 @@ frontend asr_ws
     default_backend asr_pool
 
 backend asr_pool
-    balance leastconn                    # fewest active conns => furthest below the per-process knee
+    balance leastconn                    # fewest active conns => furthest below the per-process budget
     # One line per (box, process-port). maxconn caps each process at the latency-safe operating point.
+    # Use maxconn 7 for L40S; use maxconn 3-4 for L4 depending on the target SLO margin.
     # Generate these from the per-GPU matrix (K ports/box) x the fleet (autoscaling group / ECS tasks).
-    server box1_p0 10.0.1.10:8080 check maxconn 12
-    server box1_p1 10.0.1.10:8081 check maxconn 12
-    server box1_p2 10.0.1.10:8082 check maxconn 12   # L4: 2 ports/box; L40S: 4 ports/box
-    server box2_p0 10.0.1.11:8080 check maxconn 12
-    server box2_p1 10.0.1.11:8081 check maxconn 12
+    server box1_p0 10.0.1.10:8080 check maxconn 7
+    server box1_p1 10.0.1.10:8081 check maxconn 7
+    server box1_p2 10.0.1.10:8082 check maxconn 7   # L4: 2 ports/box; L40S: 3 ports/box today
+    server box2_p0 10.0.1.11:8080 check maxconn 7
+    server box2_p1 10.0.1.11:8081 check maxconn 7
     # ...
 
 # DRAIN before deploy/kill (let in-flight streams finish): runtime API / socket ->

@@ -85,6 +85,8 @@ DEBUG_ASR = os.environ.get("DEBUG_ASR", "0") == "1"
 
 _DEFAULT_FINALIZE_SILENCE_MS = 150
 _MAX_FINALIZE_SILENCE_MS = 10_000
+_ADMISSION_MAX_BACKLOG_DEFAULT = 1_000_000_000
+_ADMISSION_MAX_READY_AGE_MS_DEFAULT = 1_000_000_000_000.0
 
 STREAMING = "STREAMING"
 PENDING_FINALIZE = "PENDING_FINALIZE"
@@ -855,6 +857,32 @@ class ASRServer:
                     f"{_MAX_FINALIZE_SILENCE_MS}"
                 )
         self.finalize_silence_seconds = self.finalize_silence_ms / 1000
+
+        self.admission_max_backlog = _env_int(
+            "NEMOTRON_ADMISSION_MAX_BACKLOG",
+            _ADMISSION_MAX_BACKLOG_DEFAULT,
+        )
+        if self.admission_max_backlog < 0:
+            raise ValueError("NEMOTRON_ADMISSION_MAX_BACKLOG must be >= 0")
+        self.admission_max_ready_age_ms = _env_float(
+            "NEMOTRON_ADMISSION_MAX_READY_AGE_MS",
+            _ADMISSION_MAX_READY_AGE_MS_DEFAULT,
+        )
+        if self.admission_max_ready_age_ms < 0:
+            raise ValueError("NEMOTRON_ADMISSION_MAX_READY_AGE_MS must be >= 0")
+        self.admission_enabled = (
+            self.admission_max_backlog != _ADMISSION_MAX_BACKLOG_DEFAULT
+            or self.admission_max_ready_age_ms != _ADMISSION_MAX_READY_AGE_MS_DEFAULT
+        )
+        self.admission_attempted = 0
+        self.admission_admitted = 0
+        self.admission_rejected = 0
+        if self.admission_enabled:
+            logger.info(
+                "admission_backpressure_enabled "
+                f"max_backlog={self.admission_max_backlog} "
+                f"max_ready_age_ms={self.admission_max_ready_age_ms}"
+            )
 
         # Active sessions
         self.sessions: dict[str, ASRSession] = {}
@@ -4145,6 +4173,60 @@ class ASRServer:
         except Exception as e:
             logger.error(f"Session {session.id} EOU snapshot chunk write error: {e}")
 
+    def _admission_backlog_signal(self) -> dict[str, Any]:
+        queued_events = 0
+        for session in list(self.sessions.values()):
+            queue = session.continuous_event_queue
+            if queue is not None:
+                queued_events += queue.qsize()
+
+        now = time.monotonic()
+        oldest_ready_age_ms = 0.0
+        oldest_ready_session_id = None
+        for session_id in list(self._scheduler_ready):
+            session = self.sessions.get(session_id)
+            ready_since = (
+                session.scheduler_ready_since
+                if session is not None
+                else None
+            )
+            if ready_since is None:
+                continue
+            ready_age_ms = max(0.0, (now - ready_since) * 1000.0)
+            if ready_age_ms > oldest_ready_age_ms:
+                oldest_ready_age_ms = ready_age_ms
+                oldest_ready_session_id = session_id
+
+        ready_count = len(self._scheduler_ready)
+        return {
+            "queued_events": queued_events,
+            "ready_count": ready_count,
+            "backlog_count": queued_events + ready_count,
+            "oldest_ready_age_ms": oldest_ready_age_ms,
+            "oldest_ready_session_id": oldest_ready_session_id,
+        }
+
+    def _admission_reject_reason(
+        self,
+        signal: dict[str, Any],
+    ) -> Optional[str]:
+        if signal["backlog_count"] > self.admission_max_backlog:
+            return "backlog_count"
+        if signal["oldest_ready_age_ms"] > self.admission_max_ready_age_ms:
+            return "oldest_ready_age_ms"
+        return None
+
+    def _admission_status_snapshot(self) -> dict[str, Any]:
+        return {
+            "enabled": self.admission_enabled,
+            "attempted": self.admission_attempted,
+            "admitted": self.admission_admitted,
+            "rejected": self.admission_rejected,
+            "max_backlog": self.admission_max_backlog,
+            "max_ready_age_ms": self.admission_max_ready_age_ms,
+            "signal": self._admission_backlog_signal(),
+        }
+
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle a WebSocket client connection."""
         import uuid
@@ -4161,12 +4243,34 @@ class ASRServer:
             return ws
 
         session_id = str(uuid.uuid4())[:8]
+        self.admission_attempted += 1
+        admission_signal = self._admission_backlog_signal()
+        admission_reject_reason = self._admission_reject_reason(admission_signal)
+        if admission_reject_reason is not None:
+            self.admission_rejected += 1
+            logger.warning(
+                "admission_rejected "
+                f"session={session_id} "
+                f"reason={admission_reject_reason} "
+                f"attempted={self.admission_attempted} "
+                f"admitted={self.admission_admitted} "
+                f"rejected={self.admission_rejected} "
+                f"queued_events={admission_signal['queued_events']} "
+                f"ready_count={admission_signal['ready_count']} "
+                f"backlog_count={admission_signal['backlog_count']} "
+                f"oldest_ready_age_ms={admission_signal['oldest_ready_age_ms']:.2f} "
+                f"oldest_ready_session={admission_signal['oldest_ready_session_id']}"
+            )
+            await ws.close(code=1013, message=b"admission_backpressure")
+            return ws
+
         session = ASRSession(
             id=session_id,
             websocket=ws,
             target_lang=session_target_lang,
         )
         self.sessions[session_id] = session
+        self.admission_admitted += 1
         session_model_lane = self._scheduler_assign_session_model_lane(session)
 
         logger.info(f"Client {session_id} connected")
@@ -8841,10 +8945,13 @@ class ASRServer:
 
     async def health_handler(self, request: web.Request) -> web.Response:
         """Health check endpoint."""
-        return web.json_response({
+        payload = {
             "status": "healthy" if self.model_loaded else "loading",
             "model_loaded": self.model_loaded,
-        })
+        }
+        if self.admission_enabled:
+            payload["admission"] = self._admission_status_snapshot()
+        return web.json_response(payload)
 
     async def start(self):
         """Start the HTTP + WebSocket server."""
