@@ -255,6 +255,9 @@ inside the Rust crate (hand-binding C++ anyway) → prefer shape (2) the thin C+
 is the allocator-coupled graph capture (raw `cudarc` graphs over separately-allocated memory don't count). The full
 checklist + libtorch version constraints (Blackwell/sm_120, NeMo range, same-version-for-export+fixtures+runtime, C++
 ABI flag) live in `spikes/decision-template.md`; the probe is part of Spike 0.2; the call is recorded at 0.4.
+**Ordering invariant:** the libtorch *version* is pinned by the C++/NeMo/CUDA constraints FIRST (even for all-Rust);
+**tch-rs is a consequence of that pin — it can VETO Rust but never widen or move the version choice.** We never downgrade
+libtorch to suit tch-rs.
 
 ### Axis B — model-execution backend
 | Option | Fidelity | Effort | Notes |

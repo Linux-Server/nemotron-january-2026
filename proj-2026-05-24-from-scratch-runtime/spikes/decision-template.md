@@ -25,6 +25,13 @@ for export + golden fixtures + runtime (the T2a byte-exact gate breaks otherwise
 The Rust-vs-C++ call is made on **concrete tch-rs binding coverage + version limits**, not preference. **All-Rust is the
 default IF AND ONLY IF tch-rs (+ `cudarc`) clears every box at the libtorch version chosen above; otherwise the C++
 model-worker (or all-C++) carries the hot path.**
+
+**Ordering invariant (the hedge):** the libtorch **version is pinned by the C++/NeMo/CUDA constraints FIRST** (Blackwell
+sm_120, NeMo torch range, same-version-for-export+fixtures+runtime, ABI) — *even in the all-Rust case*. **tch-rs
+availability is a CONSEQUENCE of that pin, never an input to it: tch-rs can VETO Rust (if it doesn't bind the required
+version / surface) but it can NEVER widen or move the version choice.** We do not downgrade libtorch to suit tch-rs; if
+tch-rs only binds an older libtorch that fails the constraints, that is a Rust veto, not a reason to pick the older
+libtorch.
 - [ ] A **tch-rs release binds the chosen (constraint-clearing) libtorch version** — not lagging behind it.
 - [ ] tch-rs/cudarc expose **CUDA-graph capture/replay against libtorch-ALLOCATED tensors** (the allocator-coupled path,
   not just raw `cudarc` graphs over separately-allocated memory). *This is the decisive box.*
