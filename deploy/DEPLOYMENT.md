@@ -41,9 +41,17 @@ fills the GPU via MPS; fleet scale = N boxes behind the LB.
   2026-05-23 — `ok=56/944` error cascade). The 64/box "GPU ceiling" was the pre-finalize-graph *compute* knee; with
   the finalize graph the GPU runs out of **memory** before compute. **Consequence: g6e.8xlarge's extra vCPU buys
   nothing now (the 48 GB GPU, not vCPU, is the limit) → prefer the cheaper g6e.4xlarge for L40S (same K=3/48).** To
-  recover K=4/64 on g6e.8xlarge, first shrink the per-proc graph pool (lower `NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX`,
-  observed finalize T is 43-58, and/or `_MAX_B`) and re-verify it fits with streaming headroom.
-- (L4 K, and the L4 confound-free numbers, are being confirmed in Step 1.)
+  recover K=4 on g6e.8xlarge, the **preferred** shrink is the **padded-T_max finalize bucket**
+  (`NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=1`): one `B=1 × T_max` bucket replaces the 19 per-T buckets
+  (T=42–60) → **~19× less finalize graph-pool memory** (local-measured), with FULL T coverage and no trim
+  (shorter finalize inputs are padded to T_max and masked → byte-identical encoder output for the real frames).
+  The per-T `_T_MAX`/`_MAX_B` trim is the fallback. *Note the recovered K=4 is a MEMORY fit, not a capacity gain:
+  the in-budget operating point stays keep-up-bound (~6–7 streams/proc) — see the maxconn note above.*
+  Cloud K=4 no-OOM + density confirm is pending (proj-2026-05-24-0859 Step 6).
+- **L4 (g6.* / 24 GB) is ~3× worse than L40S** (encoder is memory-bandwidth-bound; L4 ~8.2ms floor vs L40S ~2.9ms),
+  in-budget at **K=2, ~3–4 streams/proc (~7/box)** — keep-up-bound, NOT a capacity choice. The padded-T_max bucket
+  (above) is also the preferred L4 K=2 fit: full finalize-graph coverage projected to fit 24 GB at K=2 with headroom
+  (from the ~19× local drop), replacing the per-T trim previously needed. Cloud no-OOM confirm pending (Step 6).
 
 ## Substrate decision (Step 7)
 For a long-lived **WebSocket** service (not request/response):

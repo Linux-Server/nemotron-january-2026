@@ -16,9 +16,11 @@ APP_DIR="${NEMOTRON_APP_DIR:-$HOME/nemotron}"          # holds server.py + batch
 VENV="${NEMOTRON_VENV:-$HOME/nemo-venv}"
 MODEL="${NEMOTRON_MODEL:-nvidia/nemotron-speech-streaming-en-0.6b}"
 # Step 4: per-GPU config matrix + guarded auto-select (override with NEMOTRON_PROCS). Measured matrix:
-#   L4 -> K=2 (GPU-bound, ~32/box); L40S -> K=3 (~48/box) — MEMORY-bound: each proc ~11 GB with the FINALIZE
-#   encoder graph on (default), so K=4 OOMs the 44 GB L40S (measured 2026-05-23). To run K=4 you must shrink the
-#   per-proc graph pool first (lower NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX / _MAX_B) and re-verify it fits.
+#   L4 -> K=2 (~7/box, keep-up-bound — NOT GPU-compute-bound; encoder is mem-BW-bound, ~3x worse than L40S);
+#   L40S -> K=3 (~48 GPU-fit but in-budget ~20/box, keep-up-bound) — MEMORY-bound to K=3: each proc ~11 GB with the
+#   FINALIZE encoder graph on (default), so K=4 OOMs the 44 GB L40S (measured 2026-05-23). To run K=4, shrink the
+#   per-proc graph pool with the padded-T_max bucket FINALIZE_PADDED=1 (preferred; ~19x less finalize pool) and
+#   re-verify it fits — auto-select stays K=3 until that cloud no-OOM check lands (proj-2026-05-24-0859 Step 6).
 auto_pick_K(){ local g; g=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
   case "$g" in
     *L40S*) echo 3 ;;                                   # MUST precede *L4* (the glob *L4* also matches "L40S").
@@ -37,8 +39,9 @@ export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-/tmp/nvidia-mps-log}"
 # graph is the byte-exact 274/401 -> 246/279 TTFS win (frontier-competitive); it REQUIRES the steady graph (it
 # warms its finalize buckets into the steady graph managers). The scheduler event-loop-starvation livelock fix is
 # unconditional in server.py (ships automatically). MEMORY: the finalize graph adds ~2-3 GB graph-pool/proc
-# (B=1 x T=42..60); on L4 (24 GB) with K=2, lower NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MAX (observed T is 43-58)
-# or reduce procs if tight — see DEPLOYMENT.md.
+# (16 per-T buckets, B=1 x T=42..60). To shrink it (L4/24GB K=2, or L40S K=4) the PREFERRED lever is the
+# padded-T_max bucket FINALIZE_PADDED=1 below (one B=1 x T_max bucket, ~19x less finalize pool, full T coverage,
+# byte-exact); the per-T T_MAX/_MAX_B trim is the fallback. See DEPLOYMENT.md.
 SRV_ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200
          NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_BATCH_MAX_SIZE=32 NEMOTRON_BATCH_MAX_WAIT_MS=8
          "NEMOTRON_MODEL_LANES=$LANES" NEMOTRON_BATCH_BARRIER_DRAIN=1 NEMOTRON_BATCH_FINALIZE=1
