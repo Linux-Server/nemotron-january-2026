@@ -262,6 +262,24 @@ weights/kernels for the encoder (B1a) while **re-implementing the RNNT `greedy_b
 (B1b)** — the decode does NOT come free from "export the model." B2/B3 (fusion) are a *later, separately-proven*
 milestone, not part of the default v1.
 
+**Why libtorch, not raw CUDA (cuBLAS/cuDNN/CUTLASS) or TensorRT, for the encoder (B1a):**
+1. **Same kernels underneath.** libtorch dispatches the *exact* cuBLAS/cuDNN/cuFFT that PyTorch does — going lower-level
+   doesn't change which kernels run, only who calls them; and "who calls them" (the GIL/scheduler) is the thing we're
+   fixing, not the math.
+2. **The roofline says the math isn't the bottleneck.** Encoder is memory-bandwidth-bound, ~near floor, fp16 was
+   *slower*, p50 immovable → hand kernels buy ~nothing on the prize (tail+density). Most effort on the least-headroom axis.
+3. **Byte-exactness (T2a) is free with libtorch, forfeited going lower.** Same ATen→cuBLAS/cuDNN with matched versions ⇒
+   byte-exact by construction; raw kernels/CUTLASS/TRT pick different algos/reduction-orders/fusions → lose byte-exact AND
+   inherit a full numerical re-derivation of rel-shift attn + conv-cache + RNNT joint (that's B3, "very high / rejected").
+4. **Launch overhead is already solved by CUDA graphs** (`at::cuda::CUDAGraph`, native in libtorch) — a captured graph
+   collapses the whole forward to one replay; raw kernels can't beat that. The usual reason to go lower-level is moot.
+5. **The custom burden is the decode (control-flow/state), not GEMMs** — libtorch gives the tensor/joint primitives for
+   it without hand-writing matrix math.
+6. **TensorRT doesn't address the prize:** it's a kernel-execution engine — you'd still need the whole Rust/C++ serving
+   core around it, and it breaks byte-exactness + struggles with the cache-aware-streaming + rel-shift + per-T finalize
+   contract. Its only justified use is **fusion** (the 6–10 ms finalize), which is exactly why fusion is carved out as the
+   deferred B2/B3 milestone (spike 3.3), not the default.
+
 **Scope decision (round 2):** v1 native runtime targets the **English 0.6b checkpoint only**. The prompted/multilingual
 variant (per-language prompt state `set_inference_prompt` `server.py:1288-1292`, `target_lang` batch grouping
 `:4796-4803`, language-tag stripping `:1379-1397`, larger/multiple att-context `:429`) is a **later, separately-scoped
