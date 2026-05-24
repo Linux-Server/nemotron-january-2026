@@ -28,6 +28,12 @@ edges Soniox 249/281). **Acceptance is MEASURED in Step 8** (Step 2 is the PROVI
 The build is gated: **Steps 1-2 are a cheap LOCAL spike (no server changes, no cloud spend); Steps 4-8 proceed only on
 a Step-2 GO.**
 
+> **OUTCOME 2026-05-23 — BUILD HALTED at Step 2 (NO-GO).** (1) Max-B FULL_GRAPH **crashes at B=1** (illegal memory
+> access; `need_reinit=False` so no recapture — a raw replay-shape failure), and B=1 is **86% of conc-10 decodes**. (2)
+> Independently fatal to the conc-10 goal: the eager decode is only **~0.83ms steady / ~1.7ms finalize** at the real
+> conc-10 B-distribution, so graphing it cannot move p50 (UPSIDE needs ≥10ms). Steps 3-8 NOT pursued. The decode-graph
+> is the wrong lever for the conc-10 P50/spread goal. See `decoder-graph-probe-findings.md` + `conc10-pivot-findings.md`.
+
 ## The byte-exact oracle (read before every gate)
 - **Foundation (Step 1):** graph-OFF eager, same session at B=1 vs co-batched — **tokens/text byte-exact** (proven:
   prior Probe B2 + a 200/200 strict-text canary); raw float state is only `allclose(~1e-4)`. Bar = "not worse than
@@ -110,7 +116,7 @@ a Step-2 GO.**
   arms) the authoritative oracle for steps 2/3** (robust regardless) and proceed.
   Key files: `proj-2026-05-23-1731/decoder_graph_harness.py`, `proj-2026-05-23-1731/foundation-invariance.md`
 
-- [ ] **2. Probe (PROVISIONAL GO/NO-GO + projected floor/upside ROI): FULL_GRAPH, row-state byte-exactness, P50 sizing**
+- [x] **2. Probe (PROVISIONAL GO/NO-GO + projected floor/upside ROI): FULL_GRAPH, row-state byte-exactness, P50 sizing** — VERDICT: NO-GO (see banner above)
   Extend the harness. (a) `use_cuda_graph_decoder=True`; reach `model.decoding.decoding.decoding_computer`; **assert
   `cuda_graphs_mode==FULL_GRAPH` after warmup** (reject silent NO_WHILE_LOOPS @884); determine if NeMo's own capture
   stream (@958) replays on a different (lane) stream. (b) graph-ON vs OFF on the in-process fixed batch trace:
@@ -180,11 +186,11 @@ a Step-2 GO.**
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Foundation gate + in-process Session/state builder (batch-composition invariance) | done | — | GO: 84 events, 0 token/text mismatches across B=1/B=N/perm/shrink-grow; float state allclose 1e-4 (max 3.3e-6); concurrent A/B oracle VALID; NeMo 2.8.0rc0; re-run reproduced |
-| 2 | Probe (PROVISIONAL GO/NO-GO + projected floor/upside ROI) + P50 sizing at real conc-10 small-B | pending | — | FLOOR=stall/p99; UPSIDE=p50≤236&spread≤25; UPSIDE-miss⇒pivot doc, FLOOR may still GO |
-| 3 | Promote shared harness to committed pytest (+ run existing graph tests) | pending | — | bucket fallback = deferred separate sub-project |
-| 4 | Wiring A: flag plumb (INERT) + VERIFIED interlock + deferred @1507 assert | pending | — | atomic; flag-on inert until step 5; test protocol |
-| 5 | Wiring B: activate per-lane(-stream) warm + FULL_GRAPH verify + reinit-precheck | pending | — | atomic; re-verify encoder/finalize byte-exact after capture |
-| 6 | Wiring C: telemetry + eou/biasing gates + flag passthrough | pending | — | atomic; bash -n scripts |
-| 7 | Local byte-exact gate (CONCURRENT real-WS per-session text/is_final) + latency pre-check | pending | — | HARD GATE; WS payload oracle (no token IDs) |
-| 8 | Cloud MEASURED acceptance (repeated A/B, L40S→L4) + conc-24 overload harness + rollout | pending | — | measured floor/upside; finalize-graph both arms; vary only decoder-graph flag |
+| 1 | Foundation gate + in-process Session/state builder (batch-composition invariance) | done | b8c000e | GO: 84 events, 0 token/text mismatches across B=1/B=N/perm/shrink-grow; float state allclose 1e-4 (max 3.3e-6); concurrent A/B oracle VALID; NeMo 2.8.0rc0; re-run reproduced |
+| 2 | Probe (GO/NO-GO + projected floor/upside ROI) + P50 sizing at real conc-10 small-B | done — NO-GO | brlxvvedc | B=32 FULL_GRAPH crashes at B=1 (86% of workload); conc-10 decode only ~0.83ms steady/~1.7ms finalize ⇒ cannot move p50. Both FLOOR + UPSIDE fail. pivot doc written |
+| 3 | Promote shared harness to committed pytest (+ run existing graph tests) | blocked (Step-2 NO-GO) | — | not pursued |
+| 4 | Wiring A: flag plumb (INERT) + VERIFIED interlock + deferred @1507 assert | blocked (Step-2 NO-GO) | — | not pursued |
+| 5 | Wiring B: activate per-lane(-stream) warm + FULL_GRAPH verify + reinit-precheck | blocked (Step-2 NO-GO) | — | not pursued |
+| 6 | Wiring C: telemetry + eou/biasing gates + flag passthrough | blocked (Step-2 NO-GO) | — | not pursued |
+| 7 | Local byte-exact gate (CONCURRENT real-WS per-session text/is_final) + latency pre-check | blocked (Step-2 NO-GO) | — | not pursued |
+| 8 | Cloud MEASURED acceptance (repeated A/B, L40S→L4) + conc-24 overload harness + rollout | blocked (Step-2 NO-GO) | — | not pursued |
