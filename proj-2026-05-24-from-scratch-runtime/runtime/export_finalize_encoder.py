@@ -85,6 +85,15 @@ def _tensor_outputs_equal(lhs, rhs) -> tuple[bool, float]:
     return ok, max_diff
 
 
+def _first_token_diff(lhs: list[int], rhs: list[int]) -> str:
+    for index, (a, b) in enumerate(zip(lhs, rhs)):
+        if a != b:
+            return f"first_diff={index} finalize_ref={a} nemo_oracle={b}"
+    if len(lhs) != len(rhs):
+        return f"prefix_equal len_finalize_ref={len(lhs)} len_nemo_oracle={len(rhs)}"
+    return "identical"
+
+
 def _make_row(rt: ContinuousFinalizeRef, ds, sample_index: int, kind: str) -> dict[str, Any]:
     ex = ds[sample_index]
     wav = load_wav(ex)
@@ -93,8 +102,12 @@ def _make_row(rt: ContinuousFinalizeRef, ds, sample_index: int, kind: str) -> di
     if kind == "continuation":
         rt.append_audio(session, wav)
     elif kind == "first":
-        session.pending_audio = wav.copy()
-        session.total_audio_samples = int(wav.shape[0])
+        # Production can only finalize with emitted_frames==0 before the first
+        # steady chunk is ready, so clip below preprocess_new_audio_samples.
+        wav = wav[: rt.geometry.preprocess_new_audio_samples - 1].copy()
+        rt.append_audio(session, wav)
+        if session.emitted_frames != 0:
+            raise RuntimeError("first finalize fixture unexpectedly emitted steady frames")
     else:
         raise ValueError(f"unknown fixture kind {kind!r}")
 
@@ -108,9 +121,11 @@ def _make_row(rt: ContinuousFinalizeRef, ds, sample_index: int, kind: str) -> di
     if inputs is None or eager_outputs is None:
         raise RuntimeError(f"empty finalize fixture for sample_index={sample_index}")
 
-    full_tokens = rt.full_greedy_tokens(wav)
-    final_tokens = list(flush["final_tokens"])
-    new_tokens = final_tokens[len(pre_final_tokens) :]
+    finalize_ref_tokens = list(flush["final_tokens"])
+    oracle_tokens = rt.nemo_stream_finalize_tokens(wav)
+    offline_tokens = rt.offline_full_greedy_tokens(wav)
+    oracle_match = finalize_ref_tokens == oracle_tokens
+    new_tokens = oracle_tokens[len(pre_final_tokens) :]
     return {
         "kind": kind,
         "sample_index": sample_index,
@@ -128,13 +143,20 @@ def _make_row(rt: ContinuousFinalizeRef, ds, sample_index: int, kind: str) -> di
         "eager_outputs": [item.detach().cpu().clone() for item in eager_outputs],
         "pre_final_tokens": torch.tensor(pre_final_tokens, dtype=torch.int64),
         "gold_new_tokens": torch.tensor(new_tokens, dtype=torch.int64),
-        "gold_final_tokens": torch.tensor(final_tokens, dtype=torch.int64),
-        "full_greedy_tokens": torch.tensor(full_tokens, dtype=torch.int64),
+        "gold_final_tokens": torch.tensor(oracle_tokens, dtype=torch.int64),
+        "nemo_stream_finalize_tokens": torch.tensor(oracle_tokens, dtype=torch.int64),
+        "finalize_ref_final_tokens": torch.tensor(finalize_ref_tokens, dtype=torch.int64),
+        "offline_full_greedy_tokens": torch.tensor(offline_tokens, dtype=torch.int64),
+        "nemo_oracle_match": oracle_match,
+        "nemo_oracle_mismatch": (
+            "" if oracle_match else _first_token_diff(finalize_ref_tokens, oracle_tokens)
+        ),
         "pre_final_decoder_state": pre_final_decoder_state,
         "pre_final_pred_out": pre_final_pred_out,
         "steady_text": rt.text(pre_final_tokens),
-        "final_text": rt.text(final_tokens),
-        "full_text": rt.text(full_tokens),
+        "final_text": rt.text(oracle_tokens),
+        "finalize_ref_text": rt.text(finalize_ref_tokens),
+        "offline_full_greedy_text": rt.text(offline_tokens),
     }
 
 
@@ -175,7 +197,8 @@ def main() -> int:
         "geometry": asdict(rt.geometry),
         "notes": (
             "Rows contain finalize encoder inputs, eager encoder outputs, "
-            "carried decoder state, and gold final/new token sequences."
+            "carried decoder state, and NeMo chunked stream+finalize oracle "
+            "gold final/new token sequences."
         ),
     }
     torch.save({"meta": meta, "rows": rows}, fixture_path)
@@ -184,9 +207,22 @@ def main() -> int:
         print(
             f"  row kind={row['kind']} idx={row['sample_index']} "
             f"drop={row['drop_extra']} T={row['chunk_T']} "
-            f"pre/final/full tok={len(row['pre_final_tokens'])}/"
-            f"{len(row['gold_final_tokens'])}/{len(row['full_greedy_tokens'])}"
+            f"pre/final/offline tok={len(row['pre_final_tokens'])}/"
+            f"{len(row['gold_final_tokens'])}/{len(row['offline_full_greedy_tokens'])} "
+            f"nemo_oracle_match={row['nemo_oracle_match']}"
         )
+        if not row["nemo_oracle_match"]:
+            print(f"    mismatch: {row['nemo_oracle_mismatch']}")
+
+    gold_mismatches = [row for row in rows if not row["nemo_oracle_match"]]
+    if gold_mismatches:
+        print("=== FINALIZE_ENCODER_EXPORT FAIL nemo oracle gold mismatch ===")
+        for row in gold_mismatches:
+            print(
+                f"  row kind={row['kind']} idx={row['sample_index']}: "
+                f"{row['nemo_oracle_mismatch']}"
+            )
+        return 1
 
     report_lines: list[str] = []
     all_trace_byte_exact = True

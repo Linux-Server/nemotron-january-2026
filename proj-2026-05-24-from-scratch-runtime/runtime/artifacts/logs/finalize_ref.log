@@ -1,0 +1,172 @@
+/home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+loading model + stt-benchmark canaries...
+[NeMo I 2026-05-25 13:32:18 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo W 2026-05-25 13:32:18 nemo_logging:405] If you intend to do training or fine-tuning, please call the ModelPT.setup_training_data() method and provide a valid configuration file to setup the train data loader.
+    Train config : 
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    input_cfg: null
+    tarred_audio_filepaths: null
+    manifest_filepath: null
+    sample_rate: 16000
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    max_duration: 40.0
+    min_duration: 0.1
+    text_field: answer
+    batch_duration: null
+    use_bucketing: true
+    max_tps: null
+    bucket_duration_bins: null
+    bucket_batch_size: null
+    num_buckets: null
+    bucket_buffer_size: null
+    shuffle_buffer_size: null
+    augmentor: null
+    
+[NeMo W 2026-05-25 13:32:18 nemo_logging:405] If you intend to do validation, please call the ModelPT.setup_validation_data() or ModelPT.setup_multiple_validation_data() method and provide a valid configuration file to setup the validation data loader(s). 
+    Validation config : 
+    use_lhotse: true
+    manifest_filepath: /data/ASR/en/librispeech/test-other.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    max_duration: 40.0
+    min_duration: 0.1
+    num_workers: 2
+    pin_memory: true
+    text_field: answer
+    tarred_audio_filepaths: null
+    
+[NeMo I 2026-05-25 13:32:18 nemo_logging:393] PADDING: 0
+[NeMo I 2026-05-25 13:32:20 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 13:32:20 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 13:32:20 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 13:32:20 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 13:32:20 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 13:32:20 nemo_logging:393] Model EncDecRNNTBPEModel was successfully restored from /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-streaming-en-0.6b/snapshots/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4/nemotron-speech-streaming-en-0.6b.nemo.
+[NeMo I 2026-05-25 13:32:21 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 13:32:21 nemo_logging:393] Changed decoding strategy to 
+    model_type: rnnt
+    strategy: greedy_batch
+    compute_hypothesis_token_set: false
+    preserve_alignments: null
+    tdt_include_token_duration: null
+    confidence_cfg:
+      preserve_frame_confidence: false
+      preserve_token_confidence: false
+      preserve_word_confidence: false
+      exclude_blank: true
+      aggregation: min
+      tdt_include_duration: false
+      method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+    fused_batch_size: null
+    compute_timestamps: null
+    compute_langs: false
+    word_seperator: ' '
+    segment_seperators:
+    - .
+    - '!'
+    - '?'
+    segment_gap_threshold: null
+    rnnt_timestamp_type: all
+    greedy:
+      max_symbols_per_step: 10
+      preserve_alignments: false
+      preserve_frame_confidence: false
+      tdt_include_token_duration: false
+      tdt_include_duration_confidence: false
+      confidence_method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+      loop_labels: true
+      use_cuda_graph_decoder: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      max_symbols: 10
+    beam:
+      beam_size: 4
+      search_type: default
+      score_norm: true
+      return_best_hypothesis: true
+      tsd_max_sym_exp_per_step: 50
+      alsd_max_target_len: 1.0
+      nsc_max_timesteps_expansion: 1
+      nsc_prefix_alpha: 1
+      maes_num_steps: 2
+      maes_prefix_alpha: 1
+      maes_expansion_gamma: 2.3
+      maes_expansion_beta: 2
+      language_model: null
+      softmax_temperature: 1.0
+      preserve_alignments: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      hat_subtract_ilm: false
+      hat_ilm_weight: 0.0
+      max_symbols_per_step: 10
+      blank_lm_score_mode: LM_WEIGHTED_FULL
+      pruning_mode: LATE
+      allow_cuda_graphs: true
+    temperature: 1.0
+    durations: []
+    big_blank_durations: []
+    
+Using the latest cached version of the dataset since pipecat-ai/stt-benchmark-data couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'default' at /home/khkramer/.cache/huggingface/datasets/pipecat-ai___stt-benchmark-data/default/0.0.0/3fe50170d520c951957b86996ef082a6ab87b394 (last modified on Thu Feb 12 16:16:49 2026).
+geometry shift=16 pre=9 drop=2 final_padding_frames=32 fixed_preproc_samples=10080
+
+T1 finalize canary (gate: token-exact vs NeMo chunked stream+finalize oracle):
+  [PASS] idx=4 id=e820357c-d0b5-11dd-6085-7c8a73e9d335 steady/final/oracle/offline tok=46/47/47/47 token_exact=True offline_full_greedy_exact=True recovered=True T=58 drop=2
+    steady  : 'I was wondering if you could help me find the nearest public library that has evening hours on Thursday because I work late'
+    finalize: 'I was wondering if you could help me find the nearest public library that has evening hours on Thursday because I work late and'
+    oracle  : 'I was wondering if you could help me find the nearest public library that has evening hours on Thursday because I work late and'
+    offline_full_greedy diagnostic: 'I was wondering if you could help me find the nearest public library that has evening hours on Thursday because I work late and'
+  [PASS] idx=9 id=bcdf094b-6bc3-e5eb-e041-01a8de913e32 steady/final/oracle/offline tok=65/66/66/66 token_exact=True offline_full_greedy_exact=True recovered=True T=44 drop=2
+    steady  : "I'm trying to dispute a transaction from last month, but the online form keeps giving me an error message right after I upload the supporting documents for the claim"
+    finalize: "I'm trying to dispute a transaction from last month, but the online form keeps giving me an error message right after I upload the supporting documents for the claim and"
+    oracle  : "I'm trying to dispute a transaction from last month, but the online form keeps giving me an error message right after I upload the supporting documents for the claim and"
+    offline_full_greedy diagnostic: "I'm trying to dispute a transaction from last month, but the online form keeps giving me an error message right after I upload the supporting documents for the claim and"
+  [PASS] idx=2 id=e02b3cc7-0a8d-83d6-85a4-1f3240b18e47 steady/final/oracle/offline tok=73/74/74/73 token_exact=True offline_full_greedy_exact=False recovered=True T=45 drop=2
+    steady  : 'Please provide a detailed comparison of the pros and cons of solar panel installation for a home, including initial cost, long term savings, maintenance, and potential environmental benefits'
+    finalize: 'Please provide a detailed comparison of the pros and cons of solar panel installation for a home, including initial cost, long term savings, maintenance, and potential environmental benefits.'
+    oracle  : 'Please provide a detailed comparison of the pros and cons of solar panel installation for a home, including initial cost, long term savings, maintenance, and potential environmental benefits.'
+    offline_full_greedy diagnostic: 'Please provide a detailed comparison of the pros and cons of solar panel installation for a home, including initial cost, long term savings, maintenance, and potential environmental benefits'
+  [PASS] idx=3 id=739f778d-e8e2-be4f-3fe6-015adcac4682 steady/final/oracle/offline tok=77/78/78/79 token_exact=True offline_full_greedy_exact=False recovered=True T=58 drop=2
+    steady  : 'Explain the difference between a high pressure and a low pressure weather system and describe how each one typically affects the local weather conditions such as temperature, wind, and the chance of precipitation'
+    finalize: 'Explain the difference between a high pressure and a low pressure weather system and describe how each one typically affects the local weather conditions such as temperature, wind, and the chance of precipitation.'
+    oracle  : 'Explain the difference between a high pressure and a low pressure weather system and describe how each one typically affects the local weather conditions such as temperature, wind, and the chance of precipitation.'
+    offline_full_greedy diagnostic: 'Explain the difference between a high pressure and a low pressure weather system and describe how each one typically affects the local weather conditions, such as temperature, wind, and the chance of precipitation.'
+  summary: canary=PASS token_exact=4/4 visible_recovery=4/4
+
+parent-byte-identical after speculative finish:
+  [PASS] parent ASR state unchanged after _finish_speculative
+
+reset/resume:
+  [PASS] first_state=STREAMING next_steady_frames=1056 final_tok=47 oracle_tok=47
+
+vad_start cancellation:
+  [PASS] held=320 flushed=True steady_frames=160 final_tok=5 oracle_tok=5
+
+residual-frame boundary sweep:
+  [PASS] cases=42 first=20 continuation=21 empty=1
+
+=== FINALIZE_REF PASS ===
