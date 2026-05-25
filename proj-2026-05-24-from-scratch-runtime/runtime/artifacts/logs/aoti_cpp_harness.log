@@ -1,0 +1,65 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+TORCH_ROOT=/usr/local/lib/python3.12/dist-packages/torch
+wrote /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/t2a_io_bundle.ts (eager-ref out0..4 + python-aoti aoti0..4)
+BUILD OK
+=== C++ AOTIModelPackageLoader: /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_steady_aoti.pt2 ===
+loaded; call_spec entries=2
+(1a) C++ run() vs PYTHON aoti_load_package output (must be byte-exact):
+    enc_out      byte-equal=1 max_abs_diff=0.000e+00
+    enc_len      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch     byte-equal=1 max_abs_diff=0.000e+00
+    cache_t      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch_len byte-equal=1 max_abs_diff=0.000e+00
+  [cpp-vs-python] BYTE-EXACT (maxdiff 0.000e+00)
+(1b) C++ run() vs EAGER reference (context — expect the same 1.66e-2 as Python):
+    enc_out      byte-equal=0 max_abs_diff=1.991e-05
+    enc_len      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch     byte-equal=0 max_abs_diff=7.193e-05
+    cache_t      byte-equal=0 max_abs_diff=1.663e-02
+    cache_ch_len byte-equal=1 max_abs_diff=0.000e+00
+  [cpp-vs-eager] NOT byte-exact (maxdiff 1.663e-02)
+(2) explicit non-default CUDA stream:
+    enc_out      byte-equal=1 max_abs_diff=0.000e+00
+    enc_len      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch     byte-equal=1 max_abs_diff=0.000e+00
+    cache_t      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch_len byte-equal=1 max_abs_diff=0.000e+00
+  [explicit-stream-vs-default] BYTE-EXACT (maxdiff 0.000e+00)
+(3) explicit device_index=0 (vs Python aoti output):
+    enc_out      byte-equal=1 max_abs_diff=0.000e+00
+    enc_len      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch     byte-equal=1 max_abs_diff=0.000e+00
+    cache_t      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch_len byte-equal=1 max_abs_diff=0.000e+00
+  [device0-vs-python] BYTE-EXACT (maxdiff 0.000e+00)
+(4) output ownership: call-1 outputs unmutated after a 2nd run = 1
+(5) non-contiguous chunk seam (is_contiguous=0) — expect DIVERGENCE (documents the contiguity requirement):
+    enc_out      byte-equal=0 max_abs_diff=1.539e-02
+    enc_len      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch     byte-equal=0 max_abs_diff=4.540e-01
+    cache_t      byte-equal=0 max_abs_diff=2.931e+01
+    cache_ch_len byte-equal=1 max_abs_diff=0.000e+00
+  [noncontig-vs-default] NOT byte-exact (maxdiff 2.931e+01)
+    after .contiguous() (must match default):
+    enc_out      byte-equal=1 max_abs_diff=0.000e+00
+    enc_len      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch     byte-equal=1 max_abs_diff=0.000e+00
+    cache_t      byte-equal=1 max_abs_diff=0.000e+00
+    cache_ch_len byte-equal=1 max_abs_diff=0.000e+00
+  [contiguous-fix] BYTE-EXACT (maxdiff 0.000e+00)
+=== ACTION D CLOSE: C++==Python(byte-exact)=1 | stream-invariant=1 | device0==Python=1 | no-alias=1 | noncontig-diverges(req .contiguous)=1 ===
+=== C++ AOTI path VALIDATED: byte-for-byte identical to Python aoti_load_package; seams characterized (inputs MUST be contiguous) ===

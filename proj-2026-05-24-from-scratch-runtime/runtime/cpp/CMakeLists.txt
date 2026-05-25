@@ -28,3 +28,11 @@ target_compile_definitions(steady PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(steady PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(steady torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 set_target_properties(steady PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+
+# 1.2b-wire-C++: native AOTIModelPackageLoader harness (closes action D). Build+run in the container (needs the AOTI .so).
+add_executable(aoti_encoder aoti_encoder_main.cpp)
+target_include_directories(aoti_encoder PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
+target_compile_definitions(aoti_encoder PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+target_link_directories(aoti_encoder PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
+target_link_libraries(aoti_encoder torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+set_target_properties(aoti_encoder PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
