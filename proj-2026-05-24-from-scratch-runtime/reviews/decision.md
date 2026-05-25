@@ -73,6 +73,16 @@ multi-thread intake** reclaiming the idle GPU.
 - **Net:** the project go/no-go now reduces to **(0.1b ≥1.5× on L40S)** AND the downstream **B1 byte-exact feasibility
   (0.6a decode + 0.2 encoder)**. Conjunct 2 is already confirmed; conjunct 1 is satisfied pending the 0.1b number.
 
+## 0.1b microbench — L40S GATE: **PASS** (~2–2.5×, ≥1.5× cleared) — 2026-05-24
+Ran on AWS g6e.8xlarge (L40S, terminated+leak-checked clean) — `spikes/0.1-overlap-ablation/microbench/RESULTS-L40S.md`.
+**lanes=1 knee ≈16 streams with GPU only 67% (33% idle, wasted) = the single-thread intake wall; multi-thread sustains
+~32–40 (GPU-bound at 80–98%; lanes=12≡lanes=8 → the ceiling is the real encoder compute, not the lanes).** → native
+**≈2–2.5× density on L40S** (16→~32–40), in ONE process vs production's ~16–20/box across K=3 procs. **The ≥1.5× gate is
+CLEARED; conjunct 2 confirmed on the deploy target.** Caveats: NO finalize path yet (would lower the multiplier toward
+~1.5–2× — confirm before Phase-1 funding); K×model-copy OOM'd lanes=32 (shared-weights/0.9 needed, but density is
+GPU-bound not memory-bound). **Net: GO signal stands on the real deploy GPU; the one remaining check is the finalize
+path.** TorchScript `.ts` traced on 5090 loaded + graph-captured on L40S (portability confirmed).
+
 ## 0.1b microbench — 5090 PRELIMINARY GO signal (2026-05-24)
 Built (libtorch 2.8 manual-link, no nvcc) + ran on the 5090 (`spikes/0.1-overlap-ablation/microbench/RESULTS-5090.md`).
 Calibrated `decode_host_us=10000` to the measured per-chunk thread-busy (~10.4 ms, gil-attribution). **lanes=1 knee ≈16

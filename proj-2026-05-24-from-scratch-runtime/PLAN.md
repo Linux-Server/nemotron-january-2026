@@ -4,8 +4,10 @@ Project directory: `./proj-2026-05-24-from-scratch-runtime`
 Status: **v7 — REVIEWED + POST-PYTHON + DECISIONS SET** (5 paired adversarial rounds + path-forward review folded;
 `reviews/`). Both BET conjuncts now resolved/confirmed (conjunct 2 production-confirmed; conjunct 1 = strategic bet +
 ≥1.5× floor). **Language decided: C++ for the model worker (tch-rs can't do CUDA graphs).** Pin: libtorch 2.8.0+cu128 +
-nemo 2.4.1. Encoder export proven feasible (real run). **The project now reduces to ONE gating experiment: the 0.1b
-microbench clearing ≥1.5× L40S density** → then fund the Wave-2 byte-exact ports; else STOP. See the Review log.
+nemo 2.4.1. Encoder export proven feasible (real run). **The 0.1b gate CLEARED: ~2–2.5× on L40S (`microbench/RESULTS-L40S.md`) — conjunct 2
+confirmed on the deploy target.** One confirming check remains before Phase-1 funding: add the **finalize path** to 0.1b
+(GPU-load sensitivity) to verify the multiplier holds ≥1.5× with finalizes interspersed. If it does → GO to fund the
+Wave-2 byte-exact ports (0.6a decode / 0.2 encoder). See the Review log.
 
 > **TL;DR.** A persistent native (Rust/C++) ASR serving runtime to lift the **p95/p99 tail + streams/box density** —
 > **NOT p50** (VAD+WAN-bound; only ~12–19 ms is movable by any engine). The real bottleneck is the single asyncio
@@ -648,7 +650,7 @@ start.
 | 0.9 | Model mutability audit | A | **scaffolded — analysis COMPLETE** | `spikes/0.9-mutability-audit.md`; 8 mutable surfaces enumerated + pure-param rule |
 | 0.11 | CUDA-graph ownership-model spike | A | **scaffolded — analysis done; mem TBM on GPU** | `spikes/0.11-graph-ownership.md`; per-lane vs shared-mutex vs none |
 | 0.7 | aarch64 toolchain pre-check | A | scaffolded (template) | `spikes/0.7-aarch64/`; run BLOCKED on GB10 box |
-| 0.1b | Native launch-overlap microbench | B | **BUILT + 5090 RUN: ≥3× (PRELIM GO)** | `microbench/RESULTS-5090.md`: lanes=1 knee ≈16 (matches real server → calibration validated), lanes=8 ≥48 (p95 94ms, GPU 60%). **Conjunct 2 empirically confirmed; clears ≥1.5× on 5090.** Caveats: mock-decode pure-host, no finalize path. **GATE = L40S (BLOCKED on AWS re-auth)** + finalize/GPU-load sensitivity |
+| 0.1b | Native launch-overlap microbench | B | **L40S GATE PASS ~2–2.5× (≥1.5× cleared)** | `microbench/RESULTS-L40S.md` (+5090 ≥3×): L40S lanes=1 knee ≈16 (GPU 67%, 33% idle) → lanes=8 ~32–40 (GPU-bound; lanes=12≡8). **Conjunct 2 confirmed on the deploy target.** Box terminated+leak-checked. Remaining: **finalize path** (+ GPU-load sensitivity) to confirm ≥1.5× holds before Phase-1 funding; shared-weights (0.9) for the K×model-copy OOM |
 | 0.1a | Overlap/MPS ablation (real Python path) | B | pending | wire the Python Step-5 GIL attribution; on-prod-topology cross-check |
 | ~~0.3~~ | ~~py3.13t probe~~ | — | **REMOVED 2026-05-24** | B4 rejected; conjunct-2 proof moved to 0.1b native microbench |
 | 0.0-pre | Residual-ceiling arithmetic | gate | **DONE (updated post-Python)** | `reviews/decision.md`: baseline L40S ~16–20/box (K=3); **conjunct 2 CONFIRMED** (single-thread intake wall, GPU 40–65% idle); native ceiling ~28–40/box TBM by 0.1; no p50, no L4 gain |
