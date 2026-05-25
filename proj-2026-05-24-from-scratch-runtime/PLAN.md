@@ -634,7 +634,7 @@ start.
 | 0.9 | Model mutability audit | A | **scaffolded — analysis COMPLETE** | `spikes/0.9-mutability-audit.md`; 8 mutable surfaces enumerated + pure-param rule |
 | 0.11 | CUDA-graph ownership-model spike | A | **scaffolded — analysis done; mem TBM on GPU** | `spikes/0.11-graph-ownership.md`; per-lane vs shared-mutex vs none |
 | 0.7 | aarch64 toolchain pre-check | A | scaffolded (template) | `spikes/0.7-aarch64/`; run BLOCKED on GB10 box |
-| 0.1 | Overlap/MPS ablation + native launch-overlap microbench | B | scaffolded (skeleton) | `spikes/0.1-overlap-ablation/`; 0.1b microbench now carries the conjunct-2 proof (was B4); run BLOCKED on GPU + post-Python baseline |
+| 0.1 | Overlap/MPS ablation (0.1a) + native launch-overlap microbench (0.1b) | B | 0.1b spec'd | `spikes/0.1-overlap-ablation/` + `0.1b-microbench-spec.md`; 0.1b is the conjunct-2 PROOF + conjunct-1 upside measurement (post-Python: the wall is single-thread intake); run BLOCKED on the libtorch pin + GPU |
 | ~~0.3~~ | ~~py3.13t probe~~ | — | **REMOVED 2026-05-24** | B4 rejected; conjunct-2 proof moved to 0.1b native microbench |
 | 0.0-pre | Residual-ceiling arithmetic | gate | **DONE (updated post-Python)** | `reviews/decision.md`: baseline L40S ~16–20/box (K=3); **conjunct 2 CONFIRMED** (single-thread intake wall, GPU 40–65% idle); native ceiling ~28–40/box TBM by 0.1; no p50, no L4 gain |
 | 0.5 | Trace-driven batching sim + graph-capacity model | B | **synthetic DONE; real traces pending** | `spikes/0.5-batching-sim/FINDINGS.md`: realistic mean B≈1.5–2.1 → **3–5× claim effectively dead**; density must come from shared-weights/overlap, not batch-fill |
