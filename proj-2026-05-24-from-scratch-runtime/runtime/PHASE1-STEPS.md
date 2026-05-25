@@ -9,9 +9,10 @@ Legend: **REVIEW** = R0 (self-review) / R1 (Opus solo) / R2 (paired Codex+Opus a
 | # | Step | files | gate | REVIEW | GPU |
 |---|---|---|---|---|---|
 | **1.0** | State-ownership design (DONE — `1.0-state-ownership-design.md`) | — | reviewed | done | — |
-| **1.1a** | **Verified Python REFERENCE decode** (greedy_batch label-looping via model.decoder+joint) byte-exact vs NeMo on the fixtures | `runtime/ref_decode.py` | **byte-exact y_sequence on all fixtures** — the real go/no-go | **R2** | 5090 |
-| 1.1b | Add missing fixtures (max_symbols saturation, streaming partial-hyp continuation, per-token state) | `runtime/fixtures/` | fixtures exist + ref-decode matches | R1 | 5090 |
-| **1.2a** | C++ port of the reference decode (export pred+joint; libtorch; eager `.item()`-free) | `runtime/cpp/decode.*` | byte/state-exact vs the Python ref + fixtures | **R2** | 5090 |
+| **1.1a** | **Verified Python REFERENCE decode** — ✅ **DONE 6/6 byte-exact** vs NeMo (`ref_decode.py`) | done | the real go/no-go — PASS | done | 5090 |
+| 1.1b | streaming partial-hyp continuation — ✅ **DONE 18/18** (2/3/5-chunk carry == full). *Remaining minor:* max_symbols saturation fixture | done | PASS | done | 5090 |
+| **1.2a** | C++ port of the decode — ✅ **DONE: BUILDS + BYTE-EXACT** (`cpp/decode_main.cpp`, loads exported `.ts`) | done | byte-exact vs gold — PASS | done | 5090 |
+| 1.2a+ | C++ streaming-state-carry (resumable decode across chunks) + max_symbols fixture | `cpp/decode.*` | matches the Python ref's 18/18 | R1 | 5090 |
 | 1.2b | C++ steady path: native preprocessor (0.8) + encoder graph + decode → emit; carry cache+decoder state | `runtime/cpp/steady.*` | T1 single-stream on 5090 (WER-CI + event seq) ; T2a encoder byte-exact | **R2** | 5090 |
 | 1.3 | C++ finalize path + the STREAMING→PENDING→FINALIZED state machine + fork isolation (FORK_ASSERT) | `runtime/cpp/finalize.*` | T1 finalize canary + reset/resume trace suite | **R2** | 5090 |
 | 1.4 | Single-session end-to-end (WS ingest → steady+finalize → emit) drop-in vs Python on one stream | `runtime/cpp/session.*`, `ws.*` | T1 single-stream behavioral equivalence | R1 | 5090 |
