@@ -21,6 +21,7 @@
 #include <torch/script.h>
 #include <ATen/cuda/CUDAGraph.h>
 #include <c10/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <nvml.h>
 
@@ -31,6 +32,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -135,13 +137,14 @@ int main(int argc, char** argv){
   auto proto = make_proto();
 
   // One lane per dispatcher thread (no cross-thread graph sharing). Each loads its own module handle.
-  std::vector<Lane> lanes;
-  lanes.reserve(a.lanes);
+  // unique_ptr: CUDAGraph is non-movable (holds an incomplete-type intrusive_ptr), so Lane must never be moved/copied.
+  std::vector<std::unique_ptr<Lane>> lanes;
   for(int i=0;i<a.lanes;i++){
     torch::jit::Module m = torch::jit::load(a.module); m.to(torch::kCUDA); m.eval();
-    lanes.emplace_back(c10::cuda::getStreamFromPool(false), std::move(m));
-    lanes.back().prepare(proto);
-    lanes.back().capture();
+    auto lane = std::make_unique<Lane>(c10::cuda::getStreamFromPool(false), std::move(m));
+    lane->prepare(proto);
+    lane->capture();
+    lanes.push_back(std::move(lane));
   }
 
   IntakeQueue iq;
@@ -151,7 +154,7 @@ int main(int argc, char** argv){
   // Dispatcher threads: thread i owns lane i; pulls chunks, processes on its lane, records latency.
   std::vector<std::thread> workers;
   for(int i=0;i<a.lanes;i++) workers.emplace_back([&,i]{
-    Chunk c; Lane& lane = lanes[i];
+    Chunk c; Lane& lane = *lanes[i];
     while(iq.pop(c)){
       lane.process(proto, a.decode_gpu_iters);
       if(a.decode_host_us>0) std::this_thread::sleep_for(std::chrono::microseconds(a.decode_host_us));
