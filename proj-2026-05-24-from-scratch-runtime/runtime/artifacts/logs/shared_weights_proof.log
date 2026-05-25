@@ -1,0 +1,18 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+fqns=637 matched=637 missing=0 sample_missing=[]
+load_constants OK; running...
+=== constants-on-disk + load_constants: RAN OK, vs eager-ref max_abs_diff=1.663e-02 (expect ~1.66e-2, same as constants-in-so) byte_exact_vs_eager=False ===
