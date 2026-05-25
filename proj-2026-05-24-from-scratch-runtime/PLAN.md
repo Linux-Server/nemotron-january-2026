@@ -1,6 +1,15 @@
 # Plan: From-scratch persistent serving runtime — break the scheduler/launch ceiling
 
 Project directory: `./proj-2026-05-24-from-scratch-runtime`
+
+> **⚠ CLAIMS CORRECTED (work-so-far adversarial review, `reviews/worksofar-FOLDED.md`).** This is a **de-risked NARROW
+> PROTOTYPE**, not a validated production runtime. Corrected: density **L40S 2–2.5× is PRELIMINARY** (mock decode =
+> zero-GPU-load host sleep; needs a realistic encoder-dependent-decode rerun); **0.4 GO is CONDITIONAL** (L40S is
+> steady-only; finalize was a 5090 synthetic); **T2a is Python-export-byte-exact, C++ runtime UNPROVEN**; "byte-exact
+> pipeline/streaming" = **token-exact on ONE clip**, preproc is full-clip-mel-slice (not incremental STFT), decode is
+> token- not state-exact; the "no per-frame `.item()`" density premise is **not implemented** (C++ decode `.item()`s
+> per symbol); shared-weights assumed not built; **EN-only**. See the folded doc for the A–G action list.
+
 Status: **v7 — REVIEWED + POST-PYTHON + DECISIONS SET** (5 paired adversarial rounds + path-forward review folded;
 `reviews/`). Both BET conjuncts now resolved/confirmed (conjunct 2 production-confirmed; conjunct 1 = strategic bet +
 ≥1.5× floor). **Language decided: C++ for the model worker (tch-rs can't do CUDA graphs).** Pin: libtorch 2.8.0+cu128 +

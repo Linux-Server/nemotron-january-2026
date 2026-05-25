@@ -27,14 +27,20 @@ docker run --rm --gpus all nvidia/cuda:12.8.1-devel-ubuntu24.04 bash -c \
 Host prerequisites (present): docker 29, nvidia-container-toolkit 1.19.1, nvidia runtime + CDI (`nvidia.com/gpu=all`),
 1.5 TB free.
 
-## Enter the container (project mounted)
+## Built dev image `nemotron-aoti:cu128` — VERIFIED WORKING (2026-05-25)
+`docker build -t nemotron-aoti:cu128 runtime/container/` (CUDA 12.8 devel + torch 2.8.0 + cmake/g++ + soundfile).
+Smoke (`docker run --rm --gpus all nemotron-aoti:cu128 ...`):
+- **torch 2.8.0+cu128, cuda 12.8, cuda.is_available()=True, device cap (12,0)=sm_120** (5090 visible)
+- **nvcc 12.8.93 compiles `-arch=sm_120`** → `NVCC_sm120_OK` (fails on the host)
+- **`torch._inductor.aot_compile` present** → AOTInductor available
+
+## Enter the container (project + HF model cache mounted, GPU visible)
 ```bash
-./enter.sh        # see enter.sh — runs --gpus all, mounts the repo at /work, HF cache for the model
+./enter.sh                 # uses nemotron-aoti:cu128 if built, else the base CUDA image; --gpus all; cwd=runtime/
+./enter.sh python3 ref_decode.py     # run a script directly (note: nemo is NOT in the image — host-export the .pt2/.ts first)
 ```
-Inside, install the pinned torch once (per container or into a mounted venv):
-```bash
-pip install torch==2.8.0   # cu128 wheel; matches the export producer (T2a)
-```
+The image has **torch + nvcc + AOTInductor**, NOT nemo (model export/fixtures are produced on the host with nemo;
+the container consumes the exported `.pt2`/`.ts` for AOTI compilation + kernel builds).
 
 ## What it's for (next steps)
 1. **1.2b-wire — byte-exact C++ encoder via AOTInductor**: AOTI-compile the T2a `torch.export` steady encoder

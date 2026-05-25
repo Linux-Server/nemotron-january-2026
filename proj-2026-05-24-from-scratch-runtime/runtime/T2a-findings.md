@@ -1,4 +1,9 @@
-# T2a — byte-exact streaming encoder (ACHIEVED via torch.export)
+# T2a — byte-exact streaming encoder: PYTHON EXPORT byte-exact; C++ RUNTIME integration UNPROVEN
+
+> **Correction (work-so-far review, `reviews/worksofar-FOLDED.md`):** "achieved" below means the **Python
+> `ExportedProgram` is byte-exact** — for **steady geometry, ONE clip, ONE cache_len trajectory, first-chunk run
+> eager.** The **C++ runtime integration (AOTInductor .pt2→.so, load, compare) is NOT done**, and first-chunk/finalize/
+> non-multiple/reset/long-clip T2a coverage is pending. Do not read this as "T2a done in the runtime."
 
 ## Result
 `export_t2a.py`: **`torch.export` of the steady `cache_aware_stream_step` is BYTE-EXACT vs eager across all 19 steady
