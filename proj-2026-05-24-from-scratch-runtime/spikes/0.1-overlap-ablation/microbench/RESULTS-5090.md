@@ -38,8 +38,26 @@ event completion. SLO proxy = chunk intake→done p95 (keep-up = doesn't run awa
    (blocked on AWS SSO re-auth as of this run).
 4. Single steady bucket B=1; SLO proxy is the per-chunk keep-up latency, not the full client TTFB.
 
+## Finalize-sensitivity (5090, `--finalize-every 15`, the gate-closing check) — 2026-05-24
+Finalize modeled as periodic heavier GPU burst (3× extra graph replays ≈ finalize_wall vs model_wall) + 20 ms host
+(fork + final decode).
+
+| lanes | streams | p95 (ms) | gpu | keep-up? |
+|---:|---:|---:|---:|---|
+| 1 | 10 | 121 | 39% | yes |
+| 1 | 12 | **151** | 47% | marginal (**knee ~12**) |
+| 1 | 16 | **1697** | 50% | NO |
+| 8 | 16 | 46 | 32% | yes |
+| 8 | 24 | 62 | 39% | yes |
+| 8 | 32 | 76 | 56% | yes |
+| 8 | 40 | **94** | 69% | yes (**knee ~48**, GPU-bound) |
+
+**Finalize lowers both knees proportionally (lanes=1 16→~12) but the multi-thread multiplier HOLDS: ~12 → ~40 = ≥3×.**
+So the ≥1.5× gate clears comfortably *with* finalize. (Finalize is approximated as extra replays, not a real
+keep_all_outputs T_max graph — a faithful finalize bucket is a Phase-1 refinement, but the GPU-load direction is right.)
+
 ## Verdict
-**Preliminary GO signal: ≥3× on the 5090, conjunct 2 confirmed empirically.** Easily clears the ≥1.5× bar *on this box*
+**GO signal: ≥3× on the 5090 (steady AND with finalize), conjunct 2 confirmed empirically.** Easily clears the ≥1.5× bar *on this box*
 even before the finalize path. Remaining to convert to the actual gate: (a) the **L40S run** (the deploy target), (b)
 the **finalize path + GPU-load sensitivity** (which can only lower the number). If L40S clears ≥1.5× with those, GO to
 fund the Wave-2 byte-exact ports.

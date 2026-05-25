@@ -36,6 +36,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -53,6 +54,11 @@ struct Args {
                                // per-chunk thread-busy ~10.4ms (decode 8.2ms + glue) — proj-2026-05-24-0859/gil-attribution.md
   int chunk_ms = 160;          // steady cadence
   int slo_p95_ms = 300;        // SLO budget for the chunk intake->done proxy (tune to the vad_stop->final budget)
+  // Finalize model: with prob 1/finalize_every a chunk is a "finalize" — heavier GPU (extra graph replays, modeling
+  // finalize_wall ~3x model_wall per validation.md) + extra host cost (fork + final decode). 0 = disabled.
+  int finalize_every = 0;      // e.g. 15 ~= one utterance per ~2.4s of 160ms chunks
+  int finalize_gpu_replays = 3;// finalize encoder ~3x a steady chunk's GPU (finalize_wall<=103 vs model_wall<=35)
+  int finalize_host_us = 20000;// finalize fork + final decode host cost (heavier than a steady decode)
 };
 
 static Args parse_args(int argc, char** argv){
@@ -66,6 +72,9 @@ static Args parse_args(int argc, char** argv){
     else if(eq(argv[i],"--decode-host-us")&&i+1<argc) a.decode_host_us=std::atoi(argv[++i]);
     else if(eq(argv[i],"--chunk-ms")&&i+1<argc) a.chunk_ms=std::atoi(argv[++i]);
     else if(eq(argv[i],"--slo-p95-ms")&&i+1<argc) a.slo_p95_ms=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--finalize-every")&&i+1<argc) a.finalize_every=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--finalize-gpu-replays")&&i+1<argc) a.finalize_gpu_replays=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--finalize-host-us")&&i+1<argc) a.finalize_host_us=std::atoi(argv[++i]);
   }
   return a;
 }
@@ -118,6 +127,11 @@ struct Lane {
   }
   void wait(){ done_evt.synchronize(); }   // ~0 if the GPU is keeping up; GROWS when the GPU saturates (catches the
                                            // GPU-bound knee). Per-lane streams still overlap on the GPU across lanes.
+  void finalize_burst(int extra_replays){  // model finalize's heavier GPU (keep_all_outputs T_max ~= 3x steady)
+    c10::cuda::CUDAStreamGuard g(stream);
+    for(int i=0;i<extra_replays;i++) graph.replay();
+    done_evt.record(stream);
+  }
   void finish(){ stream.synchronize(); }
 };
 
@@ -161,9 +175,14 @@ int main(int argc, char** argv){
   std::vector<std::thread> workers;
   for(int i=0;i<a.lanes;i++) workers.emplace_back([&,i]{
     Chunk c; Lane& lane = *lanes[i];
+    std::mt19937 rng(1234u + i); std::uniform_real_distribution<double> uni(0.0,1.0);
     while(iq.pop(c)){
       lane.process(proto, a.decode_gpu_iters);                                    // dispatch encoder async + record event
       if(a.decode_host_us>0) std::this_thread::sleep_for(std::chrono::microseconds(a.decode_host_us)); // GIL-held decode
+      if(a.finalize_every>0 && uni(rng) < 1.0/a.finalize_every){                  // periodic finalize (heavier GPU+host)
+        lane.finalize_burst(a.finalize_gpu_replays);
+        if(a.finalize_host_us>0) std::this_thread::sleep_for(std::chrono::microseconds(a.finalize_host_us));
+      }
       lane.wait();                                                                // wait GPU (≈0 unless GPU-saturated)
       double lat = ms_since(c.ready);
       { std::lock_guard<std::mutex> l(lat_m); latencies.push_back(lat); }
