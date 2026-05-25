@@ -23,6 +23,7 @@
 #include <c10/cuda/CUDAStream.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/CUDAEvent.h>
 #include <nvml.h>
 
 #include <algorithm>
@@ -48,7 +49,8 @@ struct Args {
   int streams = 8;
   int duration_s = 30;
   int decode_gpu_iters = 0;    // mock-decode GPU cost: extra dummy-GEMM iters per chunk (calibrate)
-  int decode_host_us = 200;    // mock-decode host cost: the GIL-held .item()-loop stand-in (calibrate)
+  int decode_host_us = 10000;  // mock-decode host cost: the GIL-held decode stand-in. CALIBRATED to the measured
+                               // per-chunk thread-busy ~10.4ms (decode 8.2ms + glue) — proj-2026-05-24-0859/gil-attribution.md
   int chunk_ms = 160;          // steady cadence
   int slo_p95_ms = 300;        // SLO budget for the chunk intake->done proxy (tune to the vad_stop->final budget)
 };
@@ -90,6 +92,7 @@ struct Lane {
   std::vector<torch::jit::IValue> ivals;
   torch::jit::Module mod;          // each lane gets its own module handle (forward is stateless post-load)
   torch::Tensor mock_a, mock_b;    // mock-decode dummy GEMM operands
+  at::cuda::CUDAEvent done_evt;    // per-lane completion event (lane is serial: dispatch -> host decode -> wait)
   Lane(c10::cuda::CUDAStream s, torch::jit::Module m): stream(s), mod(std::move(m)) {}
 
   void prepare(const std::vector<torch::Tensor>& proto){
@@ -109,10 +112,13 @@ struct Lane {
   void process(const std::vector<torch::Tensor>& inputs, int decode_gpu_iters){
     c10::cuda::CUDAStreamGuard g(stream);
     for(size_t i=0;i<static_in.size();++i) static_in[i].copy_(inputs[i], /*non_blocking=*/true);
-    graph.replay();
+    graph.replay();                        // encoder dispatched ASYNC on this lane's stream (pipelines; NOT blocked on)
     for(int i=0;i<decode_gpu_iters;i++){ auto c = torch::matmul(mock_a, mock_b); mock_a = c; } // mock decode GPU cost
-    stream.synchronize();                  // lane-end completion. TODO: CUDA-event dependency variant (native lever)
+    done_evt.record(stream);               // mark this chunk's GPU work; the worker host-decodes, THEN waits on it
   }
+  void wait(){ done_evt.synchronize(); }   // ~0 if the GPU is keeping up; GROWS when the GPU saturates (catches the
+                                           // GPU-bound knee). Per-lane streams still overlap on the GPU across lanes.
+  void finish(){ stream.synchronize(); }
 };
 
 struct Chunk { int stream_id; clk::time_point ready; };
@@ -156,8 +162,9 @@ int main(int argc, char** argv){
   for(int i=0;i<a.lanes;i++) workers.emplace_back([&,i]{
     Chunk c; Lane& lane = *lanes[i];
     while(iq.pop(c)){
-      lane.process(proto, a.decode_gpu_iters);
-      if(a.decode_host_us>0) std::this_thread::sleep_for(std::chrono::microseconds(a.decode_host_us));
+      lane.process(proto, a.decode_gpu_iters);                                    // dispatch encoder async + record event
+      if(a.decode_host_us>0) std::this_thread::sleep_for(std::chrono::microseconds(a.decode_host_us)); // GIL-held decode
+      lane.wait();                                                                // wait GPU (≈0 unless GPU-saturated)
       double lat = ms_since(c.ready);
       { std::lock_guard<std::mutex> l(lat_m); latencies.push_back(lat); }
     }
@@ -185,6 +192,7 @@ int main(int argc, char** argv){
   run=false; iq.stop=true; iq.cv.notify_all();
   for(auto& g: gens) g.join();
   for(auto& w: workers) w.join();
+  for(auto& l: lanes) l->finish();   // drain pipelined GPU work
   if(util_thread.joinable()) util_thread.join();
 
   std::printf("=== lanes=%d streams=%d decode_host_us=%d decode_gpu_iters=%d ===\n",

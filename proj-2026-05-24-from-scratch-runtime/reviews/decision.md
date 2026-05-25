@@ -73,6 +73,16 @@ multi-thread intake** reclaiming the idle GPU.
 - **Net:** the project go/no-go now reduces to **(0.1b ≥1.5× on L40S)** AND the downstream **B1 byte-exact feasibility
   (0.6a decode + 0.2 encoder)**. Conjunct 2 is already confirmed; conjunct 1 is satisfied pending the 0.1b number.
 
+## 0.1b microbench — 5090 PRELIMINARY GO signal (2026-05-24)
+Built (libtorch 2.8 manual-link, no nvcc) + ran on the 5090 (`spikes/0.1-overlap-ablation/microbench/RESULTS-5090.md`).
+Calibrated `decode_host_us=10000` to the measured per-chunk thread-busy (~10.4 ms, gil-attribution). **lanes=1 knee ≈16
+streams (matches the real server's 16-stream keep-up → calibration validated); lanes=8 sustains ≥48 (p95 94 ms, GPU
+60%, knee not reached) → ≥3× (ceiling ~4–5×).** Mechanism matches the production diagnosis: the GIL-held decode is
+host-bound (GPU idle during it), so multi-thread intake fills the idle GPU. **Conjunct 2 empirically confirmed; clears
+≥1.5× on the 5090.** Caveats: mock decode is pure-host (no GPU load — defensible per gil-attribution, but a model; needs
+`--decode-gpu-iters` sensitivity), NO finalize path yet (would lower the number), and **the ≥1.5× GATE is L40S** (the
+deploy target — blocked on AWS SSO re-auth). GO/NO-GO pending the L40S run + finalize/GPU-load sensitivity.
+
 ## Language decision — PRELIMINARY: C++ for the hot path (2026-05-24)
 The tch-rs gate ran (`spikes/0.2-pin-and-export/README.md`): pin = **torch/libtorch 2.8.0+cu128 + nemo 2.4.1** (proven
 working, model cached locally, sm_120 ✓). tch-rs is version-current (libtorch 2.11) but **CUDA-graph capture is
