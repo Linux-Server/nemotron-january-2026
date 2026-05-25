@@ -1,0 +1,167 @@
+/home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+[NeMo I 2026-05-25 10:01:57 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo W 2026-05-25 10:01:57 nemo_logging:405] If you intend to do training or fine-tuning, please call the ModelPT.setup_training_data() method and provide a valid configuration file to setup the train data loader.
+    Train config : 
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    input_cfg: null
+    tarred_audio_filepaths: null
+    manifest_filepath: null
+    sample_rate: 16000
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    max_duration: 40.0
+    min_duration: 0.1
+    text_field: answer
+    batch_duration: null
+    use_bucketing: true
+    max_tps: null
+    bucket_duration_bins: null
+    bucket_batch_size: null
+    num_buckets: null
+    bucket_buffer_size: null
+    shuffle_buffer_size: null
+    augmentor: null
+    
+[NeMo W 2026-05-25 10:01:57 nemo_logging:405] If you intend to do validation, please call the ModelPT.setup_validation_data() or ModelPT.setup_multiple_validation_data() method and provide a valid configuration file to setup the validation data loader(s). 
+    Validation config : 
+    use_lhotse: true
+    manifest_filepath: /data/ASR/en/librispeech/test-other.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    max_duration: 40.0
+    min_duration: 0.1
+    num_workers: 2
+    pin_memory: true
+    text_field: answer
+    tarred_audio_filepaths: null
+    
+[NeMo I 2026-05-25 10:01:57 nemo_logging:393] PADDING: 0
+[NeMo I 2026-05-25 10:01:59 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 10:01:59 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 10:01:59 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 10:01:59 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 10:01:59 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 10:02:00 nemo_logging:393] Model EncDecRNNTBPEModel was successfully restored from /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-streaming-en-0.6b/snapshots/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4/nemotron-speech-streaming-en-0.6b.nemo.
+[NeMo I 2026-05-25 10:02:00 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 10:02:00 nemo_logging:393] Changed decoding strategy to 
+    model_type: rnnt
+    strategy: greedy_batch
+    compute_hypothesis_token_set: false
+    preserve_alignments: null
+    tdt_include_token_duration: null
+    confidence_cfg:
+      preserve_frame_confidence: false
+      preserve_token_confidence: false
+      preserve_word_confidence: false
+      exclude_blank: true
+      aggregation: min
+      tdt_include_duration: false
+      method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+    fused_batch_size: null
+    compute_timestamps: null
+    compute_langs: false
+    word_seperator: ' '
+    segment_seperators:
+    - .
+    - '!'
+    - '?'
+    segment_gap_threshold: null
+    rnnt_timestamp_type: all
+    greedy:
+      max_symbols_per_step: 10
+      preserve_alignments: false
+      preserve_frame_confidence: false
+      tdt_include_token_duration: false
+      tdt_include_duration_confidence: false
+      confidence_method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+      loop_labels: true
+      use_cuda_graph_decoder: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      max_symbols: 10
+    beam:
+      beam_size: 4
+      search_type: default
+      score_norm: true
+      return_best_hypothesis: true
+      tsd_max_sym_exp_per_step: 50
+      alsd_max_target_len: 1.0
+      nsc_max_timesteps_expansion: 1
+      nsc_prefix_alpha: 1
+      maes_num_steps: 2
+      maes_prefix_alpha: 1
+      maes_expansion_gamma: 2.3
+      maes_expansion_beta: 2
+      language_model: null
+      softmax_temperature: 1.0
+      preserve_alignments: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      hat_subtract_ilm: false
+      hat_ilm_weight: 0.0
+      max_symbols_per_step: 10
+      blank_lm_score_mode: LM_WEIGHTED_FULL
+      pruning_mode: LATE
+      allow_cuda_graphs: true
+    temperature: 1.0
+    durations: []
+    big_blank_durations: []
+    
+Using the latest cached version of the dataset since pipecat-ai/stt-benchmark-data couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'default' at /home/khkramer/.cache/huggingface/datasets/pipecat-ai___stt-benchmark-data/default/0.0.0/3fe50170d520c951957b86996ef082a6ab87b394 (last modified on Thu Feb 12 16:16:49 2026).
+stream: 15 clips concat -> 132.8s, mel 13280 frames, 830 chunks (829 AOTI-steady)
+cache_t drift: max=1.154e-01 mean=1.573e-02 | first-half mean=1.628e-02 second-half mean=1.517e-02 (grow ratio 0.93x)
+per-chunk cache_t diff (every ~10th chunk):
+  chunk    0: cache_t=0.000e+00 cache_ch=0.000e+00 enc_out=0.000e+00
+  chunk   33: cache_t=9.542e-03 cache_ch=4.817e-04 enc_out=2.320e-05
+  chunk   66: cache_t=9.150e-03 cache_ch=3.197e-04 enc_out=2.605e-05
+  chunk   99: cache_t=1.896e-02 cache_ch=2.638e-04 enc_out=6.091e-05
+  chunk  132: cache_t=5.507e-02 cache_ch=1.843e-03 enc_out=2.826e-04
+  chunk  165: cache_t=1.420e-02 cache_ch=8.423e-04 enc_out=3.882e-05
+  chunk  198: cache_t=9.552e-03 cache_ch=2.128e-04 enc_out=3.310e-05
+  chunk  231: cache_t=1.911e-02 cache_ch=1.204e-03 enc_out=3.134e-05
+  chunk  264: cache_t=1.150e-02 cache_ch=4.173e-04 enc_out=9.418e-05
+  chunk  297: cache_t=1.131e-02 cache_ch=1.182e-03 enc_out=9.271e-05
+  chunk  330: cache_t=1.257e-02 cache_ch=5.391e-03 enc_out=1.972e-05
+  chunk  363: cache_t=1.521e-02 cache_ch=8.844e-04 enc_out=7.526e-05
+  chunk  396: cache_t=1.134e-02 cache_ch=1.142e-03 enc_out=2.329e-05
+  chunk  429: cache_t=1.092e-02 cache_ch=4.785e-04 enc_out=2.130e-05
+  chunk  462: cache_t=9.441e-03 cache_ch=1.487e-04 enc_out=2.634e-05
+  chunk  495: cache_t=1.009e-02 cache_ch=9.552e-04 enc_out=8.000e-05
+  chunk  528: cache_t=1.557e-02 cache_ch=6.218e-04 enc_out=1.958e-05
+  chunk  561: cache_t=9.078e-03 cache_ch=5.207e-04 enc_out=2.438e-05
+  chunk  594: cache_t=1.727e-02 cache_ch=8.784e-03 enc_out=3.701e-05
+  chunk  627: cache_t=9.577e-03 cache_ch=1.914e-04 enc_out=2.423e-05
+  chunk  660: cache_t=1.685e-02 cache_ch=1.819e-04 enc_out=5.251e-05
+  chunk  693: cache_t=1.109e-02 cache_ch=6.271e-04 enc_out=5.355e-05
+  chunk  726: cache_t=1.294e-02 cache_ch=1.888e-04 enc_out=5.813e-05
+  chunk  759: cache_t=1.400e-02 cache_ch=6.493e-04 enc_out=5.891e-05
+  chunk  792: cache_t=1.053e-02 cache_ch=1.166e-03 enc_out=2.091e-05
+  chunk  825: cache_t=1.320e-02 cache_ch=2.329e-04 enc_out=6.035e-05
+tokens: eager 669 | aoti 669 | identical=True
+min argmax margin (top1-top2 logit): eager=0.004 aoti=0.005  (smaller = closer to a flip)
+eager text: "This is Samantha Lee with a knight to rem how much juice is in one lime, please provide a detailed comparison of the pros and cons of solar panel installation for a home, including initial cost, long term savings, maintenance, and potential environmental benefits explain the difference between a high pressure and a low pressure weather system and describe how each one typically affects the local weather conditions such as temperature, wind, and the chance of precipitation. I was wondering if you could help me find the nearest public library that has evening hours on Thursday because I work late and send it the little green light on my laptop charger isn't on anymore, so could you compare the main features and pricing plans of the top three cloud storage providers to help me decide which service best suits my personal data backup needs? I'm planning a trip to the National Park next month and I need to find out if I have to reserve a time slot to enter the park or if I can. I'm trying to dispute a transaction from last month, but the online form keeps giving me an error message right after I upload the supporting documents for the claim and we might need to prepare for the possibility that I need to find a replacement water filter for my specific refrigerator model, but I can't find the model number anywhere on the unit and I was hoping you could help me identify it. Please add organic olive oil wheat and three ripe avocados to my shopping list. I need to find a reputable and insured local moving company that is available on the last weekend of this month for a two bedroom apartment move across town with packing services included. Can you tell me about the scientific theory of plate tectonics and explain how the movement of those plates is directly responsible for earthquakes"
+aoti  text: "This is Samantha Lee with a knight to rem how much juice is in one lime, please provide a detailed comparison of the pros and cons of solar panel installation for a home, including initial cost, long term savings, maintenance, and potential environmental benefits explain the difference between a high pressure and a low pressure weather system and describe how each one typically affects the local weather conditions such as temperature, wind, and the chance of precipitation. I was wondering if you could help me find the nearest public library that has evening hours on Thursday because I work late and send it the little green light on my laptop charger isn't on anymore, so could you compare the main features and pricing plans of the top three cloud storage providers to help me decide which service best suits my personal data backup needs? I'm planning a trip to the National Park next month and I need to find out if I have to reserve a time slot to enter the park or if I can. I'm trying to dispute a transaction from last month, but the online form keeps giving me an error message right after I upload the supporting documents for the claim and we might need to prepare for the possibility that I need to find a replacement water filter for my specific refrigerator model, but I can't find the model number anywhere on the unit and I was hoping you could help me identify it. Please add organic olive oil wheat and three ripe avocados to my shopping list. I need to find a reputable and insured local moving company that is available on the last weekend of this month for a two bedroom apartment move across town with packing services included. Can you tell me about the scientific theory of plate tectonics and explain how the movement of those plates is directly responsible for earthquakes"
+=== DRIFT VERDICT: cache_t bounded/plateau; tokens MATCH over 830 chunks ===
