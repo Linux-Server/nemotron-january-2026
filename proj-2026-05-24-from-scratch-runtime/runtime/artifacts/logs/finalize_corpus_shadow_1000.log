@@ -1,0 +1,225 @@
+/home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+loading model + stt-benchmark...
+[NeMo I 2026-05-25 16:18:18 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo W 2026-05-25 16:18:18 nemo_logging:405] If you intend to do training or fine-tuning, please call the ModelPT.setup_training_data() method and provide a valid configuration file to setup the train data loader.
+    Train config : 
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    input_cfg: null
+    tarred_audio_filepaths: null
+    manifest_filepath: null
+    sample_rate: 16000
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    max_duration: 40.0
+    min_duration: 0.1
+    text_field: answer
+    batch_duration: null
+    use_bucketing: true
+    max_tps: null
+    bucket_duration_bins: null
+    bucket_batch_size: null
+    num_buckets: null
+    bucket_buffer_size: null
+    shuffle_buffer_size: null
+    augmentor: null
+    
+[NeMo W 2026-05-25 16:18:18 nemo_logging:405] If you intend to do validation, please call the ModelPT.setup_validation_data() or ModelPT.setup_multiple_validation_data() method and provide a valid configuration file to setup the validation data loader(s). 
+    Validation config : 
+    use_lhotse: true
+    manifest_filepath: /data/ASR/en/librispeech/test-other.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    max_duration: 40.0
+    min_duration: 0.1
+    num_workers: 2
+    pin_memory: true
+    text_field: answer
+    tarred_audio_filepaths: null
+    
+[NeMo I 2026-05-25 16:18:18 nemo_logging:393] PADDING: 0
+[NeMo I 2026-05-25 16:18:20 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 16:18:20 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 16:18:20 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 16:18:20 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 16:18:20 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 16:18:21 nemo_logging:393] Model EncDecRNNTBPEModel was successfully restored from /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-streaming-en-0.6b/snapshots/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4/nemotron-speech-streaming-en-0.6b.nemo.
+[NeMo I 2026-05-25 16:18:21 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 16:18:21 nemo_logging:393] Changed decoding strategy to 
+    model_type: rnnt
+    strategy: greedy_batch
+    compute_hypothesis_token_set: false
+    preserve_alignments: null
+    tdt_include_token_duration: null
+    confidence_cfg:
+      preserve_frame_confidence: false
+      preserve_token_confidence: false
+      preserve_word_confidence: false
+      exclude_blank: true
+      aggregation: min
+      tdt_include_duration: false
+      method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+    fused_batch_size: null
+    compute_timestamps: null
+    compute_langs: false
+    word_seperator: ' '
+    segment_seperators:
+    - .
+    - '!'
+    - '?'
+    segment_gap_threshold: null
+    rnnt_timestamp_type: all
+    greedy:
+      max_symbols_per_step: 10
+      preserve_alignments: false
+      preserve_frame_confidence: false
+      tdt_include_token_duration: false
+      tdt_include_duration_confidence: false
+      confidence_method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+      loop_labels: true
+      use_cuda_graph_decoder: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      max_symbols: 10
+    beam:
+      beam_size: 4
+      search_type: default
+      score_norm: true
+      return_best_hypothesis: true
+      tsd_max_sym_exp_per_step: 50
+      alsd_max_target_len: 1.0
+      nsc_max_timesteps_expansion: 1
+      nsc_prefix_alpha: 1
+      maes_num_steps: 2
+      maes_prefix_alpha: 1
+      maes_expansion_gamma: 2.3
+      maes_expansion_beta: 2
+      language_model: null
+      softmax_temperature: 1.0
+      preserve_alignments: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      hat_subtract_ilm: false
+      hat_ilm_weight: 0.0
+      max_symbols_per_step: 10
+      blank_lm_score_mode: LM_WEIGHTED_FULL
+      pruning_mode: LATE
+      allow_cuda_graphs: true
+    temperature: 1.0
+    durations: []
+    big_blank_durations: []
+    
+Using the latest cached version of the dataset since pipecat-ai/stt-benchmark-data couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'default' at /home/khkramer/.cache/huggingface/datasets/pipecat-ai___stt-benchmark-data/default/0.0.0/3fe50170d520c951957b86996ef082a6ab87b394 (last modified on Thu Feb 12 16:16:49 2026).
+discovered 17 stripped buckets in artifacts/stripped_finalize_buckets
+  25/1000 samples covered=25 exact=25 divergent=0 uncovered=0 elapsed=20.6s
+  50/1000 samples covered=50 exact=50 divergent=0 uncovered=0 elapsed=35.4s
+  75/1000 samples covered=75 exact=75 divergent=0 uncovered=0 elapsed=51.1s
+  100/1000 samples covered=100 exact=100 divergent=0 uncovered=0 elapsed=65.0s
+  125/1000 samples covered=125 exact=125 divergent=0 uncovered=0 elapsed=80.0s
+  150/1000 samples covered=150 exact=150 divergent=0 uncovered=0 elapsed=95.3s
+  175/1000 samples covered=175 exact=175 divergent=0 uncovered=0 elapsed=110.6s
+  200/1000 samples covered=200 exact=200 divergent=0 uncovered=0 elapsed=124.9s
+  225/1000 samples covered=225 exact=225 divergent=0 uncovered=0 elapsed=140.5s
+  250/1000 samples covered=250 exact=250 divergent=0 uncovered=0 elapsed=155.1s
+  275/1000 samples covered=275 exact=275 divergent=0 uncovered=0 elapsed=169.4s
+  300/1000 samples covered=300 exact=300 divergent=0 uncovered=0 elapsed=180.0s
+  325/1000 samples covered=325 exact=325 divergent=0 uncovered=0 elapsed=196.2s
+  350/1000 samples covered=350 exact=350 divergent=0 uncovered=0 elapsed=209.7s
+  375/1000 samples covered=375 exact=375 divergent=0 uncovered=0 elapsed=225.4s
+  400/1000 samples covered=400 exact=400 divergent=0 uncovered=0 elapsed=238.8s
+  425/1000 samples covered=425 exact=425 divergent=0 uncovered=0 elapsed=253.7s
+  450/1000 samples covered=450 exact=450 divergent=0 uncovered=0 elapsed=267.3s
+  475/1000 samples covered=475 exact=475 divergent=0 uncovered=0 elapsed=279.3s
+  500/1000 samples covered=500 exact=500 divergent=0 uncovered=0 elapsed=295.0s
+  525/1000 samples covered=525 exact=525 divergent=0 uncovered=0 elapsed=307.8s
+  550/1000 samples covered=550 exact=550 divergent=0 uncovered=0 elapsed=321.0s
+  575/1000 samples covered=575 exact=575 divergent=0 uncovered=0 elapsed=335.2s
+  600/1000 samples covered=600 exact=600 divergent=0 uncovered=0 elapsed=349.0s
+  625/1000 samples covered=625 exact=625 divergent=0 uncovered=0 elapsed=364.6s
+  650/1000 samples covered=650 exact=650 divergent=0 uncovered=0 elapsed=377.2s
+  675/1000 samples covered=675 exact=675 divergent=0 uncovered=0 elapsed=392.8s
+  700/1000 samples covered=700 exact=700 divergent=0 uncovered=0 elapsed=409.1s
+  725/1000 samples covered=725 exact=725 divergent=0 uncovered=0 elapsed=423.5s
+  750/1000 samples covered=750 exact=750 divergent=0 uncovered=0 elapsed=436.5s
+  775/1000 samples covered=775 exact=775 divergent=0 uncovered=0 elapsed=449.8s
+  800/1000 samples covered=800 exact=800 divergent=0 uncovered=0 elapsed=464.6s
+  825/1000 samples covered=825 exact=825 divergent=0 uncovered=0 elapsed=478.1s
+  850/1000 samples covered=850 exact=850 divergent=0 uncovered=0 elapsed=492.7s
+  875/1000 samples covered=875 exact=875 divergent=0 uncovered=0 elapsed=507.2s
+  900/1000 samples covered=900 exact=900 divergent=0 uncovered=0 elapsed=521.2s
+  925/1000 samples covered=925 exact=925 divergent=0 uncovered=0 elapsed=536.6s
+  950/1000 samples covered=950 exact=950 divergent=0 uncovered=0 elapsed=551.5s
+  975/1000 samples covered=975 exact=975 divergent=0 uncovered=0 elapsed=567.2s
+  1000/1000 samples covered=1000 exact=1000 divergent=0 uncovered=0 elapsed=581.0s
+
+=== finalize corpus shadow: samples 0..999 (n=1000) ===
+samples=1000 covered=1000 token_exact=1000 divergent=0 uncovered=0
+
+per-(drop,T) coverage:
+  drop=2 T=43: occurred=49 bucket=yes exact=49 divergent=0
+  drop=2 T=44: occurred=68 bucket=yes exact=68 divergent=0
+  drop=2 T=45: occurred=73 bucket=yes exact=73 divergent=0
+  drop=2 T=46: occurred=55 bucket=yes exact=55 divergent=0
+  drop=2 T=47: occurred=67 bucket=yes exact=67 divergent=0
+  drop=2 T=48: occurred=56 bucket=yes exact=56 divergent=0
+  drop=2 T=49: occurred=62 bucket=yes exact=62 divergent=0
+  drop=2 T=50: occurred=47 bucket=yes exact=47 divergent=0
+  drop=2 T=51: occurred=56 bucket=yes exact=56 divergent=0
+  drop=2 T=52: occurred=55 bucket=yes exact=55 divergent=0
+  drop=2 T=53: occurred=57 bucket=yes exact=57 divergent=0
+  drop=2 T=54: occurred=65 bucket=yes exact=65 divergent=0
+  drop=2 T=55: occurred=50 bucket=yes exact=50 divergent=0
+  drop=2 T=56: occurred=55 bucket=yes exact=55 divergent=0
+  drop=2 T=57: occurred=73 bucket=yes exact=73 divergent=0
+  drop=2 T=58: occurred=112 bucket=yes exact=112 divergent=0
+
+GPU memory:
+  start:       alloc=0.000GB reserved=0.000GB driver_used=1.389GB
+  after model: alloc=2.516GB reserved=2.550GB driver_used=4.036GB
+  after first bucket constants: alloc=5.035GB reserved=5.065GB driver_used=6.569GB
+  after all buckets:            alloc=5.034GB reserved=5.111GB driver_used=6.622GB
+  bucket-load delta first->last: alloc=-0.000GB reserved=+0.046GB driver_used=+0.052GB
+  loaded buckets:
+    drop=2 T=49: fqns=637 new_cuda_tensors=637 alloc_delta=+2.479GB driver_delta=+2.414GB
+    drop=2 T=57: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=45: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=58: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=46: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=56: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=44: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=48: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=47: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=55: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=43: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=53: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=51: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=54: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=52: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+    drop=2 T=50: fqns=637 new_cuda_tensors=0 alloc_delta=+0.000GB driver_delta=+0.000GB
+  end:         alloc=5.004GB reserved=5.111GB driver_used=6.622GB
+  nvidia-smi:  NVIDIA GeForce RTX 5090, 6316, 32607
+
+PASS/FAIL: PASS
+PASS criterion: every covered sample is token-exact (uncovered samples are reported separately).
