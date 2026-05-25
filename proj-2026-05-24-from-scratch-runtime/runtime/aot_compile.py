@@ -8,12 +8,30 @@ import os, torch
 
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 
+def _force_noexecstack_on_link():
+    """Fix the BUILD (not the binary): the AOTI wrapper.so embeds a constants/cubin blob with no .note.GNU-stack, so ld
+    marks the output stack RWX and a hardened host kernel refuses to dlopen it ("cannot enable executable stack"). Inductor
+    exposes no ldflags config knob. Append -Wl,-z,noexecstack to the SHARED-LIB LINK command only (gated on '-shared', so
+    Inductor's compile/ISA probes are untouched); -z noexecstack forces the output PT_GNU_STACK non-exec regardless of any
+    input object's missing note. (constants-on-disk was tried and rejected: it didn't clear the flag AND segfaulted on a
+    fresh aoti_load_package.)"""
+    import torch._inductor.cpp_builder as cb
+    orig = cb.CppBuilder.get_command_line
+    def patched(self):
+        cmd = orig(self)
+        if getattr(self, "_do_link", False) and "-shared" in cmd and "-Wl,-z,noexecstack" not in cmd:
+            cmd += " -Wl,-z,noexecstack"
+        return cmd
+    cb.CppBuilder.get_command_line = patched
+
 def main():
+    _force_noexecstack_on_link()
     print("torch", torch.__version__, "cuda", torch.cuda.is_available(), torch.cuda.get_device_capability())
     ep = torch.export.load(os.path.join(ART, "enc_steady_t2a.pt2"))
     print("loaded ExportedProgram")
 
-    # AOTInductor compile -> package (.pt2 with the .so for CUDA sm_120)
+    # AOTInductor compile -> package (.pt2 with the .so for CUDA sm_120); constants embedded in the .so (default; the
+    # link flag above makes the stack non-exec).
     pkg_path = os.path.join(ART, "enc_steady_aoti.pt2")
     out_path = torch._inductor.aoti_compile_and_package(ep, package_path=pkg_path)
     print("AOTI package:", out_path)

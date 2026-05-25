@@ -5,8 +5,12 @@
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip python3-venv cmake g++ git libsndfile1 ffmpeg \
+      python3 python3-pip python3-venv python3-dev cmake g++ git libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# AOTInductor/Triton compile its cuda_utils.c with `gcc -lcuda`; the devel image ships only the stub libcuda.so.
+# Make it linkable at compile time (the REAL driver libcuda.so.1 is dlopen'd at run via --gpus all).
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so
 
 # Pinned torch (cu128) — matches the export producer (T2a byte-exact rule). soundfile for audio fixtures.
 RUN pip install --break-system-packages --no-cache-dir torch==2.8.0 numpy soundfile
