@@ -1,0 +1,32 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+BUILD OK
+=== Phase A: eager finalize enc_out decode-continuation (4 rows) ===
+  row0 drop=0 emitted_gt0=0 enc_len=7 tokens=0: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+  row1 drop=2 emitted_gt0=1 enc_len=7 tokens=47: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+  row2 drop=2 emitted_gt0=1 enc_len=5 tokens=66: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+  row3 drop=2 emitted_gt0=1 enc_len=5 tokens=74: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+=== Phase B: AOTI finalize encoder buckets + decode-continuation (4 buckets) ===
+  loaded shared constants: 1274 FQN entries (aliases included) from /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+  bucket drop=0 T=49: loaded 637 constants -> /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_buckets/enc_finalize_d0_T49.pt2
+  bucket drop=2 T=44: loaded 637 constants -> /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_buckets/enc_finalize_d2_T44.pt2
+  bucket drop=2 T=45: loaded 637 constants -> /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_buckets/enc_finalize_d2_T45.pt2
+  bucket drop=2 T=58: loaded 637 constants -> /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_buckets/enc_finalize_d2_T58.pt2
+  row0 drop=0 T=49 tokens=0: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+  row1 drop=2 T=58 tokens=47: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+  row2 drop=2 T=44 tokens=66: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+  row3 drop=2 T=45 tokens=74: finalize_ref=PASS nemo=PASS FORK_ASSERT=PASS
+=== FINALIZE PASS: PhaseA=PASS PhaseB=PASS ===
