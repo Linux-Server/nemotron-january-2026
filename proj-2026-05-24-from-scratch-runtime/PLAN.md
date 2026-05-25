@@ -99,11 +99,14 @@ off-thread dispatch) **mirror** that plan. Therefore:
 
 **THE BET (state it up front).** Outcome space is **native Rust/C++ (B1) or STOP** — the user removed B4 (free-threaded
 Python) and B5 (in-tree extension) (2026-05-24). This project lives only if **BOTH** hold; each has an early-exit spike:
-1. The Python plan (`proj-2026-05-24-0859`) leaves a **residual density/tail gap whose business value exceeds ~40–60
-   eng-wk + a second stack to maintain** (early-exit: 0.0); AND
-2. that gap is capturable by a **native runtime** — i.e. it's **GIL/single-thread-scheduler-bound AND a single native
-   process can actually overlap finalize+steady**, not MPS/context-launch-/bandwidth-bound (else native ≈ the same
-   MPS/multi-proc topology as Python and density doesn't improve) (early-exit: 0.1).
+1. The Python plan (`proj-2026-05-24-0859`) leaves a **residual density/tail gap worth pursuing** (early-exit: 0.0).
+   **→ RESOLVED in principle 2026-05-24:** fleet = L40S/Ada-density; cost basis = **strategic capability bet**; **PASS
+   bar = 0.1b ≥1.5× L40S density (≥~28/box).** No COGS break-even gate. L4 is out (BW-bound). AND
+2. that gap is capturable by a **native runtime** — **GIL/single-thread-scheduler-bound AND a single native process can
+   overlap finalize+steady** (early-exit: 0.1). **→ CONFIRMED 2026-05-24** (post-Python: the wall is single-thread
+   intake, GPU 40–65% idle, K=3≡K=4 → more procs don't help).
+**So both conjuncts are satisfied/confirmed in principle; the project now reduces to ONE measurable gate — the 0.1b
+microbench clearing ≥1.5× L40S — plus downstream B1 byte-exact feasibility (0.6a decode + 0.2 encoder).**
 
 **B4 removal raises the bar.** With no free-threaded-Python shortcut, the *only* remedy for a real GIL/scheduler-bound
 residual is the full native build (~40–60 eng-wk + second stack) — there is no cheap intermediate. So conjunct 1's
@@ -586,9 +589,10 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
     fast-improving Python baseline can shrink the residual (even asymptote) *mid-build* → the native build must
     continuously out-perform the *latest* Python baseline, and 0.0 must be re-checked against it as Python advances. Each
     gate records the baseline commit it beat (so the shrink is visible).
-14. **Is this the right problem? — user DECIDED YES (2026-05-24): density/tail is a strategic priority.** So this is not
-    a lean-STOP project. The 0.0-pre ceiling arithmetic remains an expectations check (density is a COGS lever; ~20
-    best-case extra streams/box), but the directional call to pursue density *if the residual is real* is made.
+14. **Is this the right problem? — RESOLVED YES (2026-05-24).** Fleet = L40S/Ada-density; cost basis = **strategic
+    capability bet** (future models, fusion, runtime control), not a pure COGS line. Conjunct 2 is production-confirmed
+    (single-thread intake wall, GPU 40–65% idle). The one remaining gate is **0.1b ≥1.5× L40S density** + B1 byte-exact
+    feasibility. (L4 remains out — BW-bound.)
 
 ## 9. Effort sizing (two budgets; ±50–100% — so §0 is an evaluable comparison)
 

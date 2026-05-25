@@ -52,9 +52,12 @@ libtorch.
 ~40–60 eng-wk BUILD **+ ongoing dual-stack carry**. If the *ceiling* can't clear the 0.0 threshold below assuming all
 gates pass → STOP now.
 
-**0.0 worth-it threshold — DEFERRED by the user (2026-05-24) until the Python plan lands + gives a measured baseline.**
-The values below are reference-only proposals; freeze the real numbers *before* Wave-1 data, *after* the baseline exists.
-Note the user chose NOT to freeze the Python baseline → 0.0 is re-checked against the *latest* Python result as it improves.
+**0.0 worth-it threshold — SET (2026-05-24, user; post-Python baseline now exists):**
+- **Fleet = L40S/Ada-density** (L4 OUT — BW-bound, native won't help).
+- **PASS bar = 0.1b shows ≥1.5× sustainable L40S density (≥~28/box) at the SLO** vs the ~16–20/box baseline, GPU util
+  rising toward saturation. Below 1.5× → STOP.
+- **Cost basis = strategic capability bet** — no COGS break-even gate; ≥1.5× floor + capability rationale (future
+  models, fusion, runtime control). Conjunct 1 resolved in principle; go/no-go = the 0.1b number + B1 byte-exact (0.6a/0.2).
 - Min in-budget streams/box delta vs Python's ~28/box (K=4): proposed `≥ +12 streams/box` at equivalent tail.
 - OR min p99 server-side tail reduction at the same *admitted* load: proposed `≥ 150–200 ms`.
 - Value-vs-cost: residual must justify `~40–60 eng-wk + a 2nd stack + carry`. **Distinguish attempted vs admitted load**

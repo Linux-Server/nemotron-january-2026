@@ -62,15 +62,26 @@ Realistic mean B ≈ 1.5–2.1 (see `spikes/0.5-batching-sim/FINDINGS.md`). **3�
 density lever is confirmed NOT batching and NOT shared-weights (memory wasn't the cap — K=4 fit) — it is the **no-GIL
 multi-thread intake** reclaiming the idle GPU.
 
+## 0.0 THRESHOLD — SET (2026-05-24, user)
+- **Fleet:** **L40S / Ada-density** is the production posture → native applies. **L4 is OUT** (BW-bound; native won't
+  help; on L4 the answer stays "add boxes").
+- **0.0 PASS bar:** **0.1b must show ≥1.5× sustainable L40S density (≥~28/box) at the SLO** vs the ~16–20/box baseline,
+  with GPU util rising toward saturation. Below 1.5× → STOP.
+- **Cost basis:** **strategic capability bet** — no COGS break-even gate; the build is justified as a capability
+  investment (future models, the fusion path, runtime control) *provided* the ≥1.5× floor clears (so we're not building
+  on a refuted/negligible gain). This resolves **conjunct 1 in principle.**
+- **Net:** the project go/no-go now reduces to **(0.1b ≥1.5× on L40S)** AND the downstream **B1 byte-exact feasibility
+  (0.6a decode + 0.2 encoder)**. Conjunct 2 is already confirmed; conjunct 1 is satisfied pending the 0.1b number.
+
 ## Running conclusion (updated)
 - **Conjunct 2 CONFIRMED on L40S** (single-thread intake wall, GPU 40–65% idle) → the native thesis's core premise holds
   in production. This materially **weakens the earlier "honest prior is STOP"** — there is a real, measured headroom the
   native runtime is uniquely positioned to capture.
-- **Conjunct 1 is now the gate:** is ~1.5–2.5× L40S density (TBM), 5090-class GPUs only, no p50, worth ~40–60 eng-wk +
-  carry? The user defers the number; the **next evidence that sharpens it is the 0.1 native launch-overlap microbench**
-  (does no-GIL multi-thread intake actually reclaim the idle GPU, and to what stream count before compute/BW binds?).
-- **Deploy nuance for whoever sizes this:** native density is L40S/high-BW-shaped; on L4 (BW-bound) the answer stays
-  "add boxes." A native runtime's value concentrates on the denser Ada/Blackwell SKUs.
+- **Conjunct 1 RESOLVED in principle (2026-05-24):** fleet = L40S/Ada-density; cost basis = strategic capability bet;
+  PASS bar = **0.1b ≥1.5× L40S density (≥~28/box).** No break-even gate. So the project now hinges on the **0.1b number**
+  + B1 byte-exact feasibility, not on a business debate.
+- **Deploy nuance:** native density is L40S/high-BW-shaped; on L4 (BW-bound) the answer stays "add boxes." Value
+  concentrates on the denser Ada/Blackwell SKUs.
 
 ## Pre-registered thresholds + filled decision tree
 See `../spikes/decision-template.md`. With conjunct 2 confirmed, set the 0.0 streams/box threshold against the **~16–20
