@@ -6,17 +6,26 @@ The local host is Ubuntu 25.04 (**glibc 2.41**), which breaks `nvcc` for every i
 libtorch works for graph-replay/decode, but NOT AOTInductor or custom kernels). The fix: build in an **Ubuntu-24.04
 CUDA devel container (glibc 2.39)**, where `nvcc` works.
 
-## Smoke test — PASSED (2026-05-25)
-`docker run --rm --gpus all nvidia/cuda:13.0.0-devel-ubuntu24.04 ...`:
-- glibc **2.39** (vs host 2.41) → no `noexcept` conflict.
-- **nvcc compiles the trivial `t.cu` that FAILS on the host** → `NVCC_COMPILE_OK`.
-- GPU visible: **RTX 5090, compute_cap 12.0 (sm_120)** — Blackwell works in the container.
+## Image — VERIFIED WORKING
+**`nvidia/cuda:12.8.1-devel-ubuntu24.04`** (pulled + verified) — matches torch's cu128 and sm_120 (5090).
 
-Host has: docker 29, nvidia-container-toolkit 1.19.1, nvidia runtime + CDI (`nvidia.com/gpu=all`), 1.5 TB free.
+## Smoke test — PASSED (2026-05-25), both images
+Verified command + result on the pinned **12.8** image:
+```bash
+docker run --rm --gpus all nvidia/cuda:12.8.1-devel-ubuntu24.04 bash -c \
+  'ldd --version | head -1; nvcc --version | grep release;
+   echo "int main(){return 0;}" > /tmp/t.cu;
+   nvcc -arch=sm_120 /tmp/t.cu -o /tmp/t && /tmp/t && echo NVCC_sm120_COMPILE_OK;
+   nvidia-smi --query-gpu=name,compute_cap --format=csv | sed -n 2p'
+# ->  glibc 2.39  | nvcc release 12.8, V12.8.93  | NVCC_sm120_COMPILE_OK  | NVIDIA GeForce RTX 5090, 12.0
+```
+- glibc **2.39** (vs host 2.41) → no `math_functions.h` `noexcept` conflict.
+- **nvcc compiles for sm_120 (Blackwell)** — which **fails on the host at all CUDA versions**.
+- GPU visible: **RTX 5090, sm_120**. (The 13.0/13.1-devel-ubuntu24.04 images also pass the nvcc smoke test; 12.8
+  matches the torch wheel and is the one to use for AOTInductor.)
 
-## Image
-**`nvidia/cuda:12.8.1-devel-ubuntu24.04`** — matches torch's cu128 (and sm_120 for the 5090). (The 13.x devel images are
-also present and work for the nvcc smoke test, but 12.8 matches the torch wheel for AOTInductor.)
+Host prerequisites (present): docker 29, nvidia-container-toolkit 1.19.1, nvidia runtime + CDI (`nvidia.com/gpu=all`),
+1.5 TB free.
 
 ## Enter the container (project mounted)
 ```bash

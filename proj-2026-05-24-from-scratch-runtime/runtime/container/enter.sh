@@ -2,7 +2,8 @@
 # Drop into the CUDA 12.8 devel container (glibc 2.39 -> nvcc works) with the repo + HF model cache mounted, GPU visible.
 # Usage: ./enter.sh [command...]   (no args = interactive bash)
 set -euo pipefail
-IMG="${NEMOTRON_CUDA_IMG:-nvidia/cuda:12.8.1-devel-ubuntu24.04}"
+IMG="${NEMOTRON_CUDA_IMG:-nemotron-aoti:cu128}"   # built via Dockerfile (torch 2.8.0 baked); falls back below if absent
+docker image inspect "$IMG" >/dev/null 2>&1 || IMG="nvidia/cuda:12.8.1-devel-ubuntu24.04"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"   # nemotron-january-2026 repo root
 HF="${HF_HOME:-$HOME/.cache/huggingface}"
 exec docker run --rm -it --gpus all \
