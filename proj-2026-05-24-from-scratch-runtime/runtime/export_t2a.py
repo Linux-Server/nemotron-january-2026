@@ -73,7 +73,13 @@ def main():
     print(f"[T2a] torch.export steady vs eager across {nchk} steady chunks: byte-exact={allok} max_abs_diff={maxd:.3e}")
     if allok:
         torch.export.save(ep, os.path.join(a.out,"enc_steady_t2a.pt2"))
-        print("=== T2a: BYTE-EXACT streaming encoder via torch.export -> saved enc_steady_t2a.pt2")
+        # I/O fixture for the container AOTI byte-exact check (container has torch, no nemo): real steady-chunk inputs +
+        # eager 5-output reference. Use chunk1's geometry (the export's example) for a representative steady step.
+        with torch.inference_mode():
+            ref = estep(c1, o0[2].clone(), o0[3].clone(), o0[4].clone(), drop)
+        torch.save({"chunk":c1.cpu(),"L":L1.cpu(),"clc":o0[2].cpu(),"clt":o0[3].cpu(),"clcl":o0[4].cpu(),
+                    "out":[t.cpu() for t in ref]}, os.path.join(a.out,"t2a_io.pt"))
+        print("=== T2a: BYTE-EXACT streaming encoder via torch.export -> saved enc_steady_t2a.pt2 + t2a_io.pt")
     else:
         print("=== T2a: torch.export NOT byte-exact across cache_len (same class as trace) -> reimplement the step")
 
