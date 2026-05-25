@@ -1,78 +1,118 @@
-// 0.1b native launch-overlap microbench (C++ / libtorch) — SKELETON, build-ready, needs iteration on a GPU box.
+// 0.1b native launch-overlap microbench (C++ / libtorch) — compile-targeted; needs a GPU box + libtorch SDK to build+run.
 //
-// Question (gate): does GIL-free MULTI-THREAD intake/dispatch raise sustainable L40S streams/box above the Python
-// single-thread-intake ceiling (~16-20/box), reclaiming the 40-65% idle GPU? GATE = >=1.5x (~28/box).
+// Gate: does GIL-free MULTI-THREAD intake/dispatch raise sustainable L40S streams/box above the Python single-thread
+// ceiling (~16-20/box), reclaiming the 40-65% idle GPU? GATE = >=1.5x (~28/box). Spec: ../0.1b-microbench-spec.md.
 //
-// Design: K "lanes", each = its own OS thread + CUDA stream + static IO buffers + a captured CUDA graph of the steady
-// encoder (loaded from export_encoder.py). N simulated streams emit a chunk every 160ms; an INTAKE pool of M threads
-// dispatches ready chunks onto lanes (M=1 mimics Python single-intake; M=cores is the native thesis). A "mock decode"
-// approximates the real decode COST (calibrate vs Python model_wall<=35ms + decode host time), NOT its math.
+// Model: M dispatcher lanes, each = its OWN OS thread + CUDA stream + static IO buffers + a captured CUDA graph of the
+// steady encoder (from export_encoder.py). Each lane replays ONLY its own graph (no cross-thread graph sharing => safe).
+// N simulated streams emit a chunk every 160ms into a shared intake queue; the M lanes pull+dispatch. The A/B:
+//   M=1   -> mimics Python's single-thread intake wall;   M=cores -> the native thesis.
+// "Mock decode" approximates COST (a small GPU op + a host-side stall for the eager .item()-loop CPU time), NOT math.
+// CALIBRATE --decode-* so the M=1 baseline reproduces the measured ~16-20/box BEFORE trusting M=cores (see README).
 //
-// Build: see CMakeLists.txt (needs libtorch 2.8.0+cu128 C++ SDK). Run: ./microbench --module artifacts/encoder_steady_b1.ts
-//   --intake-threads {1|cores} --streams N --lanes K --duration-s 30 --decode-gpu-us .. --decode-host-us ..
-// Sweep N at fixed (lanes, intake-threads) to find the sustainable-N at the SLO (p95 chunk latency in budget).
+// Build: CMakeLists.txt (libtorch 2.8.0+cu128 cxx11-abi). Run examples:
+//   ./microbench --module artifacts/encoder_steady_b1.ts --lanes 1  --streams N --duration-s 30   # baseline
+//   ./microbench --module artifacts/encoder_steady_b1.ts --lanes $(nproc) --streams N --duration-s 30  # thesis
+// Sweep N to find the max N where p95 chunk latency stays in SLO budget; that N (× procs) = streams/box.
 //
-// STATUS: structurally complete for the core mechanic (graph capture + replay from threads + M-thread intake). The
-// SLO-sweep harness, NVML GPU-util sampling, finalize path, and MPS/multi-proc variants are marked TODO. Do NOT trust
-// numbers until calibrated against the Python model_wall + a single-thread baseline that reproduces ~16-20/box.
+// NOTE: libtorch C++ API signatures are version-sensitive (CUDAGraph::capture_begin pool arg, getStreamFromPool,
+// nvml). Verify against the installed 2.8.0 headers at build; the structure below targets that API.
 
 #include <torch/script.h>
 #include <ATen/cuda/CUDAGraph.h>
 #include <c10/cuda/CUDAStream.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <nvml.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <thread>
-#include <vector>
-#include <queue>
-#include <mutex>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
+#include <vector>
 
 using clk = std::chrono::steady_clock;
 static double ms_since(clk::time_point t){ return std::chrono::duration<double,std::milli>(clk::now()-t).count(); }
 
-struct Args { std::string module="artifacts/encoder_steady_b1.ts"; int intake_threads=1; int streams=8; int lanes=3;
-              int duration_s=30; int decode_gpu_us=300; int decode_host_us=200; }; // calibrate decode_* vs Python!
+struct Args {
+  std::string module = "artifacts/encoder_steady_b1.ts";
+  int lanes = 1;            // = dispatcher threads (each owns one lane); A/B: 1 vs nproc
+  int streams = 8;
+  int duration_s = 30;
+  int decode_gpu_iters = 0;    // mock-decode GPU cost: extra dummy-GEMM iters per chunk (calibrate)
+  int decode_host_us = 200;    // mock-decode host cost: the GIL-held .item()-loop stand-in (calibrate)
+  int chunk_ms = 160;          // steady cadence
+  int slo_p95_ms = 300;        // SLO budget for the chunk intake->done proxy (tune to the vad_stop->final budget)
+};
 
-// One lane: dedicated stream + static buffers + captured graph. Replay is NOT thread-safe across lanes sharing a graph,
-// so each lane owns its own (per-lane pool = the memory cost the density story must account for — spike 0.11).
+static Args parse_args(int argc, char** argv){
+  Args a; auto eq=[&](const char* k,const char* v){return std::strcmp(k,v)==0;};
+  for(int i=1;i<argc;i++){
+    if(eq(argv[i],"--module")&&i+1<argc) a.module=argv[++i];
+    else if(eq(argv[i],"--lanes")&&i+1<argc) a.lanes=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--streams")&&i+1<argc) a.streams=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--duration-s")&&i+1<argc) a.duration_s=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--decode-gpu-iters")&&i+1<argc) a.decode_gpu_iters=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--decode-host-us")&&i+1<argc) a.decode_host_us=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--chunk-ms")&&i+1<argc) a.chunk_ms=std::atoi(argv[++i]);
+    else if(eq(argv[i],"--slo-p95-ms")&&i+1<argc) a.slo_p95_ms=std::atoi(argv[++i]);
+  }
+  return a;
+}
+
+// Steady B=1 proto inputs — shapes from artifacts/shapes.json (confirmed by export_encoder.py):
+//   processed [1,128,25] f32, length [1] i64, clc [24,1,70,1024] f32, clt [24,1,1024,8] f32, clcl [1] i64.
+// Values are irrelevant for a throughput bench (we measure launch/overlap, not correctness) -> zeros.
+static std::vector<torch::Tensor> make_proto(){
+  auto f32 = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+  auto i64 = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+  std::vector<torch::Tensor> p;
+  p.push_back(torch::zeros({1,128,25}, f32));            // processed_signal
+  p.push_back(torch::full({1}, 25, i64));                // processed_signal_length
+  p.push_back(torch::zeros({24,1,70,1024}, f32));        // cache_last_channel
+  p.push_back(torch::zeros({24,1,1024,8}, f32));         // cache_last_time
+  p.push_back(torch::zeros({1}, i64));                   // cache_last_channel_len
+  return p;
+}
+
 struct Lane {
   c10::cuda::CUDAStream stream;
   at::cuda::CUDAGraph graph;
-  std::vector<torch::Tensor> static_in;     // [processed, length, clc, clt, clcl]
-  std::vector<torch::jit::IValue> ivals;    // view over static_in for module.forward
-  torch::jit::Module* mod;
-  bool captured=false;
-  explicit Lane(c10::cuda::CUDAStream s): stream(s) {}
+  std::vector<torch::Tensor> static_in;
+  std::vector<torch::jit::IValue> ivals;
+  torch::jit::Module mod;          // each lane gets its own module handle (forward is stateless post-load)
+  torch::Tensor mock_a, mock_b;    // mock-decode dummy GEMM operands
+  Lane(c10::cuda::CUDAStream s, torch::jit::Module m): stream(s), mod(std::move(m)) {}
 
-  void prepare(torch::jit::Module& m, const std::vector<torch::Tensor>& proto){
-    mod=&m;
-    for(auto& t: proto) static_in.push_back(t.clone());     // static buffers we copy inputs into each replay
+  void prepare(const std::vector<torch::Tensor>& proto){
+    for(auto& t: proto){ static_in.push_back(t.clone()); }
     for(auto& t: static_in) ivals.emplace_back(t);
+    auto f32 = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    mock_a = torch::randn({256,256}, f32); mock_b = torch::randn({256,256}, f32);
   }
   void capture(){
     c10::cuda::CUDAStreamGuard g(stream);
-    // warmup (required before capture)
-    for(int i=0;i<3;i++){ auto out = mod->forward(ivals); (void)out; }
+    for(int i=0;i<3;i++){ auto o = mod.forward(ivals); (void)o; }   // warmup (pre-capture)
     stream.synchronize();
-    graph.capture_begin();
-    mod->forward(ivals);          // recorded into the graph; outputs live in the static graph pool
+    graph.capture_begin();                 // NB: 2.8 signature may want a pool handle; verify at build
+    mod.forward(ivals);
     graph.capture_end();
-    captured=true;
   }
-  void replay(const std::vector<torch::Tensor>& inputs){
+  void process(const std::vector<torch::Tensor>& inputs, int decode_gpu_iters){
     c10::cuda::CUDAStreamGuard g(stream);
     for(size_t i=0;i<static_in.size();++i) static_in[i].copy_(inputs[i], /*non_blocking=*/true);
     graph.replay();
-    // mock decode (cost stand-in): a tiny GPU op + a host-side stall approximating the eager decode's host cost.
-    // TODO: replace with a calibrated kernel; the host stall models the .item()-loop CPU time that the GIL serializes.
+    for(int i=0;i<decode_gpu_iters;i++){ auto c = torch::matmul(mock_a, mock_b); mock_a = c; } // mock decode GPU cost
+    stream.synchronize();                  // lane-end completion. TODO: CUDA-event dependency variant (native lever)
   }
 };
 
-// ---- a minimal MPMC chunk queue (the "intake") ----
 struct Chunk { int stream_id; clk::time_point ready; };
 struct IntakeQueue {
   std::queue<Chunk> q; std::mutex m; std::condition_variable cv; std::atomic<bool> stop{false};
@@ -81,61 +121,78 @@ struct IntakeQueue {
                         if(q.empty()) return false; out=q.front(); q.pop(); return true; }
 };
 
+static void print_pct(std::vector<double>& v, const char* label){
+  if(v.empty()){ std::printf("%s: (no samples)\n", label); return; }
+  std::sort(v.begin(), v.end());
+  auto pct=[&](double p){ return v[std::min(v.size()-1,(size_t)(p*v.size())) ]; };
+  std::printf("%s: n=%zu p50=%.1f p95=%.1f p99=%.1f max=%.1f ms\n",
+              label, v.size(), pct(0.50), pct(0.95), pct(0.99), v.back());
+}
+
 int main(int argc, char** argv){
-  Args a; // TODO: parse argv into a (module, intake_threads, streams, lanes, duration_s, decode_*).
-  (void)argc; (void)argv;
-
-  torch::jit::Module mod = torch::jit::load(a.module);
-  mod.to(torch::kCUDA); mod.eval();
+  Args a = parse_args(argc, argv);
   torch::NoGradGuard ng;
+  auto proto = make_proto();
 
-  // Build proto inputs at the steady B=1 shape (TODO: read from shapes.json instead of hardcoding).
-  auto dev = torch::kCUDA;
-  // proto = [processed [1,128,25], length [1], clc, clt, clcl] — shapes from shapes.json.
-  std::vector<torch::Tensor> proto; // TODO: fill from shapes.json (clc/clt/clcl come from get_initial_cache_state).
-
-  // Lanes (each its own stream + captured graph).
+  // One lane per dispatcher thread (no cross-thread graph sharing). Each loads its own module handle.
   std::vector<Lane> lanes;
-  for(int i=0;i<a.lanes;i++){ lanes.emplace_back(c10::cuda::getStreamFromPool(/*high_priority=*/false));
-                              lanes.back().prepare(mod, proto); lanes.back().capture(); }
-
-  // Latency record (chunk intake->done) for the SLO knee.
-  std::mutex lat_m; std::vector<double> latencies;
-  std::atomic<int> next_lane{0};
+  lanes.reserve(a.lanes);
+  for(int i=0;i<a.lanes;i++){
+    torch::jit::Module m = torch::jit::load(a.module); m.to(torch::kCUDA); m.eval();
+    lanes.emplace_back(c10::cuda::getStreamFromPool(false), std::move(m));
+    lanes.back().prepare(proto);
+    lanes.back().capture();
+  }
 
   IntakeQueue iq;
   std::atomic<bool> run{true};
+  std::mutex lat_m; std::vector<double> latencies;   // chunk intake->done (the SLO proxy)
 
-  // INTAKE THREADS — the variable under test. M=1 reproduces the Python single-asyncio-intake wall; M=cores is the
-  // native thesis. Each intake thread pops ready chunks and dispatches onto a lane (round-robin here; real scheduler
-  // would pin per session — fine for the launch-overlap question).
-  std::vector<std::thread> intake;
-  for(int t=0;t<a.intake_threads;t++) intake.emplace_back([&]{
-    Chunk c;
+  // Dispatcher threads: thread i owns lane i; pulls chunks, processes on its lane, records latency.
+  std::vector<std::thread> workers;
+  for(int i=0;i<a.lanes;i++) workers.emplace_back([&,i]{
+    Chunk c; Lane& lane = lanes[i];
     while(iq.pop(c)){
-      auto t0 = c.ready;
-      int li = next_lane.fetch_add(1) % lanes.size();
-      lanes[li].replay(proto);                          // dispatch (graph replay) + mock decode
-      lanes[li].stream.synchronize();                   // completion (TODO: CUDA-event dependency instead of sync)
-      std::this_thread::sleep_for(std::chrono::microseconds(a.decode_host_us)); // mock decode host cost (GIL-held in Py)
-      {std::lock_guard<std::mutex> l(lat_m); latencies.push_back(ms_since(t0));}
+      lane.process(proto, a.decode_gpu_iters);
+      if(a.decode_host_us>0) std::this_thread::sleep_for(std::chrono::microseconds(a.decode_host_us));
+      double lat = ms_since(c.ready);
+      { std::lock_guard<std::mutex> l(lat_m); latencies.push_back(lat); }
     }
   });
 
-  // STREAM GENERATORS — N streams, each a chunk every 160ms (steady cadence). TODO: add periodic finalize.
+  // NVML GPU-util sampler.
+  std::vector<unsigned int> util_samples;
+  std::thread util_thread;
+  bool nvml_ok = (nvmlInit_v2()==NVML_SUCCESS);
+  nvmlDevice_t dev{};
+  if(nvml_ok && nvmlDeviceGetHandleByIndex_v2(0,&dev)==NVML_SUCCESS){
+    util_thread = std::thread([&]{
+      while(run){ nvmlUtilization_t u{}; if(nvmlDeviceGetUtilizationRates(dev,&u)==NVML_SUCCESS) util_samples.push_back(u.gpu);
+                  std::this_thread::sleep_for(std::chrono::milliseconds(100)); }
+    });
+  }
+
+  // Stream generators: N streams, a chunk every chunk_ms. TODO: periodic finalize path.
   std::vector<std::thread> gens;
   for(int s=0;s<a.streams;s++) gens.emplace_back([&,s]{
-    while(run){ iq.push({s, clk::now()}); std::this_thread::sleep_for(std::chrono::milliseconds(160)); }
+    while(run){ iq.push({s, clk::now()}); std::this_thread::sleep_for(std::chrono::milliseconds(a.chunk_ms)); }
   });
 
   std::this_thread::sleep_for(std::chrono::seconds(a.duration_s));
   run=false; iq.stop=true; iq.cv.notify_all();
-  for(auto& g: gens) g.join(); for(auto& t: intake) t.join();
+  for(auto& g: gens) g.join();
+  for(auto& w: workers) w.join();
+  if(util_thread.joinable()) util_thread.join();
 
-  // Report p50/p95/p99 chunk latency. SLO knee = max N where p95 stays in budget (the vad_stop->final proxy).
-  // TODO: sort latencies, print percentiles; sample NVML GPU util during the run; sweep N externally to find the knee.
-  std::printf("collected %zu samples (intake_threads=%d lanes=%d streams=%d)\n",
-              latencies.size(), a.intake_threads, a.lanes, a.streams);
-  // GATE: knee(M=cores) / knee(M=1) and absolute streams/box on L40S >= 1.5x baseline (~28/box) => GO.
+  std::printf("=== lanes=%d streams=%d decode_host_us=%d decode_gpu_iters=%d ===\n",
+              a.lanes, a.streams, a.decode_host_us, a.decode_gpu_iters);
+  print_pct(latencies, "chunk_latency");
+  if(!util_samples.empty()){
+    double avg=0; for(auto u:util_samples) avg+=u; avg/=util_samples.size();
+    std::printf("gpu_util avg=%.0f%% (n=%zu)\n", avg, util_samples.size());
+  }
+  // Read the SLO knee externally: the max --streams where chunk_latency p95 <= --slo-p95-ms; (knee_Mcores/knee_M1)
+  // and absolute streams/box on L40S vs the >=1.5x (~28/box) gate. Calibrate decode_* so M=1 reproduces ~16-20/box.
+  if(nvml_ok) nvmlShutdown();
   return 0;
 }
