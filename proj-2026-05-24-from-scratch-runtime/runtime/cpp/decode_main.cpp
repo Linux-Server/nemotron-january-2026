@@ -9,6 +9,26 @@
 static constexpr int BLANK = 1024;
 static constexpr int MAX_SYMBOLS = 10;
 
+// Decode encoder frames [t0,t1) of f:[1,T,1024], carrying (pred output g, LSTM state h,c). RESUMABLE — the
+// streaming-continuation contract (matches ref_decode.py). Appends token ids to hyp; mutates g,h,c.
+static void decode_range(torch::jit::Module& joint, torch::jit::Module& predict, const torch::Tensor& f,
+                         int t0, int t1, torch::Tensor& g, torch::Tensor& h, torch::Tensor& c,
+                         std::vector<int64_t>& hyp) {
+  auto dev = f.device();
+  for (int t = t0; t < t1; ++t) {
+    auto f_t = f.slice(1, t, t + 1);
+    for (int n = 0; n < MAX_SYMBOLS; ++n) {
+      auto logits = joint.forward({f_t, g}).toTensor();
+      int64_t k = logits.reshape({-1}).argmax().item<int64_t>();
+      if (k == BLANK) break;
+      hyp.push_back(k);
+      auto y = torch::full({1, 1}, k, torch::dtype(torch::kLong).device(dev));
+      auto out = predict.forward({y, h, c}).toTuple();
+      g = out->elements()[0].toTensor(); h = out->elements()[1].toTensor(); c = out->elements()[2].toTensor();
+    }
+  }
+}
+
 int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "../artifacts";
   torch::NoGradGuard ng;
@@ -24,29 +44,26 @@ int main(int argc, char** argv) {
   auto gold = bundle.attr("gold").toTensor().to(torch::kCPU);
 
   auto f = enc.transpose(1, 2).contiguous();            // [1,T,1024]
-  std::vector<int64_t> hyp;
-  for (int t = 0; t < T; ++t) {
-    auto f_t = f.slice(1, t, t + 1);                    // [1,1,1024]
-    for (int n = 0; n < MAX_SYMBOLS; ++n) {
-      auto logits = joint.forward({f_t, g}).toTensor(); // [1,1,1,1025]
-      int64_t k = logits.reshape({-1}).argmax().item<int64_t>();
-      if (k == BLANK) break;
-      hyp.push_back(k);
-      auto y = torch::full({1, 1}, k, torch::dtype(torch::kLong).device(torch::kCUDA));
-      auto out = predict.forward({y, h, c}).toTuple();
-      g = out->elements()[0].toTensor();
-      h = out->elements()[1].toTensor();
-      c = out->elements()[2].toTensor();
-    }
-  }
+  auto g0 = g.clone(), h0 = h.clone(), c0 = c.clone();
 
-  // compare
+  // full-utterance decode
+  std::vector<int64_t> hyp;
+  decode_range(joint, predict, f, 0, T, g, h, c, hyp);
+
+  // streaming: decode in 2 chunks carrying state -> must equal full (the state-carry contract)
+  std::vector<int64_t> hstream;
+  { auto gg = g0.clone(), hh = h0.clone(), cc = c0.clone();
+    decode_range(joint, predict, f, 0, T / 2, gg, hh, cc, hstream);
+    decode_range(joint, predict, f, T / 2, T, gg, hh, cc, hstream); }
+
   bool ok = ((int)hyp.size() == gold.size(0));
   for (int i = 0; ok && i < (int)hyp.size(); ++i) ok = (hyp[i] == gold[i].item<int64_t>());
-  std::printf("C++ decode: %zu tokens vs gold %ld  -> %s\n", hyp.size(), (long)gold.size(0), ok ? "BYTE-EXACT PASS" : "FAIL");
+  bool stream_ok = (hstream == hyp);
+  std::printf("C++ decode: %zu tokens vs gold %ld -> %s | streaming(2-chunk carry)==full -> %s\n",
+              hyp.size(), (long)gold.size(0), ok ? "BYTE-EXACT PASS" : "FAIL", stream_ok ? "PASS" : "FAIL");
   if (!ok) {
     std::printf("  got :"); for (auto k : hyp) std::printf(" %ld", (long)k); std::printf("\n  gold:");
     for (int i = 0; i < gold.size(0); ++i) std::printf(" %ld", (long)gold[i].item<int64_t>()); std::printf("\n");
   }
-  return ok ? 0 : 1;
+  return (ok && stream_ok) ? 0 : 1;
 }
