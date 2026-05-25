@@ -73,11 +73,20 @@ story is *one* component, not the whole story, and may still require MPS/green-c
 |---|---|---|---|
 | server finalize | ~22 ms | parity→**6–10 ms** | **6–10 ms requires FUSION (B2/B3), NOT the default B1 port** (`roofline-COMBINED.md:56-60`) |
 | steady throughput | 86% B=1 | up to **3–5×** | the workload *can* batch without added wait — **unproven; Spike 0.5 trace-sim** |
-| reliable capacity | ~20/box today; **~28/box** after the Python plan (K=4, `proj-2026-05-24-0859:11-14`) | **40–48/box** (aspirational) | shared weights + real overlap **AND** one CUDA context isn't launch-serialized (Spike 0.1+0.11). The native delta to beat is **vs ~28, not vs 20** |
+| reliable capacity | **L40S ~16–20/box (K=3); L4 ~6/box (BW-bound)** — Python plan MEASURED (`proj-2026-05-24-0859/validation.md`; the ~28 / 48 / 64 figures are REFUTED/inflated) | **L40S ~28–40/box (TBM, reclaiming 40–65% idle GPU)**; L4 ≈ no gain | the wall is the **single-thread intake**, GPU 40–65% idle (conjunct 2 **CONFIRMED**); native multi-thread intake reclaims it — can't be fixed by more procs (K=3≡K=4). NOT shared-weights/batching. Next bottleneck = MPS/BW contention (Spike 0.1) |
 | **TTFT p50** | **246 ms** | **≈ unchanged** | VAD+WAN — **OUT OF SCOPE** |
 
 **Non-goals:** moving p50; changing WER/accuracy; reimplementing/shrinking the VAD window; changing client protocol
 semantics. **If a step's only justification is p50, it is out of scope.**
+
+**POST-PYTHON UPDATE (2026-05-24, `proj-2026-05-24-0859/validation.md`):** the Python plan's density hypothesis
+(padded-bucket→K=4→~28/box) was **REFUTED** — K=4 fits memory but isn't a density win; deployable density is **L40S
+~16–20/box (keep K=3), L4 ~6/box (BW-bound)**; the 48/64/24 figures were inflated keep-up-knee metrics. **But the
+load-bearing conjunct 2 is CONFIRMED:** the wall is the single-thread asyncio intake (`vad_stop_recv_to_process`) with
+the GPU 40–65% idle and compute fine at all loads — i.e. exactly the single-thread bottleneck this project targets, and
+**not fixable by more Python procs (K=3≡K=4: MPS/BW contention cancels added procs)**. So the density lever is the
+**no-GIL multi-thread intake**, NOT shared-weights (memory wasn't the cap) and NOT batching (dead). See
+`reviews/decision.md`.
 
 ---
 
@@ -627,7 +636,7 @@ start.
 | 0.7 | aarch64 toolchain pre-check | A | scaffolded (template) | `spikes/0.7-aarch64/`; run BLOCKED on GB10 box |
 | 0.1 | Overlap/MPS ablation + native launch-overlap microbench | B | scaffolded (skeleton) | `spikes/0.1-overlap-ablation/`; 0.1b microbench now carries the conjunct-2 proof (was B4); run BLOCKED on GPU + post-Python baseline |
 | ~~0.3~~ | ~~py3.13t probe~~ | — | **REMOVED 2026-05-24** | B4 rejected; conjunct-2 proof moved to 0.1b native microbench |
-| 0.0-pre | Residual-ceiling arithmetic | gate | **DONE** | `reviews/decision.md`: ~20 streams/box ceiling (triple-conditional), no p50, vs eng-year + carry — thin prize |
+| 0.0-pre | Residual-ceiling arithmetic | gate | **DONE (updated post-Python)** | `reviews/decision.md`: baseline L40S ~16–20/box (K=3); **conjunct 2 CONFIRMED** (single-thread intake wall, GPU 40–65% idle); native ceiling ~28–40/box TBM by 0.1; no p50, no L4 gain |
 | 0.5 | Trace-driven batching sim + graph-capacity model | B | **synthetic DONE; real traces pending** | `spikes/0.5-batching-sim/FINDINGS.md`: realistic mean B≈1.5–2.1 → **3–5× claim effectively dead**; density must come from shared-weights/overlap, not batch-fill |
 | 0.4 | Decision memo | gate | scaffolded (template) | `spikes/decision-template.md`; decision tree + pre-registered thresholds block |
 | 0.10 | Runtime contract + acceptance tests | pre-1 | pending | protocol/metrics/health/drain/rollback |
