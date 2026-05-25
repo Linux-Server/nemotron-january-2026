@@ -1,0 +1,22 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+baseline GPU alloc: 0.00 GB
+after shared cmap on GPU (1 weight set): 2.48 GB
+  bucket 1/4 enc_finalize_d0_T49.pt2: GPU 2.48 GB (+0.000 since prev)
+  bucket 2/4 enc_finalize_d2_T44.pt2: GPU 2.48 GB (+0.000 since prev)
+  bucket 3/4 enc_finalize_d2_T45.pt2: GPU 2.48 GB (+0.000 since prev)
+  bucket 4/4 enc_finalize_d2_T58.pt2: GPU 2.48 GB (+0.000 since prev)
+=== 4 buckets loaded; if SHARED, total stays ~1 weight set (not 4x). final 2.48 GB ===
