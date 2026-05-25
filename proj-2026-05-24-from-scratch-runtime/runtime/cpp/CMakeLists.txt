@@ -36,3 +36,12 @@ target_compile_definitions(aoti_encoder PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(aoti_encoder PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(aoti_encoder torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 set_target_properties(aoti_encoder PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+
+# 1.3b: finalize fork/isolation + decode-continuation harness, with guarded AOTI finalize encoder Phase B.
+add_executable(finalize finalize_main.cpp)
+target_include_directories(finalize PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
+target_compile_definitions(finalize PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+target_link_directories(finalize PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
+target_link_libraries(finalize torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+set_target_properties(finalize PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+add_custom_target(aoti_finalize DEPENDS finalize)
