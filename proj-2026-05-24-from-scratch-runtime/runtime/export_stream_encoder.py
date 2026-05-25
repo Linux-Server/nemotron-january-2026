@@ -90,6 +90,8 @@ def main():
                 super().__init__()
                 s.register_buffer("mel",mel.cpu()); s.register_buffer("gold",torch.tensor(eager_tok,dtype=torch.int64))
                 s.register_buffer("clc0",cache[0].cpu()); s.register_buffer("clt0",cache[1].cpu()); s.register_buffer("clcl0",cache[2].cpu())
+                # metadata the C++ runtime asserts vs its compiled constants (Codex#4: don't hard-code + silently mismatch)
+                s.register_buffer("meta", torch.tensor([shift, pre, drop, 1024, 10], dtype=torch.int64))  # shift,pre,drop,blank,max_symbols
             def forward(s): return s.mel
         torch.jit.script(B()).save(os.path.join(a.out,"stream_bundle.ts"))
         print(f"exported enc_first.ts + enc_steady.ts + stream_bundle.ts (mel {Tm}, {len(eager_tok)} gold tok)")
