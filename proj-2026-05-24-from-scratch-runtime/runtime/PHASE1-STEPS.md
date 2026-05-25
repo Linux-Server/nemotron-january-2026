@@ -15,7 +15,8 @@ Legend: **REVIEW** = R0 (self-review) / R1 (Opus solo) / R2 (paired Codex+Opus a
 | 1.2a+ | C++ streaming-state-carry — ✅ **DONE** (2-chunk carry == full, byte-exact) | done | PASS | done | 5090 |
 | 0.8 | native preprocessor byte-exact — ✅ **DONE** (T0 deterministic + .ts 0.000e+00) | done | PASS | done | 5090 |
 | 0.2/T2a | encoder byte-exact within geometry — ✅ **DONE** (0.000e+00 all 5 outputs) | done | PASS | done | 5090 |
-| **1.2b** | **C++ steady-path ASSEMBLY**: chain preproc.ts + per-geometry encoder.ts + decode in a single-stream chunk loop w/ cache/ring/state mgmt (port server.py's chunk logic). **← NEXT — the large faithful-port build; all 3 components now byte-exact-verified** | `runtime/cpp/steady.*` | T1 single-stream (transcript == NeMo streaming) | **R2** | 5090 |
+| 1.2b-pre | **FULL C++ pipeline** (audio→preproc→encoder→decode, non-streaming) — ✅ **DONE: BYTE-EXACT on real speech** (`cpp/pipeline_main.cpp`: 12 tok vs gold 12) | done | PASS | done | 5090 |
+| **1.2b** | **C++ STREAMING ASSEMBLY**: turn the proven full-pipeline core into the cache-aware chunk loop — ring buffers + per-geometry encoder buckets (first drop=0 / steady drop=2) + decoder state-carry + per-chunk cadence (port server.py's `_process_chunk`). **← NEXT — large faithful-port; the inference core under it is proven byte-exact** | `runtime/cpp/steady.*` | T1 single-stream (transcript == NeMo streaming) | **R2** | 5090 |
 | 1.3 | C++ finalize path + the STREAMING→PENDING→FINALIZED state machine + fork isolation (FORK_ASSERT) | `runtime/cpp/finalize.*` | T1 finalize canary + reset/resume trace suite | **R2** | 5090 |
 | 1.4 | Single-session end-to-end (WS ingest → steady+finalize → emit) drop-in vs Python on one stream | `runtime/cpp/session.*`, `ws.*` | T1 single-stream behavioral equivalence | R1 | 5090 |
 | **GATE** | Phase-1 exit: one native stream byte/T1-equivalent to Python on the 5090 | — | T1 + T0 | **R2** | 5090 |
