@@ -15,43 +15,51 @@ the reference artifacts + the substrate decision, not a live cluster.
    ├ proc1  server.py lanes=2  :8081                    - K server processes, each lanes=2 (knee ~16)
    └ procK  server.py lanes=2  :808K                    - launcher = deploy/launch_multiproc.sh
 ```
-A single process is GIL-capped at ~16 streams regardless of GPU. Per-box scale = **K processes × ~16**, where K
-fills the GPU via MPS; fleet scale = N boxes behind the LB.
+A single process's *keep-up* knee is ~16 streams, but the **SLO-robust** point (sustained p95<300ms + clean p99) is
+far lower — ~5–7/proc on L40S, ~3/proc on L4 — because the per-proc asyncio **intake thread** saturates
+(`vad_stop_recv_to_process` blows to seconds) well before the keep-up knee, while the GPU sits 40–65% idle.
+**Provision for the SLO-robust point, not the keep-up knee.**
 
-## Per-GPU config matrix (measured — `g6-vs-g6e-results.md`)
-| GPU | instance | lanes/proc | K | per-box knee | bound by | ~$/stream-hr |
-|---|---|---:|---:|---:|---|---:|
-| L4 | g6.2xlarge | 2 | 2 | ~32 | GPU | **$0.031** |
-| L40S | g6e.4xlarge | 2 | 3 | 48 | vCPU + GPU-mem | $0.063 |
-| L40S | g6e.8xlarge | 2 | 3 | 48 | **GPU memory** | ~$0.095 |
+## Per-GPU config matrix (measured 2026-05-24, cloud SLO-robust — `proj-2026-05-24-0859/validation.md`)
+SLO-robust = sustained **p95<300ms + clean p99** (the competitive bar). Relaxing to the 400ms hard budget gives
+~24/box L40S / ~8/box L4, but p99 degrades. The OLD "knee" numbers (L4 ~32 / L40S 48) were *keep-up* knees that do
+**not** hold the SLO — they overstate deployable density ~2–3×.
+| GPU | instance | lanes/proc | K | **SLO-robust /box** | bound by | notes |
+|---|---|---:|---:|---:|---|---|
+| L4 | g6.4xlarge | 2 | 2 | **~6** (3/proc) | GPU mem-BW | ~3× costlier/stream than L40S |
+| L40S | g6e.4xlarge | 2 | 3 | **~16–20** (5.3–6.7/proc) | per-proc intake + GPU-BW | preferred (cheaper than 8xlarge) |
+| L40S | g6e.8xlarge | 2 | 3 | **~16–20** | same (extra vCPU idle) | no density gain over 4xlarge |
+
+K=4 fits memory with the padded bucket but is **NOT** a density win — L40S is ~16–20/box regardless of K (K=3 even
+edges K=4 on clean-p99 headroom). $/stream is ~3× the old keep-up-knee estimate (recompute against current instance
+pricing using these /box numbers).
 
 - **lanes=2/process** is the unit (>2 regresses on the GIL; 1 wastes per-process overhead).
 - **MPS is required for K>2** (turns time-slice contention into concurrent SM sharing).
-- **Operate each process at the measured in-budget point and shed above it**: L40S is ~6.7 streams/proc, so set
-  HAProxy `maxconn 7`; L4 is ~3.5 streams/proc, so use `maxconn 3` or `4` depending on SLO margin. This enforces the
-  latency-safe operating point; it does **not** increase capacity. The old `maxconn 12` setting is above the
-  in-budget point and can drive the scheduler backlog cliff.
-- Server-side defense-in-depth is available via `NEMOTRON_ADMISSION_MAX_BACKLOG` and optional
-  `NEMOTRON_ADMISSION_MAX_READY_AGE_MS` (both default effectively off). It WS-closes new connections when the
-  always-on backlog signal exceeds the cap: queued per-session scheduler events + scheduler-ready sessions, with
-  oldest-ready age included for age-based caps. When enabled, `/health` reports `admission.attempted`,
-  `admission.admitted`, and `admission.rejected` plus the live signal.
-- **L40S is MEMORY-bound to K=3 with the finalize encoder graph on** (the default 246/279 latency win). Each proc is
-  **~11 GB** (model + 2-lane STEADY + FINALIZE graph pools), so K=4 OOMs the 44 GB L40S (4×11≈44 GB; measured
-  2026-05-23 — `ok=56/944` error cascade). The 64/box "GPU ceiling" was the pre-finalize-graph *compute* knee; with
-  the finalize graph the GPU runs out of **memory** before compute. **Consequence: g6e.8xlarge's extra vCPU buys
-  nothing now (the 48 GB GPU, not vCPU, is the limit) → prefer the cheaper g6e.4xlarge for L40S (same K=3/48).** To
-  recover K=4 on g6e.8xlarge, the **preferred** shrink is the **padded-T_max finalize bucket**
-  (`NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=1`): one `B=1 × T_max` bucket replaces the 19 per-T buckets
-  (T=42–60) → **~19× less finalize graph-pool memory** (local-measured), with FULL T coverage and no trim
-  (shorter finalize inputs are padded to T_max and masked → byte-identical encoder output for the real frames).
-  The per-T `_T_MAX`/`_MAX_B` trim is the fallback. *Note the recovered K=4 is a MEMORY fit, not a capacity gain:
-  the in-budget operating point stays keep-up-bound (~6–7 streams/proc) — see the maxconn note above.*
-  Cloud K=4 no-OOM + density confirm is pending (proj-2026-05-24-0859 Step 6).
-- **L4 (g6.* / 24 GB) is ~3× worse than L40S** (encoder is memory-bandwidth-bound; L4 ~8.2ms floor vs L40S ~2.9ms),
-  in-budget at **K=2, ~3–4 streams/proc (~7/box)** — keep-up-bound, NOT a capacity choice. The padded-T_max bucket
-  (above) is also the preferred L4 K=2 fit: full finalize-graph coverage projected to fit 24 GB at K=2 with headroom
-  (from the ~19× local drop), replacing the per-T trim previously needed. Cloud no-OOM confirm pending (Step 6).
+- **Operate each process at the SLO-robust point and shed above it**: L40S ~5–7 streams/proc (HAProxy `maxconn 6`
+  for the 16/box solid point, `7` for ~20/box if marginal p95 is acceptable); L4 ~3 streams/proc (`maxconn 3`). This
+  enforces the latency-safe point; it does **not** increase capacity. `maxconn 12` is well above it and drives the
+  scheduler/**intake** backlog cliff (`vad_stop_recv_to_process` → seconds).
+- Server-side defense-in-depth: set **`NEMOTRON_ADMISSION_MAX_BACKLOG` ≈ 8–12** (the backlog-count signal — queued
+  per-session scheduler events + scheduler-ready sessions). It WS-closes (1013) new connections past the cap, so the
+  **LB must DRAIN on 1013**. Cloud-verified 2026-05-24: sheds proportionally under overload and keeps admitted
+  **p50<300** (a tighter cap also protects the p95 tail). The age signal `NEMOTRON_ADMISSION_MAX_READY_AGE_MS` does
+  **NOT** track this intake-bound overload (the ready-set drains fast; the backlog is upstream in intake) — use the
+  backlog-count cap. `/health` reports `admission.attempted/admitted/rejected` + the live signal.
+- **Keep K=3 on L40S** (`auto_pick_K`=3). K=4 fits memory with the padded bucket (gpu_mem 40/46 GB, 0 OOM, cloud-
+  confirmed 2026-05-24) but is **not a density win** — L40S is ~16–20/box regardless of K (per-proc intake + GPU-BW
+  ceiling, not proc count), and K=3 has ~16 GB more headroom (30 vs 40 GB) + edges K=4 on clean-p99. The old K=4
+  `ok=56/944` OOM was the per-T finalize pool; the padded bucket fixes the *fit*, but use it for headroom/L4, not density.
+  Prefer the cheaper **g6e.4xlarge** for L40S (extra 8xlarge vCPU sits idle — the limit is per-proc intake + GPU-BW).
+- **Padded-T_max finalize bucket SHIPS ON** (`NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED`, default 1 in
+  launch_multiproc): one `B=1 × T_max` bucket replaces the 19 per-T buckets (T=42–60) → **~19× less finalize
+  graph-pool memory**, FULL T coverage, byte-exact (padded+masked → byte-identical encoder output for the real
+  frames; cloud-verified `mode=padded_T_max` replay). It obsoletes the per-T `_T_MAX`/`_MAX_B` trim (now fallback only).
+- **L4 (g6.4xlarge / 24 GB) ≈ ~6/box** (K=2, ~3 streams/proc; cloud-confirmed clean AND profiled 2026-05-24, gpu_mem
+  19/23, 0 OOM, padded no-trim). ~3× worse than L40S because the encoder is **memory-bandwidth-bound** (L4 ~8.2ms
+  floor vs L40S ~2.9ms) — the GPU *is* the wall on L4, so unlike L40S, profiling-off does NOT lift it. Genuinely
+  BW-bound-low, not a tuning artifact and not a regression (the old "~24/box" was a different tight-budget-capacity
+  metric on g6.2xlarge that overstated the sustainable knee).
 
 ## Substrate decision (Step 7)
 For a long-lived **WebSocket** service (not request/response):

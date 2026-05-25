@@ -4,7 +4,7 @@
 #   --working : push the working-tree versions instead (for the lanes/graphs runs).
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root
-IP=$(python3 -c "import json;print(json.load(open('ec2-bench/.instance.json'))['ip'])")
+IP=$(python3 -c "import json,os;print(json.load(open('ec2-bench/'+os.environ.get('NEMOTRON_EC2_STATE','.instance.json')))['ip'])")
 KEY=ec2-bench/nemotron-bench-key.pem
 SSHO="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 STAGE=$(mktemp -d)

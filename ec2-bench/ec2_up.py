@@ -20,10 +20,10 @@ REGION = "us-west-2"
 ITYPE = os.environ.get("NEMOTRON_EC2_ITYPE", "g6.4xlarge")
 KEY = "nemotron-bench-key"
 SG = "nemotron-bench-sg"
-NAME = "nemotron-bench-" + ITYPE
+NAME = os.environ.get("NEMOTRON_EC2_NAME", "nemotron-bench-" + ITYPE)  # override so same-ITYPE parallel runs don't reuse each other's box
 HERE = Path(__file__).resolve().parent
 PEM = HERE / f"{KEY}.pem"
-STATE = HERE / ".instance.json"
+STATE = HERE / os.environ.get("NEMOTRON_EC2_STATE", ".instance.json")  # override for parallel runs (separate boxes)
 MY_IP = os.environ.get("MY_IP", "157.131.250.150")
 
 ec2 = boto3.Session(profile_name=PROFILE).client("ec2", region_name=REGION)

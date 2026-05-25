@@ -71,7 +71,7 @@ PY
 scp -i "$KEY" $SSHO "$OUT/haproxy_asr.cfg" ubuntu@"$IP":~/nemotron/haproxy_asr.cfg
 
 # Launch MPS + K procs (procs on 8081..; FINALIZE_PROFILE on) in the FOREGROUND of a backgrounded ssh.
-ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && NEMOTRON_PROCS=$K NEMOTRON_BASE_PORT=8081 FINALIZE_PROFILE=1 \
+ssh -i "$KEY" $SSHO ubuntu@"$IP" "cd ~/nemotron && NEMOTRON_PROCS=$K NEMOTRON_BASE_PORT=8081 FINALIZE_PROFILE=1 ${FINALIZE_PADDED:+FINALIZE_PADDED=$FINALIZE_PADDED} ${SYNC_COMPRESS:+SYNC_COMPRESS=$SYNC_COMPRESS} ${FINALIZE_PRIORITY:+FINALIZE_PRIORITY=$FINALIZE_PRIORITY} ${ADMISSION_MAX_BACKLOG:+ADMISSION_MAX_BACKLOG=$ADMISSION_MAX_BACKLOG} ${ADMISSION_MAX_READY_AGE_MS:+ADMISSION_MAX_READY_AGE_MS=$ADMISSION_MAX_READY_AGE_MS} \
     HF_HOME=\$HOME/hf bash launch_multiproc.sh > launcher.log 2>&1" &
 SSHSRV=$!
 echo "=== waiting for $K procs to report 'ASR server listening' ==="

@@ -42,15 +42,25 @@ export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-/tmp/nvidia-mps-log}"
 # (16 per-T buckets, B=1 x T=42..60). To shrink it (L4/24GB K=2, or L40S K=4) the PREFERRED lever is the
 # padded-T_max bucket FINALIZE_PADDED=1 below (one B=1 x T_max bucket, ~19x less finalize pool, full T coverage,
 # byte-exact); the per-T T_MAX/_MAX_B trim is the fallback. See DEPLOYMENT.md.
+# proj-2026-05-24-0859 TAIL levers — SHIPPED ON by default (byte-exact, cloud-proven 2026-05-24; toggle off via env
+# for A/B, e.g. SYNC_COMPRESS=0): PADDED = single padded-T_max finalize bucket (memory/L4-fit + K=3 headroom, NOT a
+# density lever — L40S stays ~16-20/box regardless of K); SYNC_COMPRESS = drop 2 telemetry pre-syncs;
+# FINALIZE_PRIORITY = cross-session priority finalize-lane (bounds the finalize lane-HOL tail).
 SRV_ENV=(NEMOTRON_CONTINUOUS=1 NEMOTRON_FINALIZE_SILENCE_MS=0 NEMOTRON_WARMUP_MS=200
          NEMOTRON_SCHEDULER_B1=1 NEMOTRON_BATCH_SCHED=1 NEMOTRON_BATCH_MAX_SIZE=32 NEMOTRON_BATCH_MAX_WAIT_MS=8
          "NEMOTRON_MODEL_LANES=$LANES" NEMOTRON_BATCH_BARRIER_DRAIN=1 NEMOTRON_BATCH_FINALIZE=1
-         NEMOTRON_ENCODER_CUDAGRAPH=1 NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=8 NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1)
-# Optional measurement passthroughs (default OFF; used by ec2-bench/bench_prod_multiproc.sh to decompose the
-# finalize budget on the real multi-proc + MPS config). No effect on prod unless explicitly set.
-[ "${FINALIZE_PROFILE:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FINALIZE_PROFILE=1)
+         NEMOTRON_ENCODER_CUDAGRAPH=1 NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=8 NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1
+         "NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=${FINALIZE_PADDED:-1}"
+         "NEMOTRON_SYNC_COMPRESS=${SYNC_COMPRESS:-1}"
+         "NEMOTRON_FINALIZE_PRIORITY=${FINALIZE_PRIORITY:-1}")
+# Optional measurement passthroughs (no effect unless set).
+[ "${FINALIZE_PROFILE:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FINALIZE_PROFILE=1)   # adds ~2x intake tax on L40S — measurement only
 [ "${FAULTHANDLER:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_FAULTHANDLER=1)
-[ "${FINALIZE_PADDED:-0}" = 1 ] && SRV_ENV+=(NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=1)
+# Admission/backpressure — OPT-IN (client-facing: rejects past the cap with WS-close 1013, so the LB must DRAIN on 1013).
+# RECOMMENDED prod cap NEMOTRON_ADMISSION_MAX_BACKLOG~8-12 (the backlog-count signal — protects admitted p50+p95 under
+# overload; the *_READY_AGE_MS age signal does NOT track this intake-bound overload, confirmed 2026-05-24).
+[ -n "${ADMISSION_MAX_BACKLOG:-}" ] && SRV_ENV+=("NEMOTRON_ADMISSION_MAX_BACKLOG=$ADMISSION_MAX_BACKLOG")
+[ -n "${ADMISSION_MAX_READY_AGE_MS:-}" ] && SRV_ENV+=("NEMOTRON_ADMISSION_MAX_READY_AGE_MS=$ADMISSION_MAX_READY_AGE_MS")
 # Finalize-graph T-range trim (the documented L4/24GB fit lever — shrinks the finalize graph pool; finalize calls
 # with T outside [MIN,MAX] fail-closed to eager). Observed finalize T is 43-58 (flat); default is 42-60.
 [ -n "${FINALIZE_T_MIN:-}" ] && SRV_ENV+=("NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_T_MIN=$FINALIZE_T_MIN")
