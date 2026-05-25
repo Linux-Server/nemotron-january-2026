@@ -1,0 +1,31 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+torch 2.8.0+cu128 cuda True (12, 0)
+loaded ExportedProgram
+[noexecstack] injected into shared-lib link: torch_python -lgomp  -L/usr/lib/x86_64-linux-gnu -L/usr/local/lib/python3.12/dist-packages/torch/lib  -Wl,-z,noexecstack
+[noexecstack] injected into shared-lib link: torch_python -lgomp  -L/usr/lib/x86_64-linux-gnu -L/usr/local/lib/python3.12/dist-packages/torch/lib  -Wl,-z,noexecstack
+[noexecstack] injected into shared-lib link: usr/lib/x86_64-linux-gnu -L/usr/local/lib/python3.12/dist-packages/torch/lib -L/usr/local/cuda/lib64  -Wl,-z,noexecstack
+[noexecstack] injected into shared-lib link: usr/lib/x86_64-linux-gnu -L/usr/local/lib/python3.12/dist-packages/torch/lib -L/usr/local/cuda/lib64  -Wl,-z,noexecstack
+[noexecstack] injected into shared-lib link: usr/lib/x86_64-linux-gnu -L/usr/local/lib/python3.12/dist-packages/torch/lib -L/usr/local/cuda/lib64  -Wl,-z,noexecstack
+AOTI package: /work/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_steady_aoti.pt2
+  enc_out: byte-equal=False max_abs_diff=1.991e-05 shapes (1, 1024, 2)/(1, 1024, 2)
+  enc_len: byte-equal=True max_abs_diff=0.000e+00 shapes (1,)/(1,)
+  cache_ch: byte-equal=False max_abs_diff=7.193e-05 shapes (24, 1, 70, 1024)/(24, 1, 70, 1024)
+  cache_t: byte-equal=False max_abs_diff=1.663e-02 shapes (24, 1, 1024, 8)/(24, 1, 1024, 8)
+  cache_ch_len: byte-equal=True max_abs_diff=0.000e+00 shapes (1,)/(1,)
+=== AOTI vs eager: NOT byte-exact (maxdiff 1.663e-02) ===

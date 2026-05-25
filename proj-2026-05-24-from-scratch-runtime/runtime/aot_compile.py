@@ -9,23 +9,31 @@ import os, torch
 ART = os.path.join(os.path.dirname(__file__), "artifacts")
 
 def _force_noexecstack_on_link():
-    """Fix the BUILD (not the binary): the AOTI wrapper.so embeds a constants/cubin blob with no .note.GNU-stack, so ld
-    marks the output stack RWX and a hardened host kernel refuses to dlopen it ("cannot enable executable stack"). Inductor
-    exposes no ldflags config knob. Append -Wl,-z,noexecstack to the SHARED-LIB LINK command only (gated on '-shared', so
-    Inductor's compile/ISA probes are untouched); -z noexecstack forces the output PT_GNU_STACK non-exec regardless of any
-    input object's missing note. (constants-on-disk was tried and rejected: it didn't clear the flag AND segfaulted on a
-    fresh aoti_load_package.)"""
+    """Fix the BUILD (not the binary): the AOTI wrapper.so links an input (embedded constants/cubin blob) without a
+    .note.GNU-stack, so ld marks the output stack RWX and a hardened host kernel refuses to dlopen it ("cannot enable
+    executable stack"). (Root cause asserted from build behaviour; readelf appendix TODO.) Inductor exposes no ldflags
+    config knob. Append -Wl,-z,noexecstack to the SHARED-LIB LINK command only (gated on '-shared', so Inductor's
+    compile/ISA probes are untouched); -z noexecstack forces the output PT_GNU_STACK non-exec regardless of any input
+    object's missing note. FAIL-CLOSED: assert the flag actually reached a shared-lib link, else raise (so a silent
+    Inductor refactor can't ship an exec-stack .so). (constants-on-disk was tried+rejected: didn't clear the flag AND
+    segfaulted on a fresh aoti_load_package.)"""
     import torch._inductor.cpp_builder as cb
     orig = cb.CppBuilder.get_command_line
+    seen = {"shared_link": False, "flagged": False}
     def patched(self):
         cmd = orig(self)
-        if getattr(self, "_do_link", False) and "-shared" in cmd and "-Wl,-z,noexecstack" not in cmd:
-            cmd += " -Wl,-z,noexecstack"
+        if getattr(self, "_do_link", False) and "-shared" in cmd:
+            seen["shared_link"] = True
+            if "-Wl,-z,noexecstack" not in cmd:
+                cmd += " -Wl,-z,noexecstack"
+            seen["flagged"] = True
+            print("[noexecstack] injected into shared-lib link:", cmd[-120:])
         return cmd
     cb.CppBuilder.get_command_line = patched
+    return seen  # caller asserts seen["flagged"] after the compile
 
 def main():
-    _force_noexecstack_on_link()
+    seen = _force_noexecstack_on_link()
     print("torch", torch.__version__, "cuda", torch.cuda.is_available(), torch.cuda.get_device_capability())
     ep = torch.export.load(os.path.join(ART, "enc_steady_t2a.pt2"))
     print("loaded ExportedProgram")
@@ -35,6 +43,8 @@ def main():
     pkg_path = os.path.join(ART, "enc_steady_aoti.pt2")
     out_path = torch._inductor.aoti_compile_and_package(ep, package_path=pkg_path)
     print("AOTI package:", out_path)
+    # fail-closed: the noexecstack flag MUST have reached a real shared-lib link
+    assert seen["flagged"], "noexecstack shim never fired on a shared-lib link — Inductor build path changed; refusing to ship a possibly exec-stack .so"
 
     runner = torch._inductor.aoti_load_package(out_path)
     io = torch.load(os.path.join(ART, "t2a_io.pt"), weights_only=False)
