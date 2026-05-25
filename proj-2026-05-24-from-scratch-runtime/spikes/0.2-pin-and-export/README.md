@@ -69,3 +69,17 @@ Goal: a libtorch-loadable encoder forward at the **steady bucket shape** so 0.1b
    hands-on docs.rs/API check (in case a newer tch-rs added partial graph support) before finalizing.
 
 Sources: [tch-rs](https://github.com/LaurentMazare/tch-rs) · [tch-rs#631 CUDA Graphs](https://github.com/LaurentMazare/tch-rs/issues/631) · [PyTorch PR #146378 aarch64 cu128](https://github.com/pytorch/pytorch/pull/146378) · [PyTorch #157548](https://github.com/pytorch/pytorch/issues/157548)
+
+## Mechanical export — EXECUTED 2026-05-24 (real, local; positive 0.2 datapoint)
+Ran `microbench/export_encoder.py` against the cached EN checkpoint in the parakeet venv → **SUCCESS** (`exit 0`):
+- Model `EncDecRNNTBPEModel` restored from the cached `.nemo`; `encoder.cache_aware_stream_step` ran eagerly and
+  **TorchScript-traced cleanly** (`check_trace=False`) → **B1a mechanical export is feasible** (the streaming control
+  flow + drop_extra-restore wrapper traces). Saved `encoder_steady_b1.ts` (**2.5 GB ≈ the 2.44 GB fp32 weights** —
+  corroborates the roofline) + `shapes.json`. (The .ts is gitignored — regenerate via the script.)
+- **Architecture confirmed from the live cache tensors:** `cache_last_channel [24,1,70,1024]` → **24 conformer layers,
+  d_model 1024, left-context 70**; `cache_last_time [24,1,1024,8]` → conv-cache 8; steady encoder_out `[1,1024,2]`
+  (16-frame shift → 2 output frames @ 8× subsampling). mel feat=128, steady T=25 (pre 9 + shift 16), drop_extra=2.
+- **Blackwell decode note:** NeMo logged *"No conditional node support for Cuda … cuda-python not installed → CUDA
+  graphs with while loops disabled"* — confirms the deployed eager `use_cuda_graph_decoder=False` decode path (the 0.6b
+  graph-decoder territory).
+- **Caveat:** this is MECHANICAL (load+run+trace), NOT the T2a byte-exact fidelity gate across all geometries (Wave-2).

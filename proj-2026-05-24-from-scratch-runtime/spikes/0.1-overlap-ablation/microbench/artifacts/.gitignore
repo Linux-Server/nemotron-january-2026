@@ -1,0 +1,2 @@
+# the exported TorchScript module is ~2.5GB (the fp32 weights) — do NOT commit; regenerate via export_encoder.py
+*.ts
