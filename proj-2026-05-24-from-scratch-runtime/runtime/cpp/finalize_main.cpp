@@ -373,7 +373,10 @@ int main(int argc, char** argv) {
                 fork_ok ? "PASS" : "FAIL");
   }
 
-  std::string buckets_dir = dir + "/finalize_buckets";
+  // Prefer the stripped buckets (the deployable form: tiny wrapper .so, weights supplied via load_constants); fall back
+  // to the unstripped finalize_buckets/ if present. (1.3b-enc-scale moved the buckets to stripped_finalize_buckets/.)
+  std::string buckets_dir = dir + "/stripped_finalize_buckets";
+  if (!directory_exists(buckets_dir)) buckets_dir = dir + "/finalize_buckets";
   std::string shared_weights = dir + "/finalize_shared_weights.ts";
   bool phase_b_present = false;
   bool phase_b_ok = true;
@@ -414,8 +417,11 @@ int main(int argc, char** argv) {
           int64_t chunk_T = chunk_mel.size(chunk_mel.dim() - 1);
           auto loader_it = loaders.find(std::make_pair(drop_extra, chunk_T));
           if (loader_it == loaders.end()) {
-            std::printf("  row%d drop=%ld T=%ld: no bucket for (drop,T); skipped\n",
+            // FAIL-CLOSED (enc-scale review B2): no bucket -> no finalize encoder -> dropped final transcript.
+            // Until a validated eager fallback exists, treat as a hard failure, not a skip.
+            std::printf("  row%d drop=%ld T=%ld: no bucket for (drop,T) -> FAIL (no validated fallback)\n",
                         row, (long)drop_extra, (long)chunk_T);
+            phase_b_ok = false;
             continue;
           }
 

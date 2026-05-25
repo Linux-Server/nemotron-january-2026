@@ -449,7 +449,10 @@ def main() -> int:
     token_exact = sum(1 for r in results if r.covered and r.token_exact)
     no_inputs = [r for r in uncovered if r.drop is None]
     missing_bucket = [r for r in uncovered if r.drop is not None]
-    pass_ok = len(divergent) == 0
+    # FAIL-CLOSED (enc-scale review B2): a finalize with no matching bucket emits NO final tokens -> a dropped
+    # end-of-turn transcript in production. Until a NAMED, VALIDATED eager fallback exists, missing buckets are a FAILURE,
+    # not a footnote. (no_inputs = sample had no finalize remainder at all; benign, not counted as a miss.)
+    pass_ok = len(divergent) == 0 and len(missing_bucket) == 0
 
     print(f"\n=== finalize corpus shadow: samples {args.start}..{end - 1} (n={len(results)}) ===")
     print(f"samples={len(results)} covered={covered} token_exact={token_exact} divergent={len(divergent)} uncovered={len(uncovered)}")
@@ -477,8 +480,8 @@ def main() -> int:
     print_memory_report(manager, mem_start, mem_model)
     print(f"\nPASS/FAIL: {'PASS' if pass_ok else 'FAIL'}")
     print(
-        "PASS criterion: every covered sample is token-exact "
-        "(uncovered samples are reported separately)."
+        "PASS criterion: every covered sample token-exact AND zero missing-bucket samples "
+        "(fail-closed; a missing bucket = a dropped final transcript until a validated fallback exists)."
     )
     return 0 if pass_ok else 1
 
