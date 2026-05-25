@@ -72,5 +72,21 @@ def main():
     print(f"=== {npass}/{ntot} exported-module decode byte-exact ===")
     print("EXPORT VERIFIED — decode path is C++-portable" if npass == ntot else "EXPORT DIVERGENCE")
 
+    # self-contained C++ test bundle: init constants + the real_1 fixture (enc/gold) as named buffers (C++ reads via
+    # bundle.attr(name)). Lets decode_main.cpp run + self-check byte-exact without python-pickle marshalling.
+    rf = os.path.join(os.path.dirname(__file__), "fixtures", "decode_real_1.pt")
+    fx = torch.load(rf, weights_only=False)
+    gold = fx["y_sequence"]; gold = gold if torch.is_tensor(gold) else torch.tensor(gold)
+    class Bundle(torch.nn.Module):
+        def __init__(s):
+            super().__init__()
+            s.register_buffer("sos_g", sos_g.cpu()); s.register_buffer("init_h", init_h.cpu())
+            s.register_buffer("init_c", init_c.cpu()); s.register_buffer("enc", fx["enc"].cpu())
+            s.register_buffer("enc_len", fx["enc_len"].cpu().to(torch.int64))
+            s.register_buffer("gold", gold.cpu().to(torch.int64))
+        def forward(s): return s.sos_g
+    torch.jit.script(Bundle()).save(os.path.join(a.out, "cpp_bundle.ts"))
+    print(f"wrote cpp_bundle.ts (real_1: {int(fx['enc_len'][0])} frames, {len(gold)} gold tokens) for the C++ decode")
+
 if __name__ == "__main__":
     main()
