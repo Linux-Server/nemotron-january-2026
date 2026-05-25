@@ -1,0 +1,60 @@
+=== [host] export real examples for missing T (from runtime/) ===
+have T=[44, 45, 58]; need T=[43, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57]
+  exported drop=2 T=43 byte_exact=True -> enc_finalize_d2_T43_ep.pt2
+  exported drop=2 T=46 byte_exact=True -> enc_finalize_d2_T46_ep.pt2
+  exported drop=2 T=47 byte_exact=True -> enc_finalize_d2_T47_ep.pt2
+  exported drop=2 T=48 byte_exact=True -> enc_finalize_d2_T48_ep.pt2
+  exported drop=2 T=49 byte_exact=True -> enc_finalize_d2_T49_ep.pt2
+  exported drop=2 T=50 byte_exact=True -> enc_finalize_d2_T50_ep.pt2
+  exported drop=2 T=51 byte_exact=True -> enc_finalize_d2_T51_ep.pt2
+  exported drop=2 T=52 byte_exact=True -> enc_finalize_d2_T52_ep.pt2
+  exported drop=2 T=53 byte_exact=True -> enc_finalize_d2_T53_ep.pt2
+  exported drop=2 T=54 byte_exact=True -> enc_finalize_d2_T54_ep.pt2
+  exported drop=2 T=55 byte_exact=True -> enc_finalize_d2_T55_ep.pt2
+  exported drop=2 T=56 byte_exact=True -> enc_finalize_d2_T56_ep.pt2
+  exported drop=2 T=57 byte_exact=True -> enc_finalize_d2_T57_ep.pt2
+=== exported 13 new buckets; still-missing T (not found in 400 samples)=[] ===
+=== [container] AOTI-compile the new buckets ===
+  compiled drop=2 T=43 -> enc_finalize_d2_T43.pt2 (2482.8 MB)
+  compiled drop=2 T=46 -> enc_finalize_d2_T46.pt2 (2482.8 MB)
+  compiled drop=2 T=47 -> enc_finalize_d2_T47.pt2 (2482.8 MB)
+  compiled drop=2 T=48 -> enc_finalize_d2_T48.pt2 (2482.8 MB)
+  compiled drop=2 T=49 -> enc_finalize_d2_T49.pt2 (2482.8 MB)
+  compiled drop=2 T=50 -> enc_finalize_d2_T50.pt2 (2482.7 MB)
+  compiled drop=2 T=51 -> enc_finalize_d2_T51.pt2 (2482.7 MB)
+  compiled drop=2 T=52 -> enc_finalize_d2_T52.pt2 (2482.7 MB)
+  compiled drop=2 T=53 -> enc_finalize_d2_T53.pt2 (2482.7 MB)
+  compiled drop=2 T=54 -> enc_finalize_d2_T54.pt2 (2482.7 MB)
+  compiled drop=2 T=55 -> enc_finalize_d2_T55.pt2 (2482.7 MB)
+  compiled drop=2 T=56 -> enc_finalize_d2_T56.pt2 (2482.7 MB)
+    raise KeyError(
+KeyError: "There is no item named 'version' in the archive"
+=== [host] strip new buckets -> stripped_finalize_buckets/ ===
+  stripped enc_finalize_d2_T43.pt2: 2.48GB -> 4.2MB
+  stripped enc_finalize_d2_T46.pt2: 2.48GB -> 4.2MB
+  stripped enc_finalize_d2_T47.pt2: 2.48GB -> 4.2MB
+  stripped enc_finalize_d2_T48.pt2: 2.48GB -> 4.2MB
+  stripped enc_finalize_d2_T49.pt2: 2.48GB -> 4.2MB
+  stripped enc_finalize_d2_T50.pt2: 2.48GB -> 4.1MB
+  stripped enc_finalize_d2_T51.pt2: 2.48GB -> 4.1MB
+  stripped enc_finalize_d2_T52.pt2: 2.48GB -> 4.1MB
+  stripped enc_finalize_d2_T53.pt2: 2.48GB -> 4.1MB
+  stripped enc_finalize_d2_T54.pt2: 2.48GB -> 4.1MB
+  stripped enc_finalize_d2_T55.pt2: 2.48GB -> 4.1MB
+  stripped enc_finalize_d2_T56.pt2: 2.48GB -> 4.1MB
+=== reclaim unstripped ===
+stripped inventory (drop2 T should be 43..58 + drop0 T49):
+43 44 45 46 47 48 49 50 51 52 53 54 55 56 58 
+=== [host] export missing (expect just T=57) ===
+have T=[43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 58]; need T=[57]
+  exported drop=2 T=57 byte_exact=True -> enc_finalize_d2_T57_ep.pt2
+=== exported 1 new buckets; still-missing T (not found in 400 samples)=[] ===
+=== [container] compile ===
+  compiled drop=2 T=57 -> enc_finalize_d2_T57.pt2 (2482.7 MB)
+=== compiled 1 constants-on-disk finalize buckets (share finalize_shared_weights.pt) ===
+=== [host] strip + reclaim ===
+  stripped enc_finalize_d2_T57.pt2: 2.48GB -> 4.1MB
+final drop2 inventory:
+43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 
+total stripped size:
+71M
