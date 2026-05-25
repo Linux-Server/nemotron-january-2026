@@ -632,7 +632,7 @@ start.
 | # | Step | Track | Status | Notes |
 |---|------|------|--------|-------|
 | 0.0 | Worth-it gate | gate | pending | named residual gap vs Python plan + baseline commit |
-| 0.2 | Encoder export fidelity (frozen-mel oracle) | A | pending | B1a; T2a same-shape byte-exact hard gate |
+| 0.2 | libtorch pin + tch-rs gate + export | A | **pin baseline measured** | `spikes/0.2-pin-and-export/`: 5090=sm_120; torch 2.8.0+cu128 (export/graph APIs ✓); Blackwell floor ≥2.7/cu128 elevates tch-rs-veto risk. Full T2a fidelity = Wave-2. Open: NeMo 2.4.1-vs-≥2.6, aarch64 build, tch-rs 2.8 binding |
 | 0.6a | Native EAGER label-looping decode equivalence | A | pending | **the real go/no-go**; exact Hypothesis/state; no graph/LM/align/mixed-batch |
 | 0.8 | Native preprocessor byte-exact | A | pending | independent of 0.2; frozen-fixture oracle |
 | 0.9 | Model mutability audit | A | **scaffolded — analysis COMPLETE** | `spikes/0.9-mutability-audit.md`; 8 mutable surfaces enumerated + pure-param rule |

@@ -14,7 +14,8 @@ GPU / cloud / the post-Python baseline, the harness is a skeleton with the run-s
 | 0.4 decision memo | `decision-template.md` | template + filled decision tree + pre-registered-thresholds block | the spike outcomes |
 | 0.1 overlap/MPS ablation | `0.1-overlap-ablation/` | harness skeleton + ablation matrix + thresholds | GPU + post-Python baseline |
 | ~~0.3 py3.13t probe~~ | `0.3-py313t/` (RETIRED) | tombstone — B4 rejected 2026-05-24 | — (proof moved to 0.1b) |
-| 0.1b native launch-overlap microbench | `0.1-overlap-ablation/` | folded into 0.1 (conjunct-2 proof) | captured encoder graph + GPU |
+| 0.1b native launch-overlap microbench | `0.1-overlap-ablation/0.1b-microbench-spec.md` | spec'd; **GATE = ≥1.5× L40S (~28/box)** | the export from 0.2-pin + a GPU |
+| 0.2 libtorch pin + tch-rs gate + export | `0.2-pin-and-export/` | **pin baseline measured** (torch 2.8/cu128, sm_120) | resolve NeMo ver / aarch64 / tch-rs-2.8 binding |
 | 0.5 batching sim | `0.5-batching-sim/` | trace schema + pure-Python simulator skeleton + instrumentation spec | server trace capture (spec only — NOT applied) |
 | 0.7 aarch64 | `0.7-aarch64/` | version-matrix checklist template | a GB10/aarch64 box |
 
