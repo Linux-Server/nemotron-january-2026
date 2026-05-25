@@ -258,6 +258,13 @@ L4 (AWS g6, 300 GB/s), L40S (AWS g6e, 864 GB/s).
 Candidate shapes (pick in 0.4): (1) all-C++; (2) **Rust front + C++ model-worker `cdylib` over a thin off-hot-path FFI
 (submit-batch/poll-completion)**; (3) all-Rust (`tch-rs`+`cudarc`).
 
+**PRELIMINARY VERDICT (2026-05-24): C++ for the model worker; all-Rust effectively VETOED.** The tch-rs evaluation ran:
+tch-rs is version-current (requires libtorch 2.11; not lagging) BUT **CUDA-graph capture is an open, unimplemented
+feature request (tch-rs#631)** — the decisive hot-path box fails. All-Rust would require unsafe FFI shims to libtorch's
+`CUDAGraph`/`c10::cuda` symbols (defeats the safety rationale). → **all-C++ (shape 1), or Rust-front + C++-worker
+(shape 2) if Rust is wanted for networking/scheduler.** Confirm with a hands-on docs.rs check at 0.4. Detail:
+`spikes/0.2-pin-and-export/README.md`.
+
 **The Rust-vs-C++ decision is made on a concrete tch-rs evaluation, not preference (user direction 2026-05-24).
 All-Rust (3) is the DEFAULT if-and-only-if `tch-rs`(+`cudarc`), *at a libtorch version that clears the version-selection
 constraints*, exposes the hot-path surface — decisively, CUDA-graph capture/replay against libtorch-*allocated* tensors,
@@ -632,7 +639,7 @@ start.
 | # | Step | Track | Status | Notes |
 |---|------|------|--------|-------|
 | 0.0 | Worth-it gate | gate | pending | named residual gap vs Python plan + baseline commit |
-| 0.2 | libtorch pin + tch-rs gate + export | A | **pin baseline measured** | `spikes/0.2-pin-and-export/`: 5090=sm_120; torch 2.8.0+cu128 (export/graph APIs ✓); Blackwell floor ≥2.7/cu128 elevates tch-rs-veto risk. Full T2a fidelity = Wave-2. Open: NeMo 2.4.1-vs-≥2.6, aarch64 build, tch-rs 2.8 binding |
+| 0.2 | libtorch pin + tch-rs gate + export | A | **pin + language RESOLVED (prelim)** | pin = torch/libtorch **2.8.0+cu128 + nemo 2.4.1** (working, model cached, sm_120 ✓); **tch-rs gate FAILED (CUDA-graph unimpl, #631) → C++ worker, all-Rust vetoed**; aarch64 cu128 = maturity risk (0.7). Full T2a fidelity + harness build = pending. `spikes/0.2-pin-and-export/` |
 | 0.6a | Native EAGER label-looping decode equivalence | A | pending | **the real go/no-go**; exact Hypothesis/state; no graph/LM/align/mixed-batch |
 | 0.8 | Native preprocessor byte-exact | A | pending | independent of 0.2; frozen-fixture oracle |
 | 0.9 | Model mutability audit | A | **scaffolded — analysis COMPLETE** | `spikes/0.9-mutability-audit.md`; 8 mutable surfaces enumerated + pure-param rule |

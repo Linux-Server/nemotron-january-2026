@@ -73,6 +73,13 @@ multi-thread intake** reclaiming the idle GPU.
 - **Net:** the project go/no-go now reduces to **(0.1b ≥1.5× on L40S)** AND the downstream **B1 byte-exact feasibility
   (0.6a decode + 0.2 encoder)**. Conjunct 2 is already confirmed; conjunct 1 is satisfied pending the 0.1b number.
 
+## Language decision — PRELIMINARY: C++ for the hot path (2026-05-24)
+The tch-rs gate ran (`spikes/0.2-pin-and-export/README.md`): pin = **torch/libtorch 2.8.0+cu128 + nemo 2.4.1** (proven
+working, model cached locally, sm_120 ✓). tch-rs is version-current (libtorch 2.11) but **CUDA-graph capture is
+unimplemented (tch-rs#631)** — the decisive hot-path box fails. → **all-C++ (or Rust-front + C++ model-worker); all-Rust
+vetoed.** aarch64/GB10 cu128 libtorch exists but is a maturity risk (may need build-from-source — 0.7). Confirm
+hands-on at 0.4.
+
 ## Running conclusion (updated)
 - **Conjunct 2 CONFIRMED on L40S** (single-thread intake wall, GPU 40–65% idle) → the native thesis's core premise holds
   in production. This materially **weakens the earlier "honest prior is STOP"** — there is a real, measured headroom the

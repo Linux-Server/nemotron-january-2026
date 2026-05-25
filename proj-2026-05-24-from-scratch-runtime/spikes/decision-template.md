@@ -42,6 +42,9 @@ libtorch.
 - **Outcome:** all boxes ✓ → **all-Rust** (no seam, borrow-checker everywhere). Any ✗ → either write `unsafe extern "C"`
   shims to the missing libtorch symbols inside the Rust crate (you're hand-binding C++ anyway) → prefer **Rust-front +
   thin C++ worker**, or go **all-C++**. Record which box failed.
+- **PRELIMINARY RESULT (2026-05-24): FAILED at the decisive box.** tch-rs is version-current (libtorch 2.11; not lagging)
+  but **CUDA-graph capture is unimplemented (tch-rs#631)**. → **C++ for the model worker (all-C++ or Rust-front+C++-worker);
+  all-Rust effectively vetoed.** Confirm hands-on at 0.4 (newer tch-rs / accept FFI shims?).
 
 ## PRE-REGISTERED Wave-1 thresholds (REGISTER BEFORE COLLECTING 0.1/0.5 DATA)
 > These are kill decisions; defining them after seeing data is invalid. Fill the numbers, freeze, THEN run.

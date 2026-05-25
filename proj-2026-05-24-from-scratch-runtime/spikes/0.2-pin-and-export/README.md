@@ -49,7 +49,23 @@ Goal: a libtorch-loadable encoder forward at the **steady bucket shape** so 0.1b
 0.1b consumes: the exported encoder module + the steady shapes above + the cost-calibrated mock decode. Run 5090 (local)
 → L40S (cloud). **Gate: ≥1.5× L40S density (≥~28/box).**
 
-## Open questions (resolve before freezing the pin)
-1. **Which NeMo loads the production checkpoint?** (2.4.1 in parakeet venv vs `>=2.6.0` in pyproject) — sets the torch ceiling.
-2. **aarch64/GB10 build of 2.8.0+cu128?** (0.7).
-3. **Does tch-rs bind 2.8/cu128?** (the Rust go/no-go).
+## Open questions — RESOLVED (2026-05-24)
+1. **Which NeMo? → RESOLVED.** The parakeet venv runs **torch 2.8.0+cu128 + nemo 2.4.1** and `nemo.collections.asr`
+   imports/works; the EN checkpoint (`models--nvidia--nemotron-speech-streaming-en-0.6b`) is **cached locally**. The
+   pyproject `>=2.6.0` is a stale floor, not what runs. **Pin = torch/libtorch 2.8.0+cu128 + nemo 2.4.1** (the
+   proven-working pair, also the fixture/export producer). `torch.cuda.get_arch_list()` includes **sm_120** ✓.
+2. **aarch64/GB10 build? → EXISTS but MATURITY RISK.** cu128 aarch64 libtorch was added (PyTorch PR #146378; targets
+   sm_90/100/**120**) but has been **nightly/flaky** (issue #157548: "haven't been built for weeks"). A *stable* 2.8.0
+   aarch64+cu128 libtorch may need build-from-source. **0.7 must verify a working build on GB10; treat as a risk, not a
+   given.**
+3. **Does tch-rs work? → NO for the hot path (the decisive box FAILS).** tch-rs is **version-current** (latest requires
+   libtorch **2.11.0**, not lagging — an older tch-rs release targets 2.8), BUT **CUDA-graph capture is an OPEN feature
+   request (tch-rs issue #631), NOT implemented**; the README documents no CUDA-graph / custom-stream / allocator
+   control. The decisive box — **CUDA-graph capture against libtorch-allocated tensors** — therefore **fails for tch-rs
+   out of the box.** Going all-Rust would require writing+maintaining **unsafe FFI shims** to libtorch's
+   `CUDAGraph`/`c10::cuda` C++ symbols (defeats the borrow-checker-safety rationale for the hot path).
+   **→ Axis A preliminary verdict: C++ for the model worker** (all-C++ shape 1, or Rust-front + C++-worker shape 2 if
+   the team wants Rust for networking/scheduler). **All-Rust (shape 3) is effectively VETOED.** Confirm at 0.4 with a
+   hands-on docs.rs/API check (in case a newer tch-rs added partial graph support) before finalizing.
+
+Sources: [tch-rs](https://github.com/LaurentMazare/tch-rs) · [tch-rs#631 CUDA Graphs](https://github.com/LaurentMazare/tch-rs/issues/631) · [PyTorch PR #146378 aarch64 cu128](https://github.com/pytorch/pytorch/pull/146378) · [PyTorch #157548](https://github.com/pytorch/pytorch/issues/157548)
