@@ -97,6 +97,17 @@ memory-BW-bound** (GPU encoder is the wall, intake overhead hidden) — confirms
 artifact and NOT a regression (matches pre-plan profiled ~7/box; the old "24/box" was a different tight-budget-capacity
 metric on g6.2xlarge that overstated the sustainable knee).
 
+### Box 7 — RTX 5090 K=2 LOCAL (full harness: MPS + 2 procs + local_lb, profiling OFF) — `local_5090_k2`
+On-box twin of the cloud sweep via the new `ec2-bench/bench_local_sweep.sh` (+ `local_lb.py` leastconn TCP stand-in
+for haproxy; no sudo). Client on localhost → **no WAN** (~23 ms lower p50; the keep-up knee is server-side, comparable).
+gpu_mem 21/32 GB, 0 OOM. 8/4p `213/219/243`, 16/8p `215/229/268`, 20/10p `215/249/336`, 24/12p `216/256/275`, 28/14p
+`219/268/672`. **5090 SLO-robust knee ≈ 24/box (K=2, 12/proc)** (28 marginal — p99 spikes); holds even +WAN.
+**Higher than L40S (~16-20) — because the bottleneck is the per-proc single-thread INTAKE and this box has a fast
+DESKTOP CPU** (sustains ~12/proc vs cloud server CPUs ~5-7/proc). Confirms the density ceiling is CPU-single-thread-
+bound, NOT GPU-FLOPS-bound. CAVEAT: partly reflects the desktop CPU — a server chassis with a slower core would be
+lower. server-finalize p95 19.5→67.7 ms (the 1.4 ms-floor GPU shows; finalize never the wall here). K=3 (~30 GB fits)
+untested — likely higher ceiling but MPS/BW contention may cap it.
+
 ## VERDICT
 - **G1 ✅** K=4 no-OOM (padded, byte-exact, 3× confirmed) · **G4 ✅** L4 K=2-padded no-OOM (obsoletes per-T trim)
 - **G2** clean density **~16-20/box on L40S regardless of K**, **~6/box on L4** — the ~28/box & old 48/64 numbers are
