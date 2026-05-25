@@ -1,9 +1,11 @@
 # Plan: From-scratch persistent serving runtime — break the scheduler/launch ceiling
 
 Project directory: `./proj-2026-05-24-from-scratch-runtime`
-Status: **v6 — REVIEWED** (5 paired adversarial rounds folded; `reviews/`). Verdict: sound + actionable;
-**green-light Wave 1 only** (the cheap kill-shots); do not fund Wave 2 until Wave 1 clears the three-conjunction bet.
-See the Review log at the bottom.
+Status: **v7 — REVIEWED + POST-PYTHON + DECISIONS SET** (5 paired adversarial rounds + path-forward review folded;
+`reviews/`). Both BET conjuncts now resolved/confirmed (conjunct 2 production-confirmed; conjunct 1 = strategic bet +
+≥1.5× floor). **Language decided: C++ for the model worker (tch-rs can't do CUDA graphs).** Pin: libtorch 2.8.0+cu128 +
+nemo 2.4.1. Encoder export proven feasible (real run). **The project now reduces to ONE gating experiment: the 0.1b
+microbench clearing ≥1.5× L40S density** → then fund the Wave-2 byte-exact ports; else STOP. See the Review log.
 
 > **TL;DR.** A persistent native (Rust/C++) ASR serving runtime to lift the **p95/p99 tail + streams/box density** —
 > **NOT p50** (VAD+WAN-bound; only ~12–19 ms is movable by any engine). The real bottleneck is the single asyncio
@@ -117,9 +119,9 @@ a native launch-overlap microbench since the B4 end-to-end probe that used to va
 1. **Is density the right problem? → YES.** The user affirmed density/tail is a strategic priority worth pursuing *if
    the residual is real*. So this is NOT a lean-STOP project; we proceed toward the gate. (The 0.0-pre ceiling arithmetic
    stays as an expectations check, not as a STOP prior.)
-2. **The 0.0 threshold number → DEFERRED** until the Python plan lands and gives a measured baseline. The proposed
-   numeric thresholds in `decision-template.md` are **reference-only** until then; freeze them *before* collecting
-   Wave-1 data, set them *after* the Python baseline exists.
+2. **The 0.0 threshold number → was DEFERRED, now SET** (the Python plan landed same session): fleet = L40S/Ada;
+   **PASS = 0.1b ≥1.5× L40S density (≥~28/box)** vs the measured ~16–20/box baseline; cost basis = strategic capability
+   bet. See the 0.0 gate below.
 3. **Baseline → KEEPS MOVING (not frozen).** The native residual is measured against *whatever Python is at the time*;
    the native build must continuously out-perform the latest Python baseline. Accepted risk: the residual may shrink
    (even asymptote) as Python improves — see risk 13.
@@ -142,15 +144,16 @@ triple-conditional.
   lever — quantify projected-scale COGS and compare against (a) just adding cheap L4 boxes, (b) spending the eng-year on
   multilingual quality / the front-drop bug [[multilingual-front-drop-bug]] / a p50-moving VAD.
 
-- [ ] **0.0 Worth-it gate (value-based, NOT target-based).** Do NOT fund the expensive ports (Wave 2) until: (i) the
-  Python levers have landed + been measured on L4/L40S; (ii) a **named, quantified residual** (p95/p99 ms gap AND
-  streams/box delta) is established vs the *measured* Python result — **note the realistic density is ~28 in-budget
-  streams/box at K=4, NOT the old 64/box headline** (`proj-2026-05-24-0859/PLAN.md:11-14`); (iii) an explicit
-  **value-vs-cost** judgment says that residual justifies ~40–60+ eng-wk + a second stack. **The pause trigger is
-  "residual value below threshold," NOT "Python reached some absolute streams/box number."** Record the residual
-  numbers + the exact Python baseline commit in `reviews/decision.md`.
+- [x] **0.0 Worth-it gate (value-based, NOT target-based) — RESOLVED 2026-05-24.** Do NOT fund the expensive ports
+  (Wave 2) until: (i) the Python levers have landed + been measured on L4/L40S — **DONE** (`validation.md`); (ii) a
+  **named, quantified residual** vs the *measured* Python baseline — **DONE: measured density is L40S ~16–20/box (K=3),
+  L4 ~6/box (BW-bound); the ~28/48/64 figures were refuted/inflated**; (iii) a **value-vs-cost** judgment — **DONE:
+  fleet = L40S/Ada, cost basis = strategic capability bet, PASS bar = 0.1b ≥1.5× L40S (≥~28/box).** **The pause trigger
+  is "residual value below threshold," NOT an absolute streams/box number.** Recorded in `reviews/decision.md`.
+  **→ Net: conjunct 1 resolved in principle; the project now hinges on the 0.1b ≥1.5× measurement + B1 byte-exact
+  feasibility.**
 
-**Spike waves (round 4 — separate "can run early" from "should FUND early"; Budget-A ports are 12–20 eng-wk, §9):**
+**Spike waves (round 4 — separate "can run early" from "should FUND early"; Budget-A ports are 12–20 eng-wk, §8):**
 - **Wave 1 — cheap existence/path killers, in DECISION-VALUE order (path-forward review re-sequenced this to front-load
   the STOP evidence — the rounds put it last):**
   1. **0.0-pre ceiling arithmetic** (free; may STOP here with zero spend).
@@ -587,8 +590,8 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
 8. **Concurrency correctness of mutable per-session state** → actor/snapshot design + generation rules (1.0) first;
    checkers secondary.
 9. **Two stacks; Python baseline moves** → each gate records the baseline commit beaten.
-10. **Effort vs payoff / duplication of the Python plan** (~½–¾ eng-year, §9) → §0 worth-it gate; pause if Python
-    already closes the gap.
+10. **Effort vs payoff / duplication of the Python plan** (~40–60 eng-wk ≈ an engineer-year, §8) → §0 worth-it gate
+    (now RESOLVED: strategic bet + ≥1.5× floor).
 11. **Multilingual/prompted serving** is a separate surface → v1 = EN-only; stated as explicit scope reduction.
 12. **aarch64 toolchain** unknowns → Spike 0.7 pre-check gates 4.2.
 13. **The baseline is a MOVING target — and the user DECIDED not to freeze it (2026-05-24).** The Python plan keeps
@@ -601,7 +604,7 @@ byte-identical padded-T tensors where the Python plan itself relaxed to `allclos
     (single-thread intake wall, GPU 40–65% idle). The one remaining gate is **0.1b ≥1.5× L40S density** + B1 byte-exact
     feasibility. (L4 remains out — BW-bound.)
 
-## 9. Effort sizing (two budgets; ±50–100% — so §0 is an evaluable comparison)
+## 8. Effort sizing (two budgets; ±50–100% — so §0 is an evaluable comparison)
 
 Engineer-weeks, 1 senior eng familiar with the stack. Round 3 widened these: the v2 numbers were optimistic ~2×. Split
 into a **research prototype** (may FAIL the 0.6a/0.1 gates — sunk if it does) and the **production replacement**.
@@ -635,10 +638,10 @@ into a **research prototype** (may FAIL the 0.6a/0.1 gates — sunk if it does) 
 engineer-year against whatever density/tail gap the Python plan leaves.** If that gap is small, this project should not
 start.
 
-## 8. Progress
+## 9. Progress
 | # | Step | Track | Status | Notes |
 |---|------|------|--------|-------|
-| 0.0 | Worth-it gate | gate | pending | named residual gap vs Python plan + baseline commit |
+| 0.0 | Worth-it gate | gate | **RESOLVED 2026-05-24** | conjunct 1 = strategic bet + PASS bar 0.1b ≥1.5× L40S; conjunct 2 confirmed; → project hinges on 0.1b |
 | 0.2 | libtorch pin + tch-rs gate + export | A | **pin + language RESOLVED (prelim)** | pin = torch/libtorch **2.8.0+cu128 + nemo 2.4.1** (working, model cached, sm_120 ✓); **tch-rs gate FAILED (CUDA-graph unimpl, #631) → C++ worker, all-Rust vetoed**; aarch64 cu128 = maturity risk (0.7). Full T2a fidelity + harness build = pending. `spikes/0.2-pin-and-export/` |
 | 0.6a | Native EAGER label-looping decode equivalence | A | pending | **the real go/no-go**; exact Hypothesis/state; no graph/LM/align/mixed-batch |
 | 0.8 | Native preprocessor byte-exact | A | pending | independent of 0.2; frozen-fixture oracle |
