@@ -233,10 +233,18 @@ independent re-run.
   negative, 0 mismatch), finalize **warm ~8ms** (Python-class). The earlier **234ms@N=1 was a per-bucket
   COLD-START artifact** (CUDA-12 lazy module load, ~225ms first-launch, universal to every AOTI loader; the steady
   encoder shows the same max spike amortized over chunks) + a 6-sample p95=max — **FIXED by per-bucket warmup +
-  ≥20 samples** (`density_main` `CUDA_MODULE_LOADING=EAGER` + per-worker bucket warm). **BINDING RESOURCE at the
-  5090 knee = MEMORY** (N=8 OOM at 30.5/32GiB; the finalize buckets' per-runner activation × N), NOT
-  compute/contention. ⟹ N=4 is a **memory-capped 5090 FLOOR, not the density verdict** — the **L40S (46GB) is the
-  gate** and the transferable finding is the *binding resource*, not the N=4.
+  ≥20 samples** (`density_main` `CUDA_MODULE_LOADING=EAGER` + per-worker bucket warm). **BINDING RESOURCE = MEMORY,
+  and W1 (paired, `reviews/phase2-W1-finalize-memory-FOLDED.md`) PINNED it to `enc_first.ts` — a 2.48 GiB
+  full-fp32 encoder loaded ONCE PER WORKER** (`make_worker_context`, `density_main.cpp:629`; ≈ the whole
+  ~2.51 GiB/stream) for one first-chunk forward. **NOT the finalize buckets** (they share ONE 2.30 GiB constants
+  set, `loader_delta=0/bucket`; proven by the 0c control 8-vs-16-finalize-runners→same ~30.8 GiB + activation
+  scaling as N-workers). Cause: the per-thread-handles concurrency choice applied to a 2.48 GiB module; Python has
+  NO enc_first (one shared encoder via drop_extra). ⟹ N=4 is a memory-capped FLOOR from **enc_first duplication**,
+  not the density verdict. **FIX = dedup enc_first** (Fix-2 shared+locked ref → fast confirm; Fix-1 fold into the
+  shared steady AOTI loader → clean + closes the first-chunk-TorchScript residual). **Est. new knee: 5090 N=4→~40-45,
+  L40S ~13→~60-69** (per-stream 2.51→~0.4 GiB; ±20%, confirmable ~5min). **Run sweeps FRESH-PROCESS-PER-N** (same-proc
+  used_before grows 4.98→9.70 GiB, inflates OOM). **enc_first dedup is a PREREQUISITE for the L40S sweep** (else it
+  hits the same ~N=13 enc_first wall + mis-measures the binding resource).
 - **Autotune-ON (max_autotune+coordinate_descent) T1-FAILED CATASTROPHICALLY (MEASURED):** steady-only full-1000
   shadow vs eager = **995/1000 token-divergent, WER 3.68%→82.77% (+79pp)**, first divergence at chunk 2 (`cache_t`
   diff already 22.8; drift plateaus at a catastrophic mean ~30). Confirms the diagnosis: cache_t 10.27 =
@@ -251,10 +259,12 @@ independent re-run.
   in the copies — but volumes are tiny (mel ~8KB, scalars) so it's the **sync stall, not bandwidth.**
 
 ### Lever inventory — TIERED by the binding resource
-- **Tier 1 — finalize MEMORY reduction** (the current 5090 binding resource; likely lifts L40S density too):
-  fewer finalize runners/bucket, shared/streamed finalize activation, **padded-bucket consolidation** (one bucket
-  serves a T-range → fewer loaded buckets → less activation), lazy-load only hot buckets. This is what pushes the
-  knee past N=4→8.
+- **Tier 1 — `enc_first` DEDUP** (the current 5090 binding resource — W1 corrected this from "finalize-memory"):
+  the per-worker 2.48 GiB `enc_first` copy is the memory wall. **Fix-2** (share one enc_first ref + a lock for the
+  rare first-chunk forward, ~10 lines, fast confirm) or **Fix-1** (fold first-chunk into the shared steady AOTI
+  loader → ~0 GiB/worker + closes the first-chunk-TorchScript residual). Est. 5090 N=4→~40-45. (Finalize-bucket
+  hygiene — load+warm only the needed subset — is ALREADY implemented + correct; padded-bucket consolidation is
+  REJECTED: ~0 saving + not token-safe.)
 - **Tier 2 — GATE-DEPENDENT** (pending the L40S sweep's binding-resource attribution): L40S memory-bound → Tier 1;
   **contention-bound → the autotune ladder** (R1a precision-matched, T1-gated); host-bound → Tier 3.
 - **Tier 3 — sync / host-ceiling / tail levers** (first-order ONLY once memory is relaxed + the binding shifts to
@@ -267,14 +277,17 @@ independent re-run.
   autotune for the memory wall; aggressive `max_autotune`+`coordinate_descent` (breaks T1).
 
 ### Scoped next work (priority / dependency)
-- **W0 (in flight):** T1 check on autotune-on steady — completes the autotune-viability question.
-- **W1 (Tier-1, UNBLOCKED, high-value, PAIRED):** finalize-memory reduction — root-cause the per-runner activation
-  cost + implement the reduction (runner cap / shared activation / padded buckets / lazy-load) → push the 5090
-  knee past N=4. Decision-critical for density; helps both boxes.
+- **W0 DONE:** autotune-on T1-FAILED (995/1000); finalize-234ms = cold-start (warmup-fixed); W1 root-caused the
+  memory wall to `enc_first` dup (all paired).
+- **W1 = `enc_first` DEDUP (Tier-1, CRITICAL PATH, the L40S prerequisite).** Implement **Fix-2** (share one
+  enc_first ref + lock, ~10 lines) → re-run 1a **fresh-process-per-N** → confirm the knee jumps from N=4 (est.
+  ~40-45) + correctness holds (concurrent==serial with the shared+locked enc_first). Then **Fix-1** (fold into the
+  shared steady AOTI loader) for production. ~10× est. density upside; confirmable ~5min.
 - **W2 (Tier-3, UNBLOCKED, cheap):** eliminate the `enc_len` D2H `.item()` (verify geometry-deterministic →
   host-compute). Finalize+steady latency/tail win.
-- **W3 (THE GATE, pending S3 upload→g6e):** the L40S apples-to-apples density sweep → the streams/box number + the
-  binding-resource attribution → decides Tier-2 (which lever is first-order on the gate box).
+- **W3 (THE GATE, GATED ON W1 + the S3 upload→g6e):** the L40S apples-to-apples density sweep. **Must run AFTER the
+  enc_first dedup** (else it hits the same ~N=13 enc_first wall + mis-measures). Fresh-process-per-N → the real
+  streams/box number + the binding-resource attribution → decides Tier-2.
 - **W4 (Tier-2, contingent on W3 = contention-bound):** autotune ladder R1a (precision-matched, T1-gated) per the
   strategy doc.
 - **W5 (Tier-3, lower):** glue trim; pinned/`non_blocking` copies; cross-stream transfer/compute batching (Step-2/3).
