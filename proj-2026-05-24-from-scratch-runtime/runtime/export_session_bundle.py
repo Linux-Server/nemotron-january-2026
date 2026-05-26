@@ -97,6 +97,10 @@ def _pack_utf8(strings: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
     )
 
 
+def _sample_id_for(example: dict[str, Any], sample_index: int) -> str:
+    return str(example.get("sample_id", sample_index))
+
+
 def _tokenizer_vocab_size(tokenizer: Any) -> int:
     for attr in ("original_vocab_size", "vocab_size"):
         value = getattr(tokenizer, attr, None)
@@ -899,7 +903,10 @@ class RecordingContinuousFinalizeRef(ContinuousFinalizeRef):
 def _build_row(
     rt: RecordingContinuousFinalizeRef,
     wav,
+    *,
     sample_index: int,
+    sample_id: str,
+    reference_text: str,
 ) -> dict[str, Any]:
     session = rt.new_session(f"session-bundle-{sample_index}")
     rt.begin_recording()
@@ -929,6 +936,9 @@ def _build_row(
 
     return {
         "sample_index": int(sample_index),
+        "sample_id": str(sample_id),
+        "reference_text": str(reference_text),
+        "finalize_ref_text": result.final_text,
         "audio_samples": int(len(wav)),
         "audio": _audio_tensor(wav),
         "steady_chunks": steady_chunks,
@@ -1125,6 +1135,31 @@ class SessionBundle(torch.nn.Module):
             prefix = f"utt{i}"
             steady_chunks = row["steady_chunks"]
             self.register_buffer(f"{prefix}_sample_index", _scalar(row["sample_index"]))
+            sample_id_bytes, sample_id_offsets = _pack_utf8([row["sample_id"]])
+            reference_text_bytes, reference_text_offsets = _pack_utf8(
+                [row["reference_text"]]
+            )
+            finalize_ref_text_bytes, finalize_ref_text_offsets = _pack_utf8(
+                [row["finalize_ref_text"]]
+            )
+            self.register_buffer(f"{prefix}_sample_id_bytes", sample_id_bytes)
+            self.register_buffer(f"{prefix}_sample_id_offsets", sample_id_offsets)
+            self.register_buffer(
+                f"{prefix}_reference_text_bytes",
+                reference_text_bytes,
+            )
+            self.register_buffer(
+                f"{prefix}_reference_text_offsets",
+                reference_text_offsets,
+            )
+            self.register_buffer(
+                f"{prefix}_finalize_ref_text_bytes",
+                finalize_ref_text_bytes,
+            )
+            self.register_buffer(
+                f"{prefix}_finalize_ref_text_offsets",
+                finalize_ref_text_offsets,
+            )
             self.register_buffer(f"{prefix}_audio_samples", _scalar(row["audio_samples"]))
             if audio:
                 self.register_buffer(f"{prefix}_audio", row["audio"].cpu())
@@ -1428,6 +1463,12 @@ def main() -> int:
         _ensure_preproc_ts(model, os.path.dirname(args.out) or ART)
     rt = RecordingContinuousFinalizeRef(model)
     dataset = load_benchmark_dataset()
+    end_index = args.start + (args.n * 2 if args.multiturn else args.n)
+    if args.start < 0 or args.start >= len(dataset) or end_index > len(dataset):
+        raise ValueError(
+            f"requested range start={args.start} n={args.n} "
+            f"multiturn={args.multiturn} exceeds dataset length {len(dataset)}"
+        )
 
     if args.multiturn:
         streams: list[dict[str, Any]] = []
@@ -1526,11 +1567,18 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for offset in range(args.n):
         sample_index = args.start + offset
-        wav = load_wav(dataset[sample_index])
-        row = _build_row(rt, wav, sample_index)
+        example = dataset[sample_index]
+        wav = load_wav(example)
+        row = _build_row(
+            rt,
+            wav,
+            sample_index=sample_index,
+            sample_id=_sample_id_for(example, sample_index),
+            reference_text=str(example.get("transcription", "")),
+        )
         rows.append(row)
         print(
-            f"row{offset} sample={sample_index} audio={row['audio_samples']} "
+            f"row{offset} sample={sample_index} id={row['sample_id']} audio={row['audio_samples']} "
             f"steady_chunks={len(row['steady_chunks'])} "
             f"steady_tok={row['steady_tokens'].numel()} gold_tok={row['gold_tokens'].numel()} "
             f"events={len(row['events'])} "
@@ -1565,7 +1613,8 @@ def main() -> int:
         f"detok_selftests={len(detok_sequences)}, audio={args.audio})"
     )
     print(
-        "schema: meta, init_*; utt{i}_{num_steady,steady_tokens,gold_tokens,"
+        "schema: meta, init_*; utt{i}_{sample_id,reference_text,finalize_ref_text,"
+        "num_steady,steady_tokens,gold_tokens,"
         "event_kinds,event_tokens,event_token_offsets,event_collector_tokens,"
         "event_collector_token_offsets,event_text_bytes,event_text_offsets,"
         "event_collector_text_bytes,event_collector_text_offsets,"

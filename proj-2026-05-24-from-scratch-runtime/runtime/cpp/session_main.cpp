@@ -63,6 +63,15 @@ struct EmittedEvent {
   std::string collector_text;
 };
 
+struct TokenMargin {
+  int64_t token_index = -1;
+  int64_t token_id = -1;
+  double margin = std::numeric_limits<double>::quiet_NaN();
+  std::string label = "NA";
+  int64_t frame = -1;
+  int64_t symbol = -1;
+};
+
 struct Tokenizer {
   std::vector<std::string> pieces;
 
@@ -153,6 +162,23 @@ struct MarginStats {
   std::string min_label = "NA";
   int64_t min_frame = -1;
   int64_t min_symbol = -1;
+  std::vector<TokenMargin> token_margins;
+};
+
+struct DivergenceRecord {
+  std::string sample_id;
+  int64_t sample_index = -1;
+  size_t first_diff = std::numeric_limits<size_t>::max();
+  int64_t got_token = -1;
+  int64_t gold_token = -1;
+  double flip_margin = std::numeric_limits<double>::quiet_NaN();
+  std::string flip_label = "NA";
+  int64_t flip_frame = -1;
+  int64_t flip_symbol = -1;
+  double row_min_margin = std::numeric_limits<double>::quiet_NaN();
+  std::string row_min_label = "NA";
+  int64_t row_min_frame = -1;
+  int64_t row_min_symbol = -1;
 };
 
 struct AudioCiBundleStats {
@@ -339,6 +365,32 @@ static std::string escaped_text(const std::string& text) {
       oss << static_cast<char>(ch);
     }
   }
+  oss << '"';
+  return oss.str();
+}
+
+static std::string json_quote(const std::string& text) {
+  std::ostringstream oss;
+  oss << '"';
+  oss << std::hex << std::setfill('0');
+  for (unsigned char ch : text) {
+    switch (ch) {
+      case '\\': oss << "\\\\"; break;
+      case '"': oss << "\\\""; break;
+      case '\b': oss << "\\b"; break;
+      case '\f': oss << "\\f"; break;
+      case '\n': oss << "\\n"; break;
+      case '\r': oss << "\\r"; break;
+      case '\t': oss << "\\t"; break;
+      default:
+        if (ch < 0x20) {
+          oss << "\\u" << std::setw(4) << static_cast<int>(ch);
+        } else {
+          oss << static_cast<char>(ch);
+        }
+    }
+  }
+  oss << std::dec << std::setfill(' ');
   oss << '"';
   return oss.str();
 }
@@ -631,6 +683,31 @@ static std::vector<EmittedEvent> gold_events_from_bundle(torch::jit::Module& bun
   return gold_events_from_bundle(bundle, prefix, "utt" + std::to_string(utt));
 }
 
+static std::string one_text_from_bundle(torch::jit::Module& bundle,
+                                        const std::string& prefix,
+                                        const char* name,
+                                        const std::string& label) {
+  auto values = unpack_utf8_strings(
+      prefix_tensor(bundle, prefix, (std::string(name) + "_bytes").c_str()),
+      prefix_tensor(bundle, prefix, (std::string(name) + "_offsets").c_str()),
+      name,
+      -1);
+  if (values.size() != 1) throw std::runtime_error(label + " expected one UTF-8 string for " + name);
+  return values[0];
+}
+
+static std::string optional_one_text_from_bundle(torch::jit::Module& bundle,
+                                                 const std::string& prefix,
+                                                 const char* name,
+                                                 const std::string& fallback,
+                                                 const std::string& label) {
+  try {
+    return one_text_from_bundle(bundle, prefix, name, label);
+  } catch (const std::exception&) {
+    return fallback;
+  }
+}
+
 static void emit_event(std::vector<EmittedEvent>& events,
                        int64_t kind,
                        const std::vector<int64_t>& tokens,
@@ -695,6 +772,21 @@ static bool equal_tokens(const std::vector<int64_t>& got,
     }
   }
   return ok;
+}
+
+static size_t first_token_diff_index(const std::vector<int64_t>& got,
+                                     const std::vector<int64_t>& gold) {
+  size_t n = std::min(got.size(), gold.size());
+  for (size_t i = 0; i < n; ++i) {
+    if (got[i] != gold[i]) return i;
+  }
+  if (got.size() != gold.size()) return n;
+  return std::numeric_limits<size_t>::max();
+}
+
+static int64_t token_or_missing(const std::vector<int64_t>& tokens, size_t index) {
+  if (index >= tokens.size()) return -1;
+  return tokens[index];
 }
 
 static bool tensor_equal(const char* name, const torch::Tensor& actual, const torch::Tensor& expected) {
@@ -1414,6 +1506,35 @@ static void observe_margin(MarginStats& stats,
   }
 }
 
+static void observe_token_margin(MarginStats& stats,
+                                 int64_t token_index,
+                                 int64_t token_id,
+                                 double margin,
+                                 const std::string& label,
+                                 int64_t frame,
+                                 int64_t symbol) {
+  stats.token_margins.push_back({token_index, token_id, margin, label, frame, symbol});
+}
+
+static void merge_margin_stats(MarginStats& dst, const MarginStats& src) {
+  dst.total += src.total;
+  dst.below_warning += src.below_warning;
+  dst.below_unsafe += src.below_unsafe;
+  if (src.min_margin < dst.min_margin) {
+    dst.min_margin = src.min_margin;
+    dst.min_label = src.min_label;
+    dst.min_frame = src.min_frame;
+    dst.min_symbol = src.min_symbol;
+  }
+}
+
+static const TokenMargin* margin_for_token_index(const MarginStats& stats, size_t token_index) {
+  for (const auto& margin : stats.token_margins) {
+    if (margin.token_index == static_cast<int64_t>(token_index)) return &margin;
+  }
+  return nullptr;
+}
+
 static void decode_range(torch::jit::Module& joint,
                          torch::jit::Module& predict,
                          const torch::Tensor& enc_out,
@@ -1434,13 +1555,23 @@ static void decode_range(torch::jit::Module& joint,
     for (int n = 0; n < MAX_SYMBOLS; ++n) {
       auto logits = joint.forward({f_t, g}).toTensor();
       auto flat = logits.reshape({-1});
+      double margin = std::numeric_limits<double>::quiet_NaN();
       if (margin_stats != nullptr) {
         auto top2 = std::get<0>(flat.topk(2));
-        double margin = (top2[0] - top2[1]).item<double>();
+        margin = (top2[0] - top2[1]).item<double>();
         observe_margin(*margin_stats, margin, margin_label, t, n);
       }
       int64_t k = flat.argmax().item<int64_t>();
       if (k == BLANK) break;
+      if (margin_stats != nullptr) {
+        observe_token_margin(*margin_stats,
+                             static_cast<int64_t>(hyp.size()),
+                             k,
+                             margin,
+                             margin_label,
+                             t,
+                             n);
+      }
       hyp.push_back(k);
       auto y = torch::full({1, 1}, k, torch::dtype(torch::kLong).device(dev));
       auto out = predict.forward({y, h, c}).toTuple();
@@ -1750,10 +1881,15 @@ static void run_steady_chunk(SessionState& state,
                              torch::jit::Module& predict,
                              torch::Device device,
                              const Tokenizer& tokenizer,
-                             std::vector<EmittedEvent>& events) {
+                             std::vector<EmittedEvent>& events,
+                             MarginStats* margin_stats = nullptr,
+                             const std::string& margin_label = "") {
   auto new_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
+  std::string label = margin_label.empty()
+                          ? prefix + ".chunk" + std::to_string(chunk_index)
+                          : margin_label;
   run_steady_chunk_tensor(state, bundle, prefix, chunk_index, new_mel, enc_first, enc_steady,
-                          joint, predict, device, tokenizer, events);
+                          joint, predict, device, tokenizer, events, margin_stats, label);
 }
 
 static void run_steady_chunk_from_audio(SessionState& state,
@@ -1842,6 +1978,8 @@ struct FinalizeOutcome {
   bool token_ok = false;
   bool fork_ok = false;
   size_t emitted_tokens = 0;
+  std::vector<int64_t> final_tokens;
+  std::string final_text;
 };
 
 struct FinalizeAudioInputs {
@@ -2045,8 +2183,10 @@ static FinalizeOutcome run_finalize(SessionState& parent,
 
   FinalizeOutcome outcome;
   outcome.emitted_tokens = fork.hyp.size();
-  outcome.token_ok = equal_tokens(fork.hyp, gold, "final cumulative", label);
-  std::string final_text = tokenizer.ids_to_text(fork.hyp);
+  outcome.final_tokens = fork.hyp;
+  outcome.final_text = tokenizer.ids_to_text(fork.hyp);
+  outcome.token_ok = equal_tokens(outcome.final_tokens, gold, "final cumulative", label);
+  std::string final_text = outcome.final_text;
   std::string delta_text = append_only_delta_text(final_text, parent.continuous_emitted_text);
   auto delta_tokens = append_only_delta_tokens(fork.hyp, parent.continuous_emitted_tokens);
   if (delta_text.empty()) {
@@ -2083,15 +2223,10 @@ static bool equal_one_text_from_bundle(torch::jit::Module& bundle,
                                        const char* name,
                                        const std::string& actual,
                                        const std::string& label) {
-  auto values = unpack_utf8_strings(
-      prefix_tensor(bundle, prefix, (std::string(name) + "_bytes").c_str()),
-      prefix_tensor(bundle, prefix, (std::string(name) + "_offsets").c_str()),
-      name,
-      -1);
-  if (values.size() != 1) throw std::runtime_error(label + " expected one UTF-8 string for " + name);
-  if (actual == values[0]) return true;
+  std::string expected = one_text_from_bundle(bundle, prefix, name, label);
+  if (actual == expected) return true;
   std::printf("    %s %s mismatch: got=%s gold=%s\n",
-              label.c_str(), name, escaped_text(actual).c_str(), escaped_text(values[0]).c_str());
+              label.c_str(), name, escaped_text(actual).c_str(), escaped_text(expected).c_str());
   return false;
 }
 
@@ -2376,6 +2511,7 @@ static void verify_session_bundle_meta(torch::jit::Module& bundle, bool multitur
 
 int main(int argc, char** argv) {
   std::string dir = "../artifacts";
+  std::string hyps_out_arg;
   bool check_events = true;
   bool multiturn = false;
   bool audio_mode = false;
@@ -2387,6 +2523,12 @@ int main(int argc, char** argv) {
       multiturn = true;
     } else if (arg == "--audio") {
       audio_mode = true;
+    } else if (arg == "--hyps-out") {
+      if (i + 1 >= argc) {
+        std::printf("SESSION argument error: --hyps-out requires a path\n");
+        return 2;
+      }
+      hyps_out_arg = argv[++i];
     } else {
       dir = arg;
     }
@@ -2736,11 +2878,18 @@ int main(int argc, char** argv) {
 
     std::printf("=== SESSION single-stream replay: %ld utterances (events=%s) ===\n",
                 (long)rows, check_events ? "check" : "skip");
+    std::string hyps_path = hyps_out_arg.empty() ? dir + "/session_hyps.jsonl" : hyps_out_arg;
+    std::ofstream hyps_out(hyps_path, std::ios::out | std::ios::trunc);
+    if (!hyps_out) {
+      throw std::runtime_error("cannot open session hypotheses output: " + hyps_path);
+    }
     SessionState session;
     int steady_pass = 0;
     int final_pass = 0;
     int event_pass = 0;
     int fork_pass = 0;
+    MarginStats session_margin_stats;
+    std::vector<DivergenceRecord> token_divergences;
 
     for (int utt = 0; utt < rows; ++utt) {
       reset_session(session, bundle, device);
@@ -2748,12 +2897,19 @@ int main(int argc, char** argv) {
       std::string prefix = "utt" + std::to_string(utt);
       std::string label = "utt" + std::to_string(utt);
       int64_t sample_index = scalar_i64(utt_tensor(bundle, utt, "sample_index"));
+      std::string sample_id = optional_one_text_from_bundle(
+          bundle,
+          prefix,
+          "sample_id",
+          std::to_string(sample_index),
+          label);
       int64_t num_steady = scalar_i64(utt_tensor(bundle, utt, "num_steady"));
       int64_t final_drop = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
       int64_t final_T = scalar_i64(utt_tensor(bundle, utt, "final_T"));
       std::vector<EmittedEvent> gold_events;
       if (check_events) gold_events = gold_events_from_bundle(bundle, utt);
       std::vector<EmittedEvent> events;
+      MarginStats row_margin_stats;
 
       bool row_ok = true;
       try {
@@ -2763,11 +2919,24 @@ int main(int argc, char** argv) {
           if (chunks != num_steady) throw std::runtime_error("audio steady count post-check mismatch");
         } else {
           for (int chunk = 0; chunk < num_steady; ++chunk) {
-            run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+            run_steady_chunk(session,
+                             bundle,
+                             prefix,
+                             chunk,
+                             enc_first,
+                             enc_steady,
+                             joint,
+                             predict,
+                             device,
+                             tokenizer,
+                             events,
+                             &row_margin_stats,
+                             label + ".chunk" + std::to_string(chunk));
           }
         }
       } catch (const std::exception& e) {
-        std::printf("  utt%d sample=%ld steady threw: %s\n", utt, (long)sample_index, e.what());
+        std::printf("  utt%d sample=%ld id=%s steady threw: %s\n",
+                    utt, (long)sample_index, sample_id.c_str(), e.what());
         row_ok = false;
       }
 
@@ -2802,11 +2971,20 @@ int main(int argc, char** argv) {
                                 FinalizeFinish::SPECULATIVE_KEEP,
                                 audio_inputs_ptr,
                                 audio_geometry_ptr,
-                                audio_mode ? &audio_front->margin_stats : nullptr);
+                                audio_mode ? &audio_front->margin_stats : &row_margin_stats);
       } catch (const std::exception& e) {
-        std::printf("  utt%d sample=%ld finalize threw: %s\n", utt, (long)sample_index, e.what());
+        std::printf("  utt%d sample=%ld id=%s finalize threw: %s\n",
+                    utt, (long)sample_index, sample_id.c_str(), e.what());
         finalize.token_ok = false;
         finalize.fork_ok = false;
+      }
+
+      hyps_out << "{\"sample_id\":" << json_quote(sample_id)
+               << ",\"sample_index\":" << sample_index
+               << ",\"final_text\":" << json_quote(finalize.final_text)
+               << "}\n";
+      if (!hyps_out) {
+        throw std::runtime_error("failed while writing session hypotheses output: " + hyps_path);
       }
 
       bool events_ok = true;
@@ -2817,10 +2995,37 @@ int main(int argc, char** argv) {
       if (check_events && events_ok) ++event_pass;
       if (finalize.fork_ok) ++fork_pass;
       auto gold = tensor_to_vec(utt_tensor(bundle, utt, "gold_tokens"));
+      if (!finalize.token_ok) {
+        DivergenceRecord record;
+        record.sample_id = sample_id;
+        record.sample_index = sample_index;
+        record.first_diff = first_token_diff_index(finalize.final_tokens, gold);
+        if (record.first_diff != std::numeric_limits<size_t>::max()) {
+          record.got_token = token_or_missing(finalize.final_tokens, record.first_diff);
+          record.gold_token = token_or_missing(gold, record.first_diff);
+          if (!audio_mode) {
+            const TokenMargin* token_margin = margin_for_token_index(row_margin_stats, record.first_diff);
+            if (token_margin != nullptr) {
+              record.flip_margin = token_margin->margin;
+              record.flip_label = token_margin->label;
+              record.flip_frame = token_margin->frame;
+              record.flip_symbol = token_margin->symbol;
+            }
+          }
+        }
+        if (!audio_mode && row_margin_stats.total > 0) {
+          record.row_min_margin = row_margin_stats.min_margin;
+          record.row_min_label = row_margin_stats.min_label;
+          record.row_min_frame = row_margin_stats.min_frame;
+          record.row_min_symbol = row_margin_stats.min_symbol;
+        }
+        token_divergences.push_back(std::move(record));
+      }
+      if (!audio_mode) merge_margin_stats(session_margin_stats, row_margin_stats);
       if (check_events) {
-        std::printf("  utt%d sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
+        std::printf("  utt%d sample=%ld id=%s steady_chunks=%ld final(drop=%ld,T=%ld) "
                     "steady=%s final=%s events=%s FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
-                    utt, (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
+                    utt, (long)sample_index, sample_id.c_str(), (long)num_steady, (long)final_drop, (long)final_T,
                     steady_ok ? "PASS" : "FAIL",
                     finalize.token_ok ? "PASS" : "FAIL",
                     events_ok ? "PASS" : "FAIL",
@@ -2828,14 +3033,18 @@ int main(int argc, char** argv) {
                     finalize.emitted_tokens, gold.size(),
                     events.size(), gold_events.size());
       } else {
-        std::printf("  utt%d sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
+        std::printf("  utt%d sample=%ld id=%s steady_chunks=%ld final(drop=%ld,T=%ld) "
                     "steady=%s final=%s events=SKIP FORK_ASSERT=%s tokens=%zu/%zu\n",
-                    utt, (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
+                    utt, (long)sample_index, sample_id.c_str(), (long)num_steady, (long)final_drop, (long)final_T,
                     steady_ok ? "PASS" : "FAIL",
                     finalize.token_ok ? "PASS" : "FAIL",
                     finalize.fork_ok ? "PASS" : "FAIL",
                     finalize.emitted_tokens, gold.size());
       }
+    }
+    hyps_out.close();
+    if (!hyps_out) {
+      throw std::runtime_error("failed closing session hypotheses output: " + hyps_path);
     }
 
     bool token_exact_ok = steady_pass == rows && final_pass == rows;
@@ -2859,6 +3068,62 @@ int main(int argc, char** argv) {
                   steady_pass, (long)rows,
                   final_pass, (long)rows,
                   fork_pass, (long)rows);
+    }
+    int64_t token_divergence_count = rows - final_pass;
+    if (check_events) {
+      std::printf("=== SESSION TOKEN/EVENT DIVERGENCES: token=%ld/%ld event=%ld/%ld hyps=%s ===\n",
+                  (long)token_divergence_count,
+                  (long)rows,
+                  (long)(rows - event_pass),
+                  (long)rows,
+                  hyps_path.c_str());
+    } else {
+      std::printf("=== SESSION TOKEN/EVENT DIVERGENCES: token=%ld/%ld event=SKIP hyps=%s ===\n",
+                  (long)token_divergence_count,
+                  (long)rows,
+                  hyps_path.c_str());
+    }
+    if (!audio_mode) {
+      double min_margin = session_margin_stats.total > 0
+                              ? session_margin_stats.min_margin
+                              : std::numeric_limits<double>::quiet_NaN();
+      const char* near_margin_status = session_margin_stats.below_warning > 0 ? "WARN" : "PASS";
+      std::printf("=== SESSION ARGMAX MARGINS: min=%.6e at=%s frame=%ld symbol=%ld "
+                  "below_warning(<%.1e)=%ld below_unsafe(<%.1e)=%ld checks=%ld near_margin=%s ===\n",
+                  min_margin,
+                  session_margin_stats.min_label.c_str(),
+                  (long)session_margin_stats.min_frame,
+                  (long)session_margin_stats.min_symbol,
+                  session_margin_stats.warning_threshold,
+                  (long)session_margin_stats.below_warning,
+                  session_margin_stats.unsafe_threshold,
+                  (long)session_margin_stats.below_unsafe,
+                  (long)session_margin_stats.total,
+                  near_margin_status);
+    }
+    if (!token_divergences.empty()) {
+      size_t max_print = std::min<size_t>(token_divergences.size(), 50);
+      std::printf("first token divergences with argmax margins (%zu/%zu shown):\n",
+                  max_print, token_divergences.size());
+      for (size_t i = 0; i < max_print; ++i) {
+        const auto& d = token_divergences[i];
+        std::printf("  sample_id=%s sample=%ld first_diff=%zu got=%ld gold=%ld "
+                    "flip_margin=%.6e at=%s frame=%ld symbol=%ld "
+                    "utt_min_margin=%.6e at=%s frame=%ld symbol=%ld\n",
+                    d.sample_id.c_str(),
+                    (long)d.sample_index,
+                    d.first_diff,
+                    (long)d.got_token,
+                    (long)d.gold_token,
+                    d.flip_margin,
+                    d.flip_label.c_str(),
+                    (long)d.flip_frame,
+                    (long)d.flip_symbol,
+                    d.row_min_margin,
+                    d.row_min_label.c_str(),
+                    (long)d.row_min_frame,
+                    (long)d.row_min_symbol);
+      }
     }
     if (audio_mode) {
       print_audio_front_summary("SINGLE", *audio_front, token_exact_ok);

@@ -1,0 +1,25 @@
+/home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+=== SESSION WER (1000 utterances, 999 non-empty normalized refs) ===
+normalizer: whisper_normalizer.english.EnglishTextNormalizer
+versions: jiwer=3.1.0 torch=2.8.0+cu128 whisper_normalizer=0.1.12
+sample_ids: first=['6744343e-ef8c-3154-50a2-5ad464c723bc', '0a2570b5-668a-ea08-0546-1db4e518482f', 'e02b3cc7-0a8d-83d6-85a4-1f3240b18e47', '739f778d-e8e2-be4f-3fe6-015adcac4682', 'e820357c-d0b5-11dd-6085-7c8a73e9d335'] last=['f9ea0c50-ed77-df9a-d4fb-a70424dd5b4a', '60c61337-e3a0-cc15-cee0-a5df26e0513a', 'f4751378-72cb-044b-82b3-6a9b7bc59443', 'afbd7e1a-0580-d133-7424-38c0db21fe16', 'c0ffc083-9191-0c0f-12a4-8382a0eab388']
+text divergences vs finalize_ref oracle: 0/1000
+pooled session WER     : 3.6141%
+pooled finalize_ref WER: 3.6141%
+delta session-oracle   : +0.000000 pp (limit +0.004200 pp)
+per-utt WER distribution: mean=3.723% p50=0.000% p90=12.121% p95=16.183% p99=27.273% max=37.037%
+per-utt max positive delta: +0.000000 pp (limit +0.000000 pp)
+worst utterances by session WER:
+  sample_id=21ae428e-3746-7321-84d9-8d350053c375 idx=278 session=37.04% oracle=37.04% delta=+0.000pp ref='the checkout page for my online grocery order keeps freezing every time i try to select a delivery window i have alre...' hyp='the checkout page my online review order keeps freezing every time i try to select in every window i retrieve during ...'
+  sample_id=41a3843e-b0b8-ea1c-18bc-53417c929043 idx=925 session=33.33% oracle=33.33% delta=+0.000pp ref='the depth of the pacific ocean as its deepest point is er' hyp='the depth of the passive caution at its deepest point is'
+  sample_id=65ab320e-9a34-e4d4-af35-b1124c677854 idx=620 session=33.33% oracle=33.33% delta=+0.000pp ref='were part of bahai together and then brigida was' hyp='were part of baha i together and then burgito was'
+  sample_id=1c52c26d-0fd2-4601-129c-091ab83778f9 idx=381 session=33.33% oracle=33.33% delta=+0.000pp ref='called beavertails which was fried dough' hyp='called beaver tails which was fried dough'
+  sample_id=cd03abf1-bc5d-d4a8-e524-563d35dabc09 idx=277 session=33.33% oracle=33.33% delta=+0.000pp ref='at a told' hyp='at a teld'
+  sample_id=7eb2d947-69ae-a79f-d0b6-1c127057f19a idx=836 session=31.25% oracle=31.25% delta=+0.000pp ref='to are i am sorry for that frustration i will do everything i can to try' hyp='you are sorry for that frustration i will do everything i can to try to help'
+  sample_id=b3cab6b9-8349-6f87-3955-6f3b9b034106 idx=209 session=28.57% oracle=28.57% delta=+0.000pp ref='find a locksmith to rekey my locks' hyp='find a locksmith to re key my locks'
+  sample_id=076533b7-d3a7-d1e5-c6da-8f95b123989c idx=852 session=28.57% oracle=28.57% delta=+0.000pp ref='why is it my premium discount apply' hyp='why is not my premium discount applying'
+  sample_id=02d2550c-f2af-dd6a-1f65-024fcbb2cd71 idx=574 session=27.27% oracle=27.27% delta=+0.000pp ref='it is just been i i was driving and you know' hyp='just been it i i was driving and you know'
+  sample_id=22b09731-036b-00e4-66b6-d26d490209ea idx=825 session=27.27% oracle=27.27% delta=+0.000pp ref='0 my god that was that was ridiculous and a little' hyp='0 my god that was that was ridiculous in s'
+summary: /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/session_wer_summary.json
+ASSERTIONS: pooled_noninferior=PASS per_utt_bound=PASS
