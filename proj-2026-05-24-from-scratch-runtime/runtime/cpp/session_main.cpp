@@ -1,8 +1,9 @@
-// 1.4 Phase-1 EXIT GATE: single-stream MEL-level session composition.
+// 1.4 Phase-1 session composition gate.
 //
-// Replays artifacts/session_bundle.ts, runs the production C++ steady path
-// (first chunk TorchScript, steady chunks AOTIModelPackageLoader), then forks
-// the session state for the AOTI finalize bucket selected by (drop_extra, T).
+// Replays artifacts/session_bundle.ts (MEL-fed) or, with --audio, the
+// PCM-fed session_audio_bundle.ts.  The audio path runs the TorchScript
+// preprocessor, raw-audio ring, fixed constant-plan block, and finalize
+// remainder assembly before the same steady/finalize C++ session path.
 // The emitted cumulative tokens must exactly equal finalize_ref gold tokens.
 // The ordered interim/final/suppressed event stream is checked at the same
 // WORD/TEXT level as finalize_ref._continuous_append_only_delta.
@@ -12,11 +13,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <regex>
@@ -42,6 +45,8 @@ static constexpr int FINAL_PADDING_FRAMES = 32;
 static constexpr int ATT_CONTEXT_LEFT = 70;
 static constexpr int ATT_CONTEXT_RIGHT = 1;
 static constexpr const char* MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6b";
+static constexpr double ARGMAX_MARGIN_WARNING_THRESHOLD = 1.0e-2;
+static constexpr double ARGMAX_MARGIN_UNSAFE_THRESHOLD = 1.0e-3;
 
 enum class SessionMode { STREAMING, PENDING_FINALIZE, FINALIZED };
 enum class FinalizeFinish { SPECULATIVE_KEEP, TRUE_BOUNDARY_COLD_RESET };
@@ -76,9 +81,13 @@ struct SessionState {
   std::vector<int64_t> hyp;
   std::vector<int64_t> last_interim_tokens;
   std::vector<int64_t> continuous_emitted_tokens;
+  std::vector<float> pending_audio;
+  std::vector<float> raw_audio_ring;
   std::string last_interim_text;
   std::string continuous_emitted_text;
   SessionMode mode = SessionMode::STREAMING;
+  int64_t total_audio_samples = 0;
+  int64_t synthetic_prefix_samples = 0;
 };
 
 struct AsrSnapshot {
@@ -91,6 +100,76 @@ struct AsrSnapshot {
   torch::Tensor ring;
   int64_t emitted = 0;
   std::vector<int64_t> hyp;
+  std::vector<float> pending_audio;
+  std::vector<float> raw_audio_ring;
+  int64_t total_audio_samples = 0;
+  int64_t synthetic_prefix_samples = 0;
+};
+
+struct AudioGeometry {
+  int64_t shift_frames = -1;
+  int64_t pre_encode_cache_size = -1;
+  int64_t drop_extra = -1;
+  int64_t final_padding_frames = -1;
+  int64_t right_context = -1;
+  int64_t first_preprocess_mel_frame = -1;
+  int64_t hop_samples = -1;
+  int64_t raw_audio_ring_samples = -1;
+  int64_t preprocess_align_pad_samples = -1;
+  int64_t preprocess_new_audio_samples = -1;
+  int64_t stream_preprocess_valid_samples = -1;
+  int64_t constant_preprocess_frames = -1;
+  int64_t constant_preprocess_samples = -1;
+};
+
+struct MelCompareStats {
+  int64_t comparisons = 0;
+  int64_t pass = 0;
+  int64_t byte_equal = 0;
+  int64_t within_ci = 0;
+  double max_abs_diff = 0.0;
+};
+
+struct GeometryCompareStats {
+  int64_t checks = 0;
+  int64_t pass = 0;
+};
+
+struct CacheCompareStats {
+  int64_t checks = 0;
+  int64_t pass = 0;
+  double cache_last_channel_max_abs = 0.0;
+  double cache_last_time_max_abs = 0.0;
+  double cache_last_channel_len_max_abs = 0.0;
+};
+
+struct MarginStats {
+  double warning_threshold = ARGMAX_MARGIN_WARNING_THRESHOLD;
+  double unsafe_threshold = ARGMAX_MARGIN_UNSAFE_THRESHOLD;
+  double min_margin = std::numeric_limits<double>::infinity();
+  int64_t total = 0;
+  int64_t below_warning = 0;
+  int64_t below_unsafe = 0;
+  std::string min_label = "NA";
+  int64_t min_frame = -1;
+  int64_t min_symbol = -1;
+};
+
+struct AudioCiBundleStats {
+  double mel_abs_max = 0.0;
+  double mel_abs_mean = 0.0;
+  double mel_abs_p99 = 0.0;
+  double mel_rel_max = 0.0;
+  double mel_rel_mean = 0.0;
+  double mel_rel_p99 = 0.0;
+  double cache_last_channel_max_abs = 0.0;
+  double cache_last_time_max_abs = 0.0;
+  double cache_last_channel_len_max_abs = 0.0;
+  double mel_checks = 0.0;
+  double cache_checks = 0.0;
+  double mel_max_headroom = 0.0;
+  double mel_p99_headroom = 0.0;
+  double cache_max_headroom = 0.0;
 };
 
 struct ManifestContract {
@@ -194,12 +273,43 @@ static int64_t scalar_i64(torch::Tensor tensor) {
   return tensor.to(torch::kCPU).reshape({-1})[0].item<int64_t>();
 }
 
+static double scalar_f64(torch::Tensor tensor) {
+  return tensor.to(torch::kCPU).to(torch::kFloat64).reshape({-1})[0].item<double>();
+}
+
 static std::vector<int64_t> tensor_to_vec(torch::Tensor tensor) {
   auto flat = tensor.to(torch::kCPU).to(torch::kLong).contiguous().view({-1});
   std::vector<int64_t> out;
   out.reserve(flat.numel());
   for (int64_t i = 0; i < flat.numel(); ++i) out.push_back(flat[i].item<int64_t>());
   return out;
+}
+
+static std::vector<double> tensor_to_double_vec(torch::Tensor tensor) {
+  auto flat = tensor.to(torch::kCPU).to(torch::kFloat64).contiguous().view({-1});
+  std::vector<double> out;
+  out.reserve(flat.numel());
+  auto acc = flat.accessor<double, 1>();
+  for (int64_t i = 0; i < flat.numel(); ++i) out.push_back(acc[i]);
+  return out;
+}
+
+static std::vector<float> tensor_to_float_vec(torch::Tensor tensor) {
+  auto flat = tensor.to(torch::kCPU).to(torch::kFloat32).contiguous().view({-1});
+  std::vector<float> out;
+  out.reserve(flat.numel());
+  auto acc = flat.accessor<float, 1>();
+  for (int64_t i = 0; i < flat.numel(); ++i) out.push_back(acc[i]);
+  return out;
+}
+
+static const char* pass_fail(bool ok) {
+  return ok ? "PASS" : "FAIL";
+}
+
+static const char* pass_fail_skip(int64_t checks, int64_t pass) {
+  if (checks == 0) return "SKIP";
+  return checks == pass ? "PASS" : "FAIL";
 }
 
 static std::string vec_to_string(const std::vector<int64_t>& values) {
@@ -602,6 +712,68 @@ static bool tensor_equal(const char* name, const torch::Tensor& actual, const to
   return eq;
 }
 
+static bool tensor_close(const char* name,
+                         const torch::Tensor& actual,
+                         const torch::Tensor& expected,
+                         double atol,
+                         const std::string& label) {
+  bool meta_ok = actual.scalar_type() == expected.scalar_type() &&
+                 actual.sizes().vec() == expected.sizes().vec();
+  if (!meta_ok) {
+    std::printf("    %s %s metadata mismatch: dtype %d/%d sizes",
+                label.c_str(), name, (int)actual.scalar_type(), (int)expected.scalar_type());
+    for (auto s : actual.sizes()) std::printf(" %ld", (long)s);
+    std::printf(" vs");
+    for (auto s : expected.sizes()) std::printf(" %ld", (long)s);
+    std::printf("\n");
+    return false;
+  }
+  double max_abs = 0.0;
+  if (actual.numel() > 0) {
+    max_abs = (actual - expected).abs().max().item<double>();
+  }
+  bool ok = at::equal(actual, expected) || max_abs <= atol;
+  if (!ok) {
+    std::printf("    %s %s allclose mismatch: max_abs=%.6e atol=%.6e\n",
+                label.c_str(), name, max_abs, atol);
+  }
+  return ok;
+}
+
+static bool tensor_close_cache(const char* name,
+                               const torch::Tensor& actual,
+                               const torch::Tensor& expected,
+                               double atol,
+                               const std::string& label,
+                               CacheCompareStats& stats,
+                               double& max_slot) {
+  ++stats.checks;
+  bool meta_ok = actual.scalar_type() == expected.scalar_type() &&
+                 actual.sizes().vec() == expected.sizes().vec();
+  if (!meta_ok) {
+    std::printf("    %s %s metadata mismatch: dtype %d/%d sizes",
+                label.c_str(), name, (int)actual.scalar_type(), (int)expected.scalar_type());
+    for (auto s : actual.sizes()) std::printf(" %ld", (long)s);
+    std::printf(" vs");
+    for (auto s : expected.sizes()) std::printf(" %ld", (long)s);
+    std::printf("\n");
+    return false;
+  }
+  double max_abs = 0.0;
+  if (actual.numel() > 0) {
+    max_abs = (actual - expected).abs().max().item<double>();
+  }
+  if (max_abs > max_slot) max_slot = max_abs;
+  bool ok = at::equal(actual, expected) || max_abs <= atol;
+  if (ok) {
+    ++stats.pass;
+  } else {
+    std::printf("    %s %s allclose mismatch: max_abs=%.6e atol=%.6e\n",
+                label.c_str(), name, max_abs, atol);
+  }
+  return ok;
+}
+
 static bool optional_tensor_equal(const char* name, const torch::Tensor& actual, const torch::Tensor& expected) {
   if (actual.defined() != expected.defined()) {
     std::printf("    FORK_ASSERT %s defined mismatch: %d/%d\n",
@@ -610,6 +782,32 @@ static bool optional_tensor_equal(const char* name, const torch::Tensor& actual,
   }
   if (!actual.defined()) return true;
   return tensor_equal(name, actual, expected);
+}
+
+static bool float_vec_equal(const char* name,
+                            const std::vector<float>& actual,
+                            const std::vector<float>& expected,
+                            const std::string& label = "FORK_ASSERT") {
+  bool ok = actual.size() == expected.size();
+  double max_abs = 0.0;
+  size_t n = std::min(actual.size(), expected.size());
+  for (size_t i = 0; i < n; ++i) {
+    double d = std::abs(static_cast<double>(actual[i]) - static_cast<double>(expected[i]));
+    if (d > max_abs) max_abs = d;
+    if (actual[i] != expected[i]) ok = false;
+  }
+  if (!ok) {
+    std::printf("    %s %s mismatch: got=%zu gold=%zu max_abs=%.3e\n",
+                label.c_str(), name, actual.size(), expected.size(), max_abs);
+  }
+  return ok;
+}
+
+static bool int64_equal(const char* name, int64_t actual, int64_t expected, const std::string& label) {
+  if (actual == expected) return true;
+  std::printf("    %s %s mismatch: got=%ld gold=%ld\n",
+              label.c_str(), name, (long)actual, (long)expected);
+  return false;
 }
 
 static SessionState clone_session(const SessionState& state) {
@@ -625,9 +823,13 @@ static SessionState clone_session(const SessionState& state) {
   out.hyp = state.hyp;
   out.last_interim_tokens = state.last_interim_tokens;
   out.continuous_emitted_tokens = state.continuous_emitted_tokens;
+  out.pending_audio = state.pending_audio;
+  out.raw_audio_ring = state.raw_audio_ring;
   out.last_interim_text = state.last_interim_text;
   out.continuous_emitted_text = state.continuous_emitted_text;
   out.mode = state.mode;
+  out.total_audio_samples = state.total_audio_samples;
+  out.synthetic_prefix_samples = state.synthetic_prefix_samples;
   return out;
 }
 
@@ -642,6 +844,10 @@ static AsrSnapshot snapshot_asr(const SessionState& state) {
       state.ring.defined() ? state.ring.clone() : torch::Tensor(),
       state.emitted,
       state.hyp,
+      state.pending_audio,
+      state.raw_audio_ring,
+      state.total_audio_samples,
+      state.synthetic_prefix_samples,
   };
 }
 
@@ -664,6 +870,18 @@ static bool fork_assert_parent_unchanged(const SessionState& parent, const AsrSn
                 parent.hyp.size(), snapshot.hyp.size());
     ok = false;
   }
+  ok = float_vec_equal("pending_audio", parent.pending_audio, snapshot.pending_audio) && ok;
+  ok = float_vec_equal("raw_audio_ring", parent.raw_audio_ring, snapshot.raw_audio_ring) && ok;
+  if (parent.total_audio_samples != snapshot.total_audio_samples) {
+    std::printf("    FORK_ASSERT total_audio_samples mismatch: %ld/%ld\n",
+                (long)parent.total_audio_samples, (long)snapshot.total_audio_samples);
+    ok = false;
+  }
+  if (parent.synthetic_prefix_samples != snapshot.synthetic_prefix_samples) {
+    std::printf("    FORK_ASSERT synthetic_prefix_samples mismatch: %ld/%ld\n",
+                (long)parent.synthetic_prefix_samples, (long)snapshot.synthetic_prefix_samples);
+    ok = false;
+  }
   return ok;
 }
 
@@ -679,17 +897,32 @@ static void reset_session(SessionState& state, torch::jit::Module& bundle, torch
   state.hyp.clear();
   state.last_interim_tokens.clear();
   state.continuous_emitted_tokens.clear();
+  state.pending_audio.clear();
+  state.raw_audio_ring.clear();
   state.last_interim_text.clear();
   state.continuous_emitted_text.clear();
   state.mode = SessionMode::STREAMING;
+  state.total_audio_samples = 0;
+  state.synthetic_prefix_samples = 0;
+}
+
+static void reset_audio_front(SessionState& state, const AudioGeometry& g) {
+  state.pending_audio.clear();
+  state.raw_audio_ring.assign(static_cast<size_t>(g.raw_audio_ring_samples), 0.0f);
+  state.total_audio_samples = 0;
+  state.synthetic_prefix_samples = 0;
 }
 
 static void finish_speculative_finalize(SessionState& state) {
   state.mode = SessionMode::STREAMING;
 }
 
-static void cold_reset_after_finalize(SessionState& state, torch::jit::Module& bundle, torch::Device device) {
+static void cold_reset_after_finalize(SessionState& state,
+                                      torch::jit::Module& bundle,
+                                      torch::Device device,
+                                      const AudioGeometry* audio_geometry = nullptr) {
   reset_session(state, bundle, device);
+  if (audio_geometry != nullptr) reset_audio_front(state, *audio_geometry);
 }
 
 static uint32_t rotr(uint32_t x, uint32_t n) {
@@ -1165,6 +1398,22 @@ load_finalize_bucket_loaders(const std::string& dir, torch::Device device) {
   return loaders;
 }
 
+static void observe_margin(MarginStats& stats,
+                           double margin,
+                           const std::string& label,
+                           int64_t frame,
+                           int64_t symbol) {
+  ++stats.total;
+  if (margin < stats.warning_threshold) ++stats.below_warning;
+  if (margin < stats.unsafe_threshold) ++stats.below_unsafe;
+  if (margin < stats.min_margin) {
+    stats.min_margin = margin;
+    stats.min_label = label;
+    stats.min_frame = frame;
+    stats.min_symbol = symbol;
+  }
+}
+
 static void decode_range(torch::jit::Module& joint,
                          torch::jit::Module& predict,
                          const torch::Tensor& enc_out,
@@ -1172,7 +1421,9 @@ static void decode_range(torch::jit::Module& joint,
                          torch::Tensor& g,
                          torch::Tensor& h,
                          torch::Tensor& c,
-                         std::vector<int64_t>& hyp) {
+                         std::vector<int64_t>& hyp,
+                         MarginStats* margin_stats = nullptr,
+                         const std::string& margin_label = "") {
   if (enc_len < 0 || enc_len > enc_out.size(2)) {
     throw std::runtime_error("enc_len out of range for enc_out: " + std::to_string(enc_len));
   }
@@ -1182,7 +1433,13 @@ static void decode_range(torch::jit::Module& joint,
     auto f_t = f.slice(1, t, t + 1);
     for (int n = 0; n < MAX_SYMBOLS; ++n) {
       auto logits = joint.forward({f_t, g}).toTensor();
-      int64_t k = logits.reshape({-1}).argmax().item<int64_t>();
+      auto flat = logits.reshape({-1});
+      if (margin_stats != nullptr) {
+        auto top2 = std::get<0>(flat.topk(2));
+        double margin = (top2[0] - top2[1]).item<double>();
+        observe_margin(*margin_stats, margin, margin_label, t, n);
+      }
+      int64_t k = flat.argmax().item<int64_t>();
       if (k == BLANK) break;
       hyp.push_back(k);
       auto y = torch::full({1, 1}, k, torch::dtype(torch::kLong).device(dev));
@@ -1197,13 +1454,16 @@ static void decode_range(torch::jit::Module& joint,
 static void apply_encoder_outputs(SessionState& state,
                                   const std::vector<at::Tensor>& out,
                                   torch::jit::Module& joint,
-                                  torch::jit::Module& predict) {
+                                  torch::jit::Module& predict,
+                                  MarginStats* margin_stats = nullptr,
+                                  const std::string& margin_label = "") {
   if (out.size() < 5) throw std::runtime_error("encoder returned fewer than 5 outputs");
   int64_t enc_len = scalar_i64(out[1]);
   state.clc = out[2];
   state.clt = out[3];
   state.clcl = out[4];
-  decode_range(joint, predict, out[0], enc_len, state.g, state.h, state.c, state.hyp);
+  decode_range(joint, predict, out[0], enc_len, state.g, state.h, state.c, state.hyp,
+               margin_stats, margin_label);
 }
 
 static std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
@@ -1237,20 +1497,206 @@ static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader
   return out;
 }
 
-static void run_steady_chunk(SessionState& state,
-                             torch::jit::Module& bundle,
-                             const std::string& prefix,
-                             int chunk_index,
-                             torch::jit::Module& enc_first,
-                             AOTIModelPackageLoader& enc_steady,
-                             torch::jit::Module& joint,
-                             torch::jit::Module& predict,
-                             torch::Device device,
-                             const Tokenizer& tokenizer,
-                             std::vector<EmittedEvent>& events) {
+static AudioGeometry audio_geometry_from_bundle(torch::jit::Module& bundle) {
+  auto values = tensor_to_vec(attr_tensor(bundle, "audio_geometry"));
+  if (values.size() != 13) {
+    throw std::runtime_error("audio_geometry must contain 13 int64 values");
+  }
+  AudioGeometry g;
+  g.shift_frames = values[0];
+  g.pre_encode_cache_size = values[1];
+  g.drop_extra = values[2];
+  g.final_padding_frames = values[3];
+  g.right_context = values[4];
+  g.first_preprocess_mel_frame = values[5];
+  g.hop_samples = values[6];
+  g.raw_audio_ring_samples = values[7];
+  g.preprocess_align_pad_samples = values[8];
+  g.preprocess_new_audio_samples = values[9];
+  g.stream_preprocess_valid_samples = values[10];
+  g.constant_preprocess_frames = values[11];
+  g.constant_preprocess_samples = values[12];
+
+  require_contract_eq("audio.shift", g.shift_frames, SHIFT);
+  require_contract_eq("audio.pre_encode_cache", g.pre_encode_cache_size, PRE);
+  require_contract_eq("audio.drop_extra", g.drop_extra, DROP);
+  require_contract_eq("audio.final_padding_frames", g.final_padding_frames, FINAL_PADDING_FRAMES);
+  require_contract_eq("audio.right_context", g.right_context, RIGHT_CONTEXT);
+  if (g.hop_samples <= 0 || g.raw_audio_ring_samples < 0 ||
+      g.preprocess_align_pad_samples < 0 || g.preprocess_new_audio_samples <= 0 ||
+      g.constant_preprocess_samples <= 0) {
+    throw std::runtime_error("audio_geometry contains invalid sample counts");
+  }
+  int64_t prefix = g.preprocess_align_pad_samples + g.raw_audio_ring_samples;
+  if (prefix % g.hop_samples != 0 || prefix / g.hop_samples != g.first_preprocess_mel_frame) {
+    throw std::runtime_error("audio_geometry fixed preprocessor prefix mismatch");
+  }
+  if (g.stream_preprocess_valid_samples != prefix + g.preprocess_new_audio_samples) {
+    throw std::runtime_error("audio_geometry stream valid sample count mismatch");
+  }
+  if (g.constant_preprocess_samples != (g.constant_preprocess_frames - 1) * g.hop_samples) {
+    throw std::runtime_error("audio_geometry constant plan sample/frame mismatch");
+  }
+  return g;
+}
+
+static AudioCiBundleStats audio_ci_stats_from_bundle(torch::jit::Module& bundle) {
+  auto values = tensor_to_double_vec(attr_tensor(bundle, "audio_ci_stats"));
+  if (values.size() != 14) {
+    throw std::runtime_error("audio_ci_stats must contain 14 float64 values");
+  }
+  AudioCiBundleStats s;
+  s.mel_abs_max = values[0];
+  s.mel_abs_mean = values[1];
+  s.mel_abs_p99 = values[2];
+  s.mel_rel_max = values[3];
+  s.mel_rel_mean = values[4];
+  s.mel_rel_p99 = values[5];
+  s.cache_last_channel_max_abs = values[6];
+  s.cache_last_time_max_abs = values[7];
+  s.cache_last_channel_len_max_abs = values[8];
+  s.mel_checks = values[9];
+  s.cache_checks = values[10];
+  s.mel_max_headroom = values[11];
+  s.mel_p99_headroom = values[12];
+  s.cache_max_headroom = values[13];
+  return s;
+}
+
+static bool compare_mel_tensor(const std::string& label,
+                               const torch::Tensor& actual,
+                               const torch::Tensor& expected,
+                               MelCompareStats& stats,
+                               double atol) {
+  ++stats.comparisons;
+  bool meta_ok = actual.scalar_type() == expected.scalar_type() &&
+                 actual.sizes().vec() == expected.sizes().vec();
+  if (!meta_ok) {
+    std::printf("    %s mel metadata mismatch: dtype %d/%d sizes",
+                label.c_str(), (int)actual.scalar_type(), (int)expected.scalar_type());
+    for (auto s : actual.sizes()) std::printf(" %ld", (long)s);
+    std::printf(" vs");
+    for (auto s : expected.sizes()) std::printf(" %ld", (long)s);
+    std::printf("\n");
+    return false;
+  }
+  bool byte_equal = at::equal(actual, expected);
+  if (byte_equal) {
+    ++stats.byte_equal;
+  }
+  double max_abs = 0.0;
+  if (actual.numel() > 0) {
+    max_abs = (actual - expected).abs().max().item<double>();
+  }
+  if (max_abs > stats.max_abs_diff) stats.max_abs_diff = max_abs;
+  bool ok = byte_equal || max_abs <= atol;
+  if (ok) {
+    ++stats.pass;
+    if (!byte_equal) ++stats.within_ci;
+  }
+  if (!ok) {
+    std::printf("    %s mel mismatch: byte_equal=%d max_abs=%.6e atol=%.6e\n",
+                label.c_str(), (int)byte_equal, max_abs, atol);
+  }
+  return ok;
+}
+
+struct AudioFrontend {
+  AudioGeometry g;
+  torch::jit::Module* preproc = nullptr;
+  torch::Device device = torch::Device(torch::kCUDA);
+  double mel_atol = 0.0;
+  double cache_atol = 0.0;
+  AudioCiBundleStats ci_stats;
+  MelCompareStats stats;
+  GeometryCompareStats geometry_stats;
+  CacheCompareStats cache_stats;
+  MarginStats margin_stats;
+
+  std::pair<torch::Tensor, int64_t> build_fixed_preprocess_audio(
+      const std::vector<float>& raw_audio_ring,
+      const std::vector<float>& new_audio) const {
+    if (raw_audio_ring.size() != static_cast<size_t>(g.raw_audio_ring_samples)) {
+      throw std::runtime_error("raw_audio_ring size mismatch: got " +
+                               std::to_string(raw_audio_ring.size()) +
+                               " expected " + std::to_string(g.raw_audio_ring_samples));
+    }
+    int64_t prefix_len = g.preprocess_align_pad_samples + g.raw_audio_ring_samples;
+    int64_t valid_samples = prefix_len + static_cast<int64_t>(new_audio.size());
+    if (valid_samples > g.constant_preprocess_samples) {
+      throw std::runtime_error("fixed preprocessor valid span exceeds K");
+    }
+    auto audio = torch::zeros({1, g.constant_preprocess_samples}, torch::dtype(torch::kFloat32));
+    float* data = audio.data_ptr<float>();
+    int64_t cursor = g.preprocess_align_pad_samples;
+    for (size_t i = 0; i < raw_audio_ring.size(); ++i) data[cursor + static_cast<int64_t>(i)] = raw_audio_ring[i];
+    cursor += g.raw_audio_ring_samples;
+    for (size_t i = 0; i < new_audio.size(); ++i) data[cursor + static_cast<int64_t>(i)] = new_audio[i];
+    return {audio, valid_samples};
+  }
+
+  torch::Tensor preprocess_fixed_audio(const std::vector<float>& raw_audio_ring,
+                                       const std::vector<float>& new_audio) const {
+    auto built = build_fixed_preprocess_audio(raw_audio_ring, new_audio);
+    auto audio = built.first.to(device).contiguous();
+    auto audio_len = torch::full({1}, built.second, torch::dtype(torch::kLong).device(device));
+    auto tuple = preproc->forward({audio, audio_len}).toTuple();
+    return tuple->elements()[0].toTensor();
+  }
+
+  torch::Tensor steady_new_mel(const SessionState& state) const {
+    if (state.pending_audio.size() < static_cast<size_t>(g.preprocess_new_audio_samples)) {
+      throw std::runtime_error("steady_new_mel called before preprocess_new_audio_samples are pending");
+    }
+    std::vector<float> new_audio(
+        state.pending_audio.begin(),
+        state.pending_audio.begin() + static_cast<std::ptrdiff_t>(g.preprocess_new_audio_samples));
+    auto mel = preprocess_fixed_audio(state.raw_audio_ring, new_audio);
+    return mel.slice(2,
+                     g.first_preprocess_mel_frame,
+                     g.first_preprocess_mel_frame + g.shift_frames).contiguous();
+  }
+
+  bool session_ready(const SessionState& state) const {
+    int64_t timeline_samples = state.synthetic_prefix_samples + state.total_audio_samples;
+    int64_t needed_samples = (state.emitted + g.shift_frames + 1) * g.hop_samples;
+    return timeline_samples >= needed_samples &&
+           state.pending_audio.size() >= static_cast<size_t>(g.preprocess_new_audio_samples);
+  }
+
+  void advance_raw_ring(SessionState& state, const std::vector<float>& consumed_audio) const {
+    if (consumed_audio.size() >= static_cast<size_t>(g.raw_audio_ring_samples)) {
+      state.raw_audio_ring.assign(consumed_audio.end() - static_cast<std::ptrdiff_t>(g.raw_audio_ring_samples),
+                                  consumed_audio.end());
+      return;
+    }
+    if (consumed_audio.empty()) return;
+    size_t keep = static_cast<size_t>(g.raw_audio_ring_samples) - consumed_audio.size();
+    std::vector<float> next;
+    next.reserve(static_cast<size_t>(g.raw_audio_ring_samples));
+    next.insert(next.end(), state.raw_audio_ring.end() - static_cast<std::ptrdiff_t>(keep), state.raw_audio_ring.end());
+    next.insert(next.end(), consumed_audio.begin(), consumed_audio.end());
+    state.raw_audio_ring = std::move(next);
+  }
+};
+
+static void run_steady_chunk_tensor(SessionState& state,
+                                    torch::jit::Module& bundle,
+                                    const std::string& prefix,
+                                    int chunk_index,
+                                    const torch::Tensor& new_mel_in,
+                                    torch::jit::Module& enc_first,
+                                    AOTIModelPackageLoader& enc_steady,
+                                    torch::jit::Module& joint,
+                                    torch::jit::Module& predict,
+                                    torch::Device device,
+                                    const Tokenizer& tokenizer,
+                                    std::vector<EmittedEvent>& events,
+                                    MarginStats* margin_stats = nullptr,
+                                    const std::string& margin_label = "") {
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("steady chunk outside STREAMING");
 
-  auto new_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
+  auto new_mel = new_mel_in.to(device).contiguous();
   int64_t is_first = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "is_first"));
   int64_t drop_extra = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "drop_extra"));
   int64_t chunk_T = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "chunk_T"));
@@ -1276,7 +1722,7 @@ static void run_steady_chunk(SessionState& state,
     out = run_steady_encoder(enc_steady, chunk, state);
   }
 
-  apply_encoder_outputs(state, out, joint, predict);
+  apply_encoder_outputs(state, out, joint, predict, margin_stats, margin_label);
 
   auto cum = state.ring.defined() ? torch::cat({state.ring, new_mel}, 2) : new_mel;
   state.ring = cum.slice(2, std::max<int64_t>(0, cum.size(2) - PRE), cum.size(2)).contiguous();
@@ -1294,11 +1740,240 @@ static void run_steady_chunk(SessionState& state,
   }
 }
 
+static void run_steady_chunk(SessionState& state,
+                             torch::jit::Module& bundle,
+                             const std::string& prefix,
+                             int chunk_index,
+                             torch::jit::Module& enc_first,
+                             AOTIModelPackageLoader& enc_steady,
+                             torch::jit::Module& joint,
+                             torch::jit::Module& predict,
+                             torch::Device device,
+                             const Tokenizer& tokenizer,
+                             std::vector<EmittedEvent>& events) {
+  auto new_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
+  run_steady_chunk_tensor(state, bundle, prefix, chunk_index, new_mel, enc_first, enc_steady,
+                          joint, predict, device, tokenizer, events);
+}
+
+static void run_steady_chunk_from_audio(SessionState& state,
+                                        torch::jit::Module& bundle,
+                                        const std::string& prefix,
+                                        int chunk_index,
+                                        AudioFrontend& audio,
+                                        torch::jit::Module& enc_first,
+                                        AOTIModelPackageLoader& enc_steady,
+                                        torch::jit::Module& joint,
+                                        torch::jit::Module& predict,
+                                        torch::Device device,
+                                        const Tokenizer& tokenizer,
+                                        std::vector<EmittedEvent>& events,
+                                        const std::string& label) {
+  auto new_mel = audio.steady_new_mel(state).to(device).contiguous();
+  auto gold_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
+  if (!compare_mel_tensor(label + ".chunk" + std::to_string(chunk_index) + ".new_mel",
+                          new_mel, gold_mel, audio.stats, audio.mel_atol)) {
+    throw std::runtime_error("audio steady mel mismatch for " + label);
+  }
+  run_steady_chunk_tensor(state, bundle, prefix, chunk_index, new_mel, enc_first, enc_steady,
+                          joint, predict, device, tokenizer, events,
+                          &audio.margin_stats,
+                          label + ".chunk" + std::to_string(chunk_index));
+
+  size_t consume = std::min(static_cast<size_t>(audio.g.shift_frames * audio.g.hop_samples),
+                            state.pending_audio.size());
+  std::vector<float> consumed(state.pending_audio.begin(),
+                              state.pending_audio.begin() + static_cast<std::ptrdiff_t>(consume));
+  audio.advance_raw_ring(state, consumed);
+  state.pending_audio.erase(state.pending_audio.begin(),
+                            state.pending_audio.begin() + static_cast<std::ptrdiff_t>(consume));
+}
+
+static int drain_audio_steady(SessionState& state,
+                              torch::jit::Module& bundle,
+                              const std::string& prefix,
+                              AudioFrontend& audio,
+                              torch::jit::Module& enc_first,
+                              AOTIModelPackageLoader& enc_steady,
+                              torch::jit::Module& joint,
+                              torch::jit::Module& predict,
+                              torch::Device device,
+                              const Tokenizer& tokenizer,
+                              std::vector<EmittedEvent>& events,
+                              const std::string& label) {
+  int64_t expected_chunks = scalar_i64(prefix_tensor(bundle, prefix, "num_steady"));
+  int chunks = 0;
+  while (audio.session_ready(state)) {
+    if (chunks >= expected_chunks) {
+      throw std::runtime_error(label + " produced more audio steady chunks than Python gold");
+    }
+    run_steady_chunk_from_audio(state, bundle, prefix, chunks, audio, enc_first, enc_steady,
+                                joint, predict, device, tokenizer, events, label);
+    ++chunks;
+  }
+  if (chunks != expected_chunks) {
+    throw std::runtime_error(label + " audio steady chunk count mismatch: got " +
+                             std::to_string(chunks) + " gold " + std::to_string(expected_chunks));
+  }
+  return chunks;
+}
+
+static int append_audio_and_drain(SessionState& state,
+                                  torch::jit::Module& bundle,
+                                  const std::string& prefix,
+                                  AudioFrontend& audio,
+                                  torch::jit::Module& enc_first,
+                                  AOTIModelPackageLoader& enc_steady,
+                                  torch::jit::Module& joint,
+                                  torch::jit::Module& predict,
+                                  torch::Device device,
+                                  const Tokenizer& tokenizer,
+                                  std::vector<EmittedEvent>& events,
+                                  const std::string& label) {
+  if (state.mode != SessionMode::STREAMING) throw std::runtime_error("append_audio outside STREAMING for " + label);
+  auto pcm = tensor_to_float_vec(prefix_tensor(bundle, prefix, "audio"));
+  state.pending_audio.insert(state.pending_audio.end(), pcm.begin(), pcm.end());
+  state.total_audio_samples += static_cast<int64_t>(pcm.size());
+  return drain_audio_steady(state, bundle, prefix, audio, enc_first, enc_steady,
+                            joint, predict, device, tokenizer, events, label);
+}
+
 struct FinalizeOutcome {
   bool token_ok = false;
   bool fork_ok = false;
   size_t emitted_tokens = 0;
 };
+
+struct FinalizeAudioInputs {
+  bool has_inputs = false;
+  torch::Tensor chunk_mel;
+  torch::Tensor new_mel;
+  int64_t drop_extra = -1;
+  int64_t final_T = 0;
+  int64_t remaining_frames = 0;
+  int64_t padded_total_samples = 0;
+  int64_t total_mel_frames = 0;
+};
+
+static FinalizeAudioInputs prepare_finalize_inputs_from_audio(const SessionState& parent,
+                                                              AudioFrontend& audio,
+                                                              torch::Device device) {
+  FinalizeAudioInputs inputs;
+  std::vector<float> pending = parent.pending_audio;
+  if (parent.total_audio_samples > 0) {
+    pending.insert(pending.end(),
+                   static_cast<size_t>(audio.g.final_padding_frames * audio.g.hop_samples),
+                   0.0f);
+  }
+  if (pending.empty()) {
+    inputs.padded_total_samples = parent.emitted * audio.g.hop_samples;
+    return inputs;
+  }
+
+  inputs.padded_total_samples = parent.emitted * audio.g.hop_samples + static_cast<int64_t>(pending.size());
+  inputs.total_mel_frames = inputs.padded_total_samples / audio.g.hop_samples + 1;
+  inputs.remaining_frames = inputs.total_mel_frames - parent.emitted;
+  if (inputs.remaining_frames <= 0) {
+    inputs.has_inputs = false;
+    return inputs;
+  }
+
+  std::vector<float> raw_ring = parent.raw_audio_ring;
+  std::vector<torch::Tensor> new_mels;
+  int64_t frames_collected = 0;
+  while (frames_collected < inputs.remaining_frames) {
+    int64_t frames_this_call = std::min<int64_t>(
+        audio.g.shift_frames,
+        inputs.remaining_frames - frames_collected);
+    size_t needed_new_samples = std::min(
+        pending.size(),
+        static_cast<size_t>(audio.g.preprocess_new_audio_samples));
+    std::vector<float> new_audio(
+        pending.begin(),
+        pending.begin() + static_cast<std::ptrdiff_t>(needed_new_samples));
+    auto mel = audio.preprocess_fixed_audio(raw_ring, new_audio);
+    int64_t start = audio.g.first_preprocess_mel_frame;
+    new_mels.push_back(mel.slice(2, start, start + frames_this_call).contiguous());
+
+    if (frames_this_call == audio.g.shift_frames) {
+      size_t consumed_samples = std::min(
+          static_cast<size_t>(audio.g.shift_frames * audio.g.hop_samples),
+          pending.size());
+      std::vector<float> consumed(
+          pending.begin(),
+          pending.begin() + static_cast<std::ptrdiff_t>(consumed_samples));
+      if (consumed.size() >= static_cast<size_t>(audio.g.raw_audio_ring_samples)) {
+        raw_ring.assign(consumed.end() - static_cast<std::ptrdiff_t>(audio.g.raw_audio_ring_samples),
+                        consumed.end());
+      } else if (!consumed.empty()) {
+        size_t keep = static_cast<size_t>(audio.g.raw_audio_ring_samples) - consumed.size();
+        std::vector<float> next;
+        next.reserve(static_cast<size_t>(audio.g.raw_audio_ring_samples));
+        next.insert(next.end(), raw_ring.end() - static_cast<std::ptrdiff_t>(keep), raw_ring.end());
+        next.insert(next.end(), consumed.begin(), consumed.end());
+        raw_ring = std::move(next);
+      }
+      pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(consumed_samples));
+    }
+    frames_collected += frames_this_call;
+  }
+
+  inputs.has_inputs = true;
+  inputs.new_mel = torch::cat(new_mels, 2).to(device).contiguous();
+  if (parent.emitted == 0) {
+    inputs.chunk_mel = inputs.new_mel;
+    inputs.drop_extra = 0;
+  } else {
+    if (!parent.ring.defined()) throw std::runtime_error("audio finalize continuation missing mel ring");
+    inputs.chunk_mel = torch::cat({parent.ring.to(device), inputs.new_mel}, 2).contiguous();
+    inputs.drop_extra = DROP;
+  }
+  inputs.final_T = inputs.chunk_mel.size(2);
+  return inputs;
+}
+
+static bool verify_finalize_audio_gold(torch::jit::Module& bundle,
+                                       const std::string& prefix,
+                                       const std::string& label,
+                                       const FinalizeAudioInputs& inputs,
+                                       AudioFrontend& audio,
+                                       torch::Device device) {
+  bool ok = true;
+  auto geometry_check = [&](const char* name, int64_t actual, int64_t expected) {
+    ++audio.geometry_stats.checks;
+    bool one_ok = int64_equal(name, actual, expected, label);
+    if (one_ok) ++audio.geometry_stats.pass;
+    ok = one_ok && ok;
+  };
+  geometry_check("final_padded_total_samples",
+                 inputs.padded_total_samples,
+                 scalar_i64(prefix_tensor(bundle, prefix, "final_padded_total_samples")));
+  geometry_check("final_total_mel_frames",
+                 inputs.total_mel_frames,
+                 scalar_i64(prefix_tensor(bundle, prefix, "final_total_mel_frames")));
+  geometry_check("final_remaining_frames",
+                 inputs.remaining_frames,
+                 scalar_i64(prefix_tensor(bundle, prefix, "final_remaining_frames")));
+  geometry_check("final_T",
+                 inputs.final_T,
+                 scalar_i64(prefix_tensor(bundle, prefix, "final_T")));
+  geometry_check("final_drop_extra",
+                 inputs.drop_extra,
+                 scalar_i64(prefix_tensor(bundle, prefix, "final_drop_extra")));
+  if (inputs.has_inputs) {
+    ok = compare_mel_tensor(label + ".final_new_mel",
+                            inputs.new_mel,
+                            prefix_tensor(bundle, prefix, "final_new_mel").to(device).contiguous(),
+                            audio.stats,
+                            audio.mel_atol) && ok;
+    ok = compare_mel_tensor(label + ".final_chunk_mel",
+                            inputs.chunk_mel,
+                            prefix_tensor(bundle, prefix, "final_chunk_mel").to(device).contiguous(),
+                            audio.stats,
+                            audio.mel_atol) && ok;
+  }
+  return ok;
+}
 
 static FinalizeOutcome run_finalize(SessionState& parent,
                                     torch::jit::Module& bundle,
@@ -1310,7 +1985,10 @@ static FinalizeOutcome run_finalize(SessionState& parent,
                                     torch::Device device,
                                     const Tokenizer& tokenizer,
                                     std::vector<EmittedEvent>& events,
-                                    FinalizeFinish finish) {
+                                    FinalizeFinish finish,
+                                    const FinalizeAudioInputs* audio_inputs = nullptr,
+                                    const AudioGeometry* audio_geometry = nullptr,
+                                    MarginStats* margin_stats = nullptr) {
   if (finish == FinalizeFinish::SPECULATIVE_KEEP && parent.mode != SessionMode::PENDING_FINALIZE) {
     throw std::runtime_error("speculative finalize outside PENDING_FINALIZE");
   }
@@ -1323,12 +2001,18 @@ static FinalizeOutcome run_finalize(SessionState& parent,
   parent.mode = SessionMode::FINALIZED;
   auto fork = clone_session(parent);
 
-  int64_t drop_extra = scalar_i64(prefix_tensor(bundle, prefix, "final_drop_extra"));
-  int64_t final_T = scalar_i64(prefix_tensor(bundle, prefix, "final_T"));
+  int64_t drop_extra = audio_inputs != nullptr
+                           ? audio_inputs->drop_extra
+                           : scalar_i64(prefix_tensor(bundle, prefix, "final_drop_extra"));
+  int64_t final_T = audio_inputs != nullptr
+                        ? audio_inputs->final_T
+                        : scalar_i64(prefix_tensor(bundle, prefix, "final_T"));
   auto gold = tensor_to_vec(prefix_tensor(bundle, prefix, "gold_tokens"));
 
   if (final_T > 0) {
-    auto final_chunk = prefix_tensor(bundle, prefix, "final_chunk_mel").to(device).contiguous();
+    auto final_chunk = audio_inputs != nullptr
+                           ? audio_inputs->chunk_mel.to(device).contiguous()
+                           : prefix_tensor(bundle, prefix, "final_chunk_mel").to(device).contiguous();
     if (final_chunk.size(2) != final_T) {
       throw std::runtime_error("final_chunk_mel T does not match bundle final_T");
     }
@@ -1355,7 +2039,8 @@ static FinalizeOutcome run_finalize(SessionState& parent,
       fork.clt = out[3];
       fork.clcl = out[4];
     }
-    decode_range(joint, predict, out[0], enc_len, fork.g, fork.h, fork.c, fork.hyp);
+    decode_range(joint, predict, out[0], enc_len, fork.g, fork.h, fork.c, fork.hyp,
+                 margin_stats, label + ".final");
   }
 
   FinalizeOutcome outcome;
@@ -1388,7 +2073,7 @@ static FinalizeOutcome run_finalize(SessionState& parent,
   if (finish == FinalizeFinish::SPECULATIVE_KEEP) {
     finish_speculative_finalize(parent);
   } else {
-    cold_reset_after_finalize(parent, bundle, device);
+    cold_reset_after_finalize(parent, bundle, device, audio_geometry);
   }
   return outcome;
 }
@@ -1414,11 +2099,39 @@ static bool retained_state_matches(SessionState& state,
                                    torch::jit::Module& bundle,
                                    const std::string& prefix,
                                    const std::string& label,
-                                   torch::Device device) {
+                                   torch::Device device,
+                                   AudioFrontend* audio = nullptr) {
   bool ok = true;
-  ok = tensor_equal("retained.cache_last_channel", state.clc, prefix_tensor(bundle, prefix, "retained_clc").to(device)) && ok;
-  ok = tensor_equal("retained.cache_last_time", state.clt, prefix_tensor(bundle, prefix, "retained_clt").to(device)) && ok;
-  ok = tensor_equal("retained.cache_last_channel_len", state.clcl, prefix_tensor(bundle, prefix, "retained_clcl").to(device)) && ok;
+  if (audio != nullptr) {
+    ok = tensor_close_cache("retained.cache_last_channel",
+                            state.clc,
+                            prefix_tensor(bundle, prefix, "retained_clc").to(device),
+                            audio->cache_atol,
+                            label,
+                            audio->cache_stats,
+                            audio->cache_stats.cache_last_channel_max_abs) && ok;
+    ok = tensor_close_cache("retained.cache_last_time",
+                            state.clt,
+                            prefix_tensor(bundle, prefix, "retained_clt").to(device),
+                            audio->cache_atol,
+                            label,
+                            audio->cache_stats,
+                            audio->cache_stats.cache_last_time_max_abs) && ok;
+  } else {
+    ok = tensor_equal("retained.cache_last_channel", state.clc, prefix_tensor(bundle, prefix, "retained_clc").to(device)) && ok;
+    ok = tensor_equal("retained.cache_last_time", state.clt, prefix_tensor(bundle, prefix, "retained_clt").to(device)) && ok;
+  }
+  if (audio != nullptr) {
+    ok = tensor_close_cache("retained.cache_last_channel_len",
+                            state.clcl,
+                            prefix_tensor(bundle, prefix, "retained_clcl").to(device),
+                            0.0,
+                            label,
+                            audio->cache_stats,
+                            audio->cache_stats.cache_last_channel_len_max_abs) && ok;
+  } else {
+    ok = tensor_equal("retained.cache_last_channel_len", state.clcl, prefix_tensor(bundle, prefix, "retained_clcl").to(device)) && ok;
+  }
   ok = tensor_equal("retained.pred_out", state.g, prefix_tensor(bundle, prefix, "retained_g").to(device)) && ok;
   ok = tensor_equal("retained.decoder_state.h", state.h, prefix_tensor(bundle, prefix, "retained_h").to(device)) && ok;
   ok = tensor_equal("retained.decoder_state.c", state.c, prefix_tensor(bundle, prefix, "retained_c").to(device)) && ok;
@@ -1429,7 +2142,12 @@ static bool retained_state_matches(SessionState& state,
                 label.c_str(), (int)state.ring.defined(), (int)ring_defined);
     ok = false;
   } else if (ring_defined) {
-    ok = tensor_equal("retained.mel_frame_ring", state.ring, prefix_tensor(bundle, prefix, "retained_ring").to(device)) && ok;
+    if (audio != nullptr) {
+      ok = tensor_close("retained.mel_frame_ring", state.ring, prefix_tensor(bundle, prefix, "retained_ring").to(device),
+                        audio->mel_atol, label) && ok;
+    } else {
+      ok = tensor_equal("retained.mel_frame_ring", state.ring, prefix_tensor(bundle, prefix, "retained_ring").to(device)) && ok;
+    }
   }
 
   int64_t emitted = scalar_i64(prefix_tensor(bundle, prefix, "retained_emitted"));
@@ -1451,6 +2169,24 @@ static bool retained_state_matches(SessionState& state,
                                   "retained_collector_text",
                                   state.continuous_emitted_text,
                                   label) && ok;
+  if (audio != nullptr) {
+    ok = float_vec_equal("retained.pending_audio",
+                         state.pending_audio,
+                         tensor_to_float_vec(prefix_tensor(bundle, prefix, "retained_pending_audio")),
+                         label) && ok;
+    ok = float_vec_equal("retained.raw_audio_ring",
+                         state.raw_audio_ring,
+                         tensor_to_float_vec(prefix_tensor(bundle, prefix, "retained_raw_audio_ring")),
+                         label) && ok;
+    ok = int64_equal("retained.total_audio_samples",
+                     state.total_audio_samples,
+                     scalar_i64(prefix_tensor(bundle, prefix, "retained_total_audio_samples")),
+                     label) && ok;
+    ok = int64_equal("retained.synthetic_prefix_samples",
+                     state.synthetic_prefix_samples,
+                     scalar_i64(prefix_tensor(bundle, prefix, "retained_synthetic_prefix_samples")),
+                     label) && ok;
+  }
   if (state.mode != SessionMode::STREAMING) {
     std::printf("    %s retained mode mismatch: expected STREAMING\n", label.c_str());
     ok = false;
@@ -1462,7 +2198,8 @@ static bool cold_reset_state_matches(SessionState& state,
                                      torch::jit::Module& bundle,
                                      const std::string& prefix,
                                      const std::string& label,
-                                     torch::Device device) {
+                                     torch::Device device,
+                                     bool audio_mode = false) {
   bool ok = true;
   ok = tensor_equal("cold_reset.cache_last_channel", state.clc, attr_tensor(bundle, "init_clc").to(device)) && ok;
   ok = tensor_equal("cold_reset.cache_last_time", state.clt, attr_tensor(bundle, "init_clt").to(device)) && ok;
@@ -1493,6 +2230,24 @@ static bool cold_reset_state_matches(SessionState& state,
                                   "post_reset_collector_text",
                                   state.continuous_emitted_text,
                                   label) && ok;
+  if (audio_mode) {
+    ok = float_vec_equal("post_reset.pending_audio",
+                         state.pending_audio,
+                         tensor_to_float_vec(prefix_tensor(bundle, prefix, "post_reset_pending_audio")),
+                         label) && ok;
+    ok = float_vec_equal("post_reset.raw_audio_ring",
+                         state.raw_audio_ring,
+                         tensor_to_float_vec(prefix_tensor(bundle, prefix, "post_reset_raw_audio_ring")),
+                         label) && ok;
+    ok = int64_equal("post_reset.total_audio_samples",
+                     state.total_audio_samples,
+                     scalar_i64(prefix_tensor(bundle, prefix, "post_reset_total_audio_samples")),
+                     label) && ok;
+    ok = int64_equal("post_reset.synthetic_prefix_samples",
+                     state.synthetic_prefix_samples,
+                     scalar_i64(prefix_tensor(bundle, prefix, "post_reset_synthetic_prefix_samples")),
+                     label) && ok;
+  }
   if (state.mode != SessionMode::STREAMING) {
     std::printf("    %s cold_reset mode mismatch: expected STREAMING\n", label.c_str());
     ok = false;
@@ -1537,6 +2292,65 @@ static bool run_synthetic_word_delta_tests() {
   return all;
 }
 
+static bool audio_front_ci_ok(const AudioFrontend& audio) {
+  bool geometry_ok = audio.geometry_stats.checks == audio.geometry_stats.pass;
+  bool mel_ok = audio.stats.comparisons == audio.stats.pass;
+  bool cache_ok = audio.cache_stats.checks == audio.cache_stats.pass;
+  return geometry_ok && mel_ok && cache_ok;
+}
+
+static bool audio_front_unsafe_margin_fail(const AudioFrontend& audio, bool token_exact_ok) {
+  return !token_exact_ok && audio.margin_stats.below_unsafe > 0;
+}
+
+static void print_audio_front_summary(const char* label,
+                                      const AudioFrontend& audio,
+                                      bool token_exact_ok) {
+  bool unsafe_margin_fail = audio_front_unsafe_margin_fail(audio, token_exact_ok);
+  const char* near_margin_status = unsafe_margin_fail
+                                       ? "FAIL"
+                                       : (audio.margin_stats.below_warning > 0 ? "WARN" : "PASS");
+  double min_margin = audio.margin_stats.total > 0
+                          ? audio.margin_stats.min_margin
+                          : std::numeric_limits<double>::quiet_NaN();
+  std::printf("=== AUDIO FRONT %s: geometry_checks=%ld geometry_pass=%ld geometry_recompute=%s "
+              "mel_checks=%ld mel_pass=%ld byte_equal=%ld within_ci=%ld mel_within_ci=%s "
+              "observed_mel_max_abs=%.6e mel_ci_atol=%.6e "
+              "cache_checks=%ld cache_pass=%ld cache_within_ci=%s "
+              "observed_cache_last_channel_max_abs=%.6e observed_cache_last_time_max_abs=%.6e "
+              "observed_cache_last_channel_len_max_abs=%.6e cache_ci_atol=%.6e "
+              "argmax_margin_min=%.6e at=%s frame=%ld symbol=%ld "
+              "below_warning(<%.1e)=%ld below_unsafe(<%.1e)=%ld margin_checks=%ld near_margin=%s ===\n",
+              label,
+              (long)audio.geometry_stats.checks,
+              (long)audio.geometry_stats.pass,
+              pass_fail(audio.geometry_stats.checks == audio.geometry_stats.pass),
+              (long)audio.stats.comparisons,
+              (long)audio.stats.pass,
+              (long)audio.stats.byte_equal,
+              (long)audio.stats.within_ci,
+              pass_fail(audio.stats.comparisons == audio.stats.pass),
+              audio.stats.max_abs_diff,
+              audio.mel_atol,
+              (long)audio.cache_stats.checks,
+              (long)audio.cache_stats.pass,
+              pass_fail_skip(audio.cache_stats.checks, audio.cache_stats.pass),
+              audio.cache_stats.cache_last_channel_max_abs,
+              audio.cache_stats.cache_last_time_max_abs,
+              audio.cache_stats.cache_last_channel_len_max_abs,
+              audio.cache_atol,
+              min_margin,
+              audio.margin_stats.min_label.c_str(),
+              (long)audio.margin_stats.min_frame,
+              (long)audio.margin_stats.min_symbol,
+              audio.margin_stats.warning_threshold,
+              (long)audio.margin_stats.below_warning,
+              audio.margin_stats.unsafe_threshold,
+              (long)audio.margin_stats.below_unsafe,
+              (long)audio.margin_stats.total,
+              near_margin_status);
+}
+
 static void verify_session_bundle_meta(torch::jit::Module& bundle, bool multiturn) {
   auto meta = attr_tensor(bundle, "meta").to(torch::kCPU).to(torch::kLong).contiguous();
   if (meta.numel() < 8) throw std::runtime_error("session bundle meta is too short");
@@ -1564,12 +2378,15 @@ int main(int argc, char** argv) {
   std::string dir = "../artifacts";
   bool check_events = true;
   bool multiturn = false;
+  bool audio_mode = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--tokens-only" || arg == "--skip-events") {
       check_events = false;
     } else if (arg == "--multiturn") {
       multiturn = true;
+    } else if (arg == "--audio") {
+      audio_mode = true;
     } else {
       dir = arg;
     }
@@ -1578,7 +2395,13 @@ int main(int argc, char** argv) {
     torch::NoGradGuard ng;
     auto device = torch::Device(torch::kCUDA);
 
-    auto bundle = torch::jit::load(dir + (multiturn ? "/session_multiturn_bundle.ts" : "/session_bundle.ts"));
+    std::string bundle_name;
+    if (audio_mode) {
+      bundle_name = multiturn ? "/session_multiturn_audio_bundle.ts" : "/session_audio_bundle.ts";
+    } else {
+      bundle_name = multiturn ? "/session_multiturn_bundle.ts" : "/session_bundle.ts";
+    }
+    auto bundle = torch::jit::load(dir + bundle_name);
     verify_session_bundle_meta(bundle, multiturn);
     auto tokenizer = tokenizer_from_bundle(bundle);
     verify_tokenizer_selftest(bundle, tokenizer);
@@ -1596,6 +2419,50 @@ int main(int argc, char** argv) {
     predict.to(device);
     predict.eval();
     auto finalize_loaders = load_finalize_bucket_loaders(dir, device);
+    std::unique_ptr<torch::jit::Module> preproc;
+    std::unique_ptr<AudioFrontend> audio_front;
+    if (audio_mode) {
+      int64_t bundle_audio = scalar_i64(attr_tensor(bundle, "audio_bundle_mode"));
+      if (bundle_audio == 0) throw std::runtime_error("--audio requested but bundle is not an audio bundle");
+      auto geometry = audio_geometry_from_bundle(bundle);
+      preproc = std::make_unique<torch::jit::Module>(torch::jit::load(dir + "/preproc.ts"));
+      preproc->to(device);
+      preproc->eval();
+      audio_front = std::make_unique<AudioFrontend>();
+      audio_front->g = geometry;
+      audio_front->preproc = preproc.get();
+      audio_front->device = device;
+      audio_front->mel_atol = scalar_f64(attr_tensor(bundle, "mel_ci_atol"));
+      audio_front->cache_atol = scalar_f64(attr_tensor(bundle, "cache_ci_atol"));
+      if (audio_front->mel_atol < 0.0 || audio_front->cache_atol < 0.0) {
+        throw std::runtime_error("audio CI thresholds must be non-negative");
+      }
+      audio_front->ci_stats = audio_ci_stats_from_bundle(bundle);
+      std::printf("audio front enabled: preproc.ts K=%ld frames=%ld raw_ring=%ld align_pad=%ld new_audio=%ld first_mel=%ld mel_ci_atol=%.6e cache_ci_atol=%.6e\n",
+                  (long)geometry.constant_preprocess_samples,
+                  (long)geometry.constant_preprocess_frames,
+                  (long)geometry.raw_audio_ring_samples,
+                  (long)geometry.preprocess_align_pad_samples,
+                  (long)geometry.preprocess_new_audio_samples,
+                  (long)geometry.first_preprocess_mel_frame,
+                  audio_front->mel_atol,
+                  audio_front->cache_atol);
+      std::printf("audio CI bundle: mel_abs max=%.6e mean=%.6e p99=%.6e rel max=%.6e mean=%.6e p99=%.6e "
+                  "cache_last_channel=%.6e cache_last_time=%.6e checks mel=%.0f cache=%.0f headroom mel_max=%.1f mel_p99=%.1f cache=%.1f\n",
+                  audio_front->ci_stats.mel_abs_max,
+                  audio_front->ci_stats.mel_abs_mean,
+                  audio_front->ci_stats.mel_abs_p99,
+                  audio_front->ci_stats.mel_rel_max,
+                  audio_front->ci_stats.mel_rel_mean,
+                  audio_front->ci_stats.mel_rel_p99,
+                  audio_front->ci_stats.cache_last_channel_max_abs,
+                  audio_front->ci_stats.cache_last_time_max_abs,
+                  audio_front->ci_stats.mel_checks,
+                  audio_front->ci_stats.cache_checks,
+                  audio_front->ci_stats.mel_max_headroom,
+                  audio_front->ci_stats.mel_p99_headroom,
+                  audio_front->ci_stats.cache_max_headroom);
+    }
 
     if (multiturn) {
       int64_t streams = scalar_i64(attr_tensor(bundle, "num_streams"));
@@ -1616,6 +2483,7 @@ int main(int argc, char** argv) {
 
       for (int stream = 0; stream < streams; ++stream) {
         reset_session(session, bundle, device);
+        if (audio_mode) reset_audio_front(session, audio_front->g);
         int64_t num_turns = scalar_i64(attr_tensor(bundle, "stream" + std::to_string(stream) + "_num_turns"));
         if (num_turns != 2) throw std::runtime_error("multi-turn stream does not have exactly 2 turns");
 
@@ -1633,8 +2501,14 @@ int main(int argc, char** argv) {
 
           bool row_ok = true;
           try {
-            for (int chunk = 0; chunk < num_steady; ++chunk) {
-              run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+            if (audio_mode) {
+              int chunks = append_audio_and_drain(session, bundle, prefix, *audio_front, enc_first, enc_steady,
+                                                  joint, predict, device, tokenizer, events, label);
+              if (chunks != num_steady) throw std::runtime_error("audio steady count post-check mismatch");
+            } else {
+              for (int chunk = 0; chunk < num_steady; ++chunk) {
+                run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+              }
             }
           } catch (const std::exception& e) {
             std::printf("  %s sample=%ld steady threw: %s\n", label.c_str(), (long)sample_index, e.what());
@@ -1653,7 +2527,18 @@ int main(int argc, char** argv) {
           bool collector_before_nonempty = !session.continuous_emitted_text.empty();
           session.mode = SessionMode::PENDING_FINALIZE;
           FinalizeOutcome finalize;
+          FinalizeAudioInputs audio_finalize_inputs;
+          bool audio_geometry_ok = true;
           try {
+            const FinalizeAudioInputs* audio_inputs_ptr = nullptr;
+            const AudioGeometry* audio_geometry_ptr = nullptr;
+            if (audio_mode) {
+              audio_finalize_inputs = prepare_finalize_inputs_from_audio(session, *audio_front, device);
+              audio_geometry_ok = verify_finalize_audio_gold(bundle, prefix, label, audio_finalize_inputs, *audio_front, device);
+              if (!audio_geometry_ok) throw std::runtime_error("audio finalize geometry/mel gold mismatch");
+              audio_inputs_ptr = &audio_finalize_inputs;
+              audio_geometry_ptr = &audio_front->g;
+            }
             finalize = run_finalize(session,
                                     bundle,
                                     prefix,
@@ -1664,7 +2549,10 @@ int main(int argc, char** argv) {
                                     device,
                                     tokenizer,
                                     events,
-                                    FinalizeFinish::SPECULATIVE_KEEP);
+                                    FinalizeFinish::SPECULATIVE_KEEP,
+                                    audio_inputs_ptr,
+                                    audio_geometry_ptr,
+                                    audio_mode ? &audio_front->margin_stats : nullptr);
           } catch (const std::exception& e) {
             std::printf("  %s sample=%ld finalize threw: %s\n", label.c_str(), (long)sample_index, e.what());
             finalize.token_ok = false;
@@ -1675,7 +2563,8 @@ int main(int argc, char** argv) {
           if (check_events) {
             events_ok = row_ok && finalize.token_ok && equal_events(events, gold_events, label);
           }
-          bool retained_ok = finalize.fork_ok && retained_state_matches(session, bundle, prefix, label, device);
+          bool retained_ok = finalize.fork_ok && retained_state_matches(
+              session, bundle, prefix, label, device, audio_mode ? audio_front.get() : nullptr);
           if (finalize.token_ok) ++final_pass;
           if (check_events && events_ok) ++event_pass;
           if (finalize.fork_ok) ++fork_pass;
@@ -1726,7 +2615,18 @@ int main(int argc, char** argv) {
                                                                   elabel);
         bool end_collector_before_nonempty = !session.continuous_emitted_text.empty();
         FinalizeOutcome end_finalize;
+        FinalizeAudioInputs end_audio_finalize_inputs;
         try {
+          const FinalizeAudioInputs* audio_inputs_ptr = nullptr;
+          const AudioGeometry* audio_geometry_ptr = nullptr;
+          if (audio_mode) {
+            end_audio_finalize_inputs = prepare_finalize_inputs_from_audio(session, *audio_front, device);
+            if (!verify_finalize_audio_gold(bundle, eprefix, elabel, end_audio_finalize_inputs, *audio_front, device)) {
+              throw std::runtime_error("audio true-boundary finalize geometry/mel gold mismatch");
+            }
+            audio_inputs_ptr = &end_audio_finalize_inputs;
+            audio_geometry_ptr = &audio_front->g;
+          }
           end_finalize = run_finalize(session,
                                       bundle,
                                       eprefix,
@@ -1737,7 +2637,10 @@ int main(int argc, char** argv) {
                                       device,
                                       tokenizer,
                                       end_events,
-                                      FinalizeFinish::TRUE_BOUNDARY_COLD_RESET);
+                                      FinalizeFinish::TRUE_BOUNDARY_COLD_RESET,
+                                      audio_inputs_ptr,
+                                      audio_geometry_ptr,
+                                      audio_mode ? &audio_front->margin_stats : nullptr);
         } catch (const std::exception& e) {
           std::printf("  %s finalize threw: %s\n", elabel.c_str(), e.what());
           end_finalize.token_ok = false;
@@ -1747,7 +2650,7 @@ int main(int argc, char** argv) {
         if (check_events) {
           end_events_ok = end_finalize.token_ok && equal_events(end_events, gold_end_events, elabel);
         }
-        bool reset_ok = end_finalize.fork_ok && cold_reset_state_matches(session, bundle, eprefix, elabel, device);
+        bool reset_ok = end_finalize.fork_ok && cold_reset_state_matches(session, bundle, eprefix, elabel, device, audio_mode);
         if (end_finalize.token_ok) ++end_final_pass;
         if (check_events && end_events_ok) ++end_event_pass;
         if (reset_ok) ++reset_pass;
@@ -1778,16 +2681,20 @@ int main(int argc, char** argv) {
         }
       }
 
-      bool all = synthetic_ok &&
-                 steady_pass == total_turns &&
-                 final_pass == total_turns &&
-                 fork_pass == total_turns &&
-                 retained_pass == total_turns &&
-                 end_final_pass == streams &&
-                 reset_pass == streams &&
-                 turn_b_nonempty_delta == streams &&
-                 nonempty_suppressed == streams &&
-                 (!check_events || (event_pass == total_turns && end_event_pass == streams));
+      bool token_exact_ok = steady_pass == total_turns &&
+                            final_pass == total_turns &&
+                            end_final_pass == streams;
+      bool base_all = synthetic_ok &&
+                      token_exact_ok &&
+                      fork_pass == total_turns &&
+                      retained_pass == total_turns &&
+                      reset_pass == streams &&
+                      turn_b_nonempty_delta == streams &&
+                      nonempty_suppressed == streams &&
+                      (!check_events || (event_pass == total_turns && end_event_pass == streams));
+      bool audio_ci_ok = !audio_mode || audio_front_ci_ok(*audio_front);
+      bool near_margin_ok = !audio_mode || !audio_front_unsafe_margin_fail(*audio_front, token_exact_ok);
+      bool all = base_all && audio_ci_ok && near_margin_ok;
       if (check_events) {
         std::printf("=== SESSION MULTITURN %s: synthetic=%s steady=%d/%d final_token_exact=%d/%d "
                     "event_text_exact=%d/%d retained_state=%d/%d FORK_ASSERT=%d/%d "
@@ -1821,6 +2728,9 @@ int main(int argc, char** argv) {
                     turn_b_nonempty_delta, (long)streams,
                     nonempty_suppressed, (long)streams);
       }
+      if (audio_mode) {
+        print_audio_front_summary("MULTITURN", *audio_front, token_exact_ok);
+      }
       return all ? 0 : 1;
     }
 
@@ -1834,6 +2744,7 @@ int main(int argc, char** argv) {
 
     for (int utt = 0; utt < rows; ++utt) {
       reset_session(session, bundle, device);
+      if (audio_mode) reset_audio_front(session, audio_front->g);
       std::string prefix = "utt" + std::to_string(utt);
       std::string label = "utt" + std::to_string(utt);
       int64_t sample_index = scalar_i64(utt_tensor(bundle, utt, "sample_index"));
@@ -1846,8 +2757,14 @@ int main(int argc, char** argv) {
 
       bool row_ok = true;
       try {
-        for (int chunk = 0; chunk < num_steady; ++chunk) {
-          run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+        if (audio_mode) {
+          int chunks = append_audio_and_drain(session, bundle, prefix, *audio_front, enc_first, enc_steady,
+                                              joint, predict, device, tokenizer, events, label);
+          if (chunks != num_steady) throw std::runtime_error("audio steady count post-check mismatch");
+        } else {
+          for (int chunk = 0; chunk < num_steady; ++chunk) {
+            run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+          }
         }
       } catch (const std::exception& e) {
         std::printf("  utt%d sample=%ld steady threw: %s\n", utt, (long)sample_index, e.what());
@@ -1860,7 +2777,18 @@ int main(int argc, char** argv) {
 
       session.mode = SessionMode::PENDING_FINALIZE;
       FinalizeOutcome finalize;
+      FinalizeAudioInputs audio_finalize_inputs;
       try {
+        const FinalizeAudioInputs* audio_inputs_ptr = nullptr;
+        const AudioGeometry* audio_geometry_ptr = nullptr;
+        if (audio_mode) {
+          audio_finalize_inputs = prepare_finalize_inputs_from_audio(session, *audio_front, device);
+          if (!verify_finalize_audio_gold(bundle, prefix, label, audio_finalize_inputs, *audio_front, device)) {
+            throw std::runtime_error("audio finalize geometry/mel gold mismatch");
+          }
+          audio_inputs_ptr = &audio_finalize_inputs;
+          audio_geometry_ptr = &audio_front->g;
+        }
         finalize = run_finalize(session,
                                 bundle,
                                 prefix,
@@ -1871,7 +2799,10 @@ int main(int argc, char** argv) {
                                 device,
                                 tokenizer,
                                 events,
-                                FinalizeFinish::SPECULATIVE_KEEP);
+                                FinalizeFinish::SPECULATIVE_KEEP,
+                                audio_inputs_ptr,
+                                audio_geometry_ptr,
+                                audio_mode ? &audio_front->margin_stats : nullptr);
       } catch (const std::exception& e) {
         std::printf("  utt%d sample=%ld finalize threw: %s\n", utt, (long)sample_index, e.what());
         finalize.token_ok = false;
@@ -1907,8 +2838,12 @@ int main(int argc, char** argv) {
       }
     }
 
-    bool all = synthetic_ok && steady_pass == rows && final_pass == rows && fork_pass == rows &&
-               (!check_events || event_pass == rows);
+    bool token_exact_ok = steady_pass == rows && final_pass == rows;
+    bool base_all = synthetic_ok && token_exact_ok && fork_pass == rows &&
+                    (!check_events || event_pass == rows);
+    bool audio_ci_ok = !audio_mode || audio_front_ci_ok(*audio_front);
+    bool near_margin_ok = !audio_mode || !audio_front_unsafe_margin_fail(*audio_front, token_exact_ok);
+    bool all = base_all && audio_ci_ok && near_margin_ok;
     if (check_events) {
       std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=%d/%ld FORK_ASSERT=%d/%ld ===\n",
                   all ? "PASS" : "FAIL",
@@ -1924,6 +2859,9 @@ int main(int argc, char** argv) {
                   steady_pass, (long)rows,
                   final_pass, (long)rows,
                   fork_pass, (long)rows);
+    }
+    if (audio_mode) {
+      print_audio_front_summary("SINGLE", *audio_front, token_exact_ok);
     }
     return all ? 0 : 1;
   } catch (const std::exception& e) {

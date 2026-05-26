@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Export a deterministic MEL-level continuous-session replay bundle.
+"""Export a deterministic continuous-session replay bundle.
 
 The C++ session harness consumes this bundle to replay the verified
-``finalize_ref.ContinuousFinalizeRef`` state machine without needing NeMo or an
-audio frontend in the C++ process.  Each utterance contains:
+``finalize_ref.ContinuousFinalizeRef`` state machine.  In the default MEL-fed
+mode, C++ consumes Python-produced mels directly.  With ``--audio``, C++ consumes
+the same PCM appended to the Python session and treats Python-produced mels and
+finalize geometry as gold checks only.  Each utterance contains:
 
 * ordered steady ``new_mel`` chunks plus geometry flags;
 * the single finalize remainder ``chunk_mel`` plus ``drop_extra`` and ``T``;
@@ -14,17 +16,22 @@ audio frontend in the C++ process.  Each utterance contains:
   this gate checks event logic rather than eager-vs-AOTI timing drift.
 * the tokenizer id->piece table plus Python ``ids_to_text`` self-test sequences
   so C++ can prove its detokenizer matches the reference at load.
+* in ``--audio`` mode: raw PCM per appended turn, fixed-preprocessor geometry,
+  per-chunk gold mel tensors, and final remainder geometry/tensors.
 
 Run from runtime/:
   HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_session_bundle.py --n 20
   HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_session_bundle.py --multiturn --n 8
+  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_session_bundle.py --audio --n 20
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from typing import Any
 
+import numpy as np
 import torch
 
 from finalize_ref import (
@@ -45,12 +52,20 @@ ART = os.path.join(os.path.dirname(__file__), "artifacts")
 EVENT_INTERIM = 0
 EVENT_FINAL = 1
 EVENT_SUPPRESSED = 2
+PREPROC_CI_REL_EPS = 1.0e-6
+PREPROC_CI_MEL_MAX_HEADROOM = 2.0
+PREPROC_CI_MEL_P99_HEADROOM = 16.0
+PREPROC_CI_CACHE_MAX_HEADROOM = 2.0
 
 
 def _as_cpu_tensor(value: torch.Tensor) -> torch.Tensor:
     if not torch.is_tensor(value):
         raise TypeError(f"expected tensor, got {type(value).__name__}")
     return value.detach().cpu().clone()
+
+
+def _audio_tensor(wav: Any) -> torch.Tensor:
+    return torch.from_numpy(np.ascontiguousarray(wav, dtype=np.float32)).clone()
 
 
 def _scalar(value: int | bool) -> torch.Tensor:
@@ -206,6 +221,434 @@ def _register_steady_chunks(
         )
 
 
+def _register_audio_geometry(
+    module: torch.nn.Module,
+    geometry,
+    *,
+    audio: bool,
+) -> None:
+    module.register_buffer("audio_bundle_mode", _scalar(audio))
+    module.register_buffer(
+        "audio_geometry",
+        torch.tensor(
+            [
+                int(geometry.shift_frames),
+                int(geometry.pre_encode_cache_size),
+                int(geometry.drop_extra),
+                int(geometry.final_padding_frames),
+                RIGHT_CONTEXT,
+                int(geometry.first_preprocess_mel_frame),
+                int(geometry.hop_samples),
+                int(geometry.raw_audio_ring_samples),
+                int(geometry.preprocess_align_pad_samples),
+                int(geometry.preprocess_new_audio_samples),
+                int(geometry.stream_preprocess_valid_samples),
+                int(geometry.constant_preprocess_frames),
+                int(geometry.constant_preprocess_samples),
+            ],
+            dtype=torch.int64,
+        ),
+    )
+
+
+def _register_audio_ci(
+    module: torch.nn.Module,
+    audio_ci: dict[str, Any] | None,
+    *,
+    audio: bool,
+) -> None:
+    if not audio:
+        return
+    if audio_ci is None:
+        raise ValueError("audio bundle requires measured audio CI thresholds")
+    module.register_buffer(
+        "mel_ci_atol",
+        torch.tensor([float(audio_ci["mel_ci_atol"])], dtype=torch.float64),
+    )
+    module.register_buffer(
+        "cache_ci_atol",
+        torch.tensor([float(audio_ci["cache_ci_atol"])], dtype=torch.float64),
+    )
+    module.register_buffer(
+        "audio_ci_stats",
+        torch.tensor(
+            [
+                float(audio_ci["mel"]["abs"]["max"]),
+                float(audio_ci["mel"]["abs"]["mean"]),
+                float(audio_ci["mel"]["abs"]["p99"]),
+                float(audio_ci["mel"]["rel"]["max"]),
+                float(audio_ci["mel"]["rel"]["mean"]),
+                float(audio_ci["mel"]["rel"]["p99"]),
+                float(audio_ci["cache"]["cache_last_channel"]["max_abs"]),
+                float(audio_ci["cache"]["cache_last_time"]["max_abs"]),
+                float(audio_ci["cache"]["cache_last_channel_len"]["max_abs"]),
+                float(audio_ci["mel"]["checks"]),
+                float(audio_ci["cache"]["checks"]),
+                float(audio_ci["headroom"]["mel_max"]),
+                float(audio_ci["headroom"]["mel_p99"]),
+                float(audio_ci["headroom"]["cache_max"]),
+            ],
+            dtype=torch.float64,
+        ),
+    )
+    rationale_bytes, rationale_offsets = _pack_utf8([str(audio_ci["rationale"])])
+    module.register_buffer("audio_ci_rationale_bytes", rationale_bytes)
+    module.register_buffer("audio_ci_rationale_offsets", rationale_offsets)
+
+
+def _ensure_preproc_ts(model, artifacts_dir: str) -> None:
+    path = os.path.join(artifacts_dir, "preproc.ts")
+    if os.path.exists(path):
+        print(f"using existing preprocessor TorchScript: {path}")
+        return
+
+    os.makedirs(artifacts_dir, exist_ok=True)
+    pp = model.preprocessor
+
+    class PP(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.pp = pp
+
+        def forward(self, sig, length):
+            return self.pp(input_signal=sig, length=length)
+
+    # The traced graph is shape-flexible for the NeMo preprocessor, but tracing
+    # at the fixed runtime K makes the artifact provenance match the audio gate.
+    dev = next(model.parameters()).device
+    g = ContinuousFinalizeRef(model).geometry
+    audio = torch.zeros((1, g.constant_preprocess_samples), device=dev)
+    length = torch.full((1,), g.constant_preprocess_samples, device=dev, dtype=torch.long)
+    with torch.inference_mode():
+        ts = torch.jit.trace(PP().to(dev).eval(), (audio, length), check_trace=False)
+    ts.save(path)
+    print(f"exported preprocessor TorchScript: {path}")
+
+
+def _append_diff(
+    abs_parts: list[torch.Tensor],
+    rel_parts: list[torch.Tensor],
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+) -> None:
+    if actual.shape != expected.shape:
+        raise ValueError(f"CI tensor shape mismatch: {tuple(actual.shape)} vs {tuple(expected.shape)}")
+    diff = (actual.float() - expected.float()).abs().detach().cpu().reshape(-1)
+    denom = expected.detach().cpu().float().abs().reshape(-1).clamp_min(PREPROC_CI_REL_EPS)
+    abs_parts.append(diff)
+    rel_parts.append(diff / denom)
+
+
+def _summary(values: torch.Tensor) -> dict[str, float]:
+    if values.numel() == 0:
+        return {"max": 0.0, "mean": 0.0, "p99": 0.0}
+    values = values.to(torch.float64)
+    return {
+        "max": float(values.max().item()),
+        "mean": float(values.mean().item()),
+        "p99": float(torch.quantile(values, 0.99).item()),
+    }
+
+
+def _ci_preproc_new_mel(
+    rt: "RecordingContinuousFinalizeRef",
+    preproc_ts: torch.jit.ScriptModule,
+    raw_audio_ring: np.ndarray,
+    new_audio: np.ndarray,
+) -> torch.Tensor:
+    g = rt.geometry
+    fixed_audio, valid_samples = rt._build_fixed_preprocess_audio(raw_audio_ring, new_audio)
+    audio = torch.from_numpy(np.ascontiguousarray(fixed_audio)).unsqueeze(0).to(rt.device)
+    audio_len = torch.tensor([valid_samples], device=rt.device, dtype=torch.long)
+    ts_mel, _ts_len = preproc_ts(audio, audio_len)
+    return ts_mel[
+        :,
+        :,
+        g.first_preprocess_mel_frame : g.first_preprocess_mel_frame + g.shift_frames,
+    ].contiguous()
+
+
+def _ci_process_steady_chunk(
+    rt: "RecordingContinuousFinalizeRef",
+    session: ContinuousSession,
+    valid_new_mel: torch.Tensor,
+) -> None:
+    g = rt.geometry
+    is_first = session.emitted_frames == 0
+    if is_first:
+        chunk_mel = valid_new_mel
+        drop_extra = 0
+    else:
+        if session.mel_frame_ring is None:
+            raise RuntimeError("CI steady continuation missing mel ring")
+        chunk_mel = torch.cat((session.mel_frame_ring, valid_new_mel), dim=-1)
+        drop_extra = int(g.drop_extra)
+
+    _enc_out, _enc_len, clc, clt, clcl = rt._run_aoti_consistent_steady_encoder(
+        session,
+        chunk_mel.contiguous(),
+        drop_extra,
+    )
+    session.cache_last_channel = clc
+    session.cache_last_time = clt
+    session.cache_last_channel_len = clcl
+
+    consumed_audio = session.pending_audio[: g.shift_frames * g.hop_samples]
+    session.raw_audio_ring = rt._advance_raw_ring(session.raw_audio_ring, consumed_audio)
+    session.pending_audio = session.pending_audio[g.shift_frames * g.hop_samples :]
+    rt._update_mel_frame_ring(session, valid_new_mel)
+    session.emitted_frames += g.shift_frames
+
+
+def _ci_prepare_finalize_inputs(
+    rt: "RecordingContinuousFinalizeRef",
+    preproc_ts: torch.jit.ScriptModule,
+    parent: ContinuousSession,
+) -> dict[str, Any]:
+    g = rt.geometry
+    pending = np.asarray(parent.pending_audio, dtype=np.float32).copy()
+    if parent.total_audio_samples > 0:
+        pending = np.concatenate(
+            [pending, np.zeros(g.final_padding_frames * g.hop_samples, dtype=np.float32)]
+        ).astype(np.float32, copy=False)
+
+    padded_total_samples = int(parent.emitted_frames * g.hop_samples + len(pending))
+    if len(pending) == 0:
+        padded_total_samples = int(parent.emitted_frames * g.hop_samples)
+        return {
+            "has_inputs": False,
+            "padded_total_samples": padded_total_samples,
+            "total_mel_frames": 0,
+            "remaining_frames": 0,
+            "drop_extra": -1,
+            "final_T": 0,
+            "new_mel": torch.empty((1, 128, 0), device=rt.device),
+            "chunk_mel": torch.empty((1, 128, 0), device=rt.device),
+        }
+
+    total_mel_frames = int(padded_total_samples // g.hop_samples + 1)
+    remaining_frames = int(total_mel_frames - parent.emitted_frames)
+    if remaining_frames <= 0:
+        return {
+            "has_inputs": False,
+            "padded_total_samples": padded_total_samples,
+            "total_mel_frames": total_mel_frames,
+            "remaining_frames": remaining_frames,
+            "drop_extra": -1,
+            "final_T": 0,
+            "new_mel": torch.empty((1, 128, 0), device=rt.device),
+            "chunk_mel": torch.empty((1, 128, 0), device=rt.device),
+        }
+
+    raw_ring = np.asarray(parent.raw_audio_ring, dtype=np.float32).copy()
+    new_mels: list[torch.Tensor] = []
+    frames_collected = 0
+    while frames_collected < remaining_frames:
+        frames_this_call = min(int(g.shift_frames), remaining_frames - frames_collected)
+        needed_new_samples = min(len(pending), int(g.preprocess_new_audio_samples))
+        new_audio = pending[:needed_new_samples]
+        block_mel = _ci_preproc_new_mel(rt, preproc_ts, raw_ring, new_audio)
+        new_mels.append(block_mel[:, :, :frames_this_call].contiguous())
+
+        if frames_this_call == g.shift_frames:
+            consumed_samples = min(int(g.shift_frames * g.hop_samples), len(pending))
+            consumed = pending[:consumed_samples]
+            raw_ring = rt._advance_raw_ring(raw_ring, consumed)
+            pending = pending[consumed_samples:]
+        frames_collected += frames_this_call
+
+    new_mel = torch.cat(new_mels, dim=2).contiguous()
+    if parent.emitted_frames == 0:
+        chunk_mel = new_mel
+        drop_extra = 0
+    else:
+        if parent.mel_frame_ring is None:
+            raise RuntimeError("CI finalize continuation missing mel ring")
+        chunk_mel = torch.cat((parent.mel_frame_ring.to(rt.device), new_mel), dim=2).contiguous()
+        drop_extra = int(g.drop_extra)
+    return {
+        "has_inputs": True,
+        "padded_total_samples": padded_total_samples,
+        "total_mel_frames": total_mel_frames,
+        "remaining_frames": remaining_frames,
+        "drop_extra": drop_extra,
+        "final_T": int(chunk_mel.shape[-1]),
+        "new_mel": new_mel,
+        "chunk_mel": chunk_mel,
+    }
+
+
+def _ci_cache_max(cache_max: dict[str, float], actual: torch.Tensor, expected: torch.Tensor, name: str) -> None:
+    if actual.shape != expected.shape:
+        raise ValueError(f"CI cache shape mismatch for {name}: {tuple(actual.shape)} vs {tuple(expected.shape)}")
+    max_abs = float((actual.float() - expected.float()).abs().max().item()) if actual.numel() else 0.0
+    cache_max[name] = max(cache_max[name], max_abs)
+
+
+def _measure_audio_ci(
+    rt: "RecordingContinuousFinalizeRef",
+    *,
+    artifacts_dir: str,
+    rows: list[dict[str, Any]] | None = None,
+    streams: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    preproc_path = os.path.join(artifacts_dir, "preproc.ts")
+    preproc_ts = torch.jit.load(preproc_path).to(rt.device).eval()
+    abs_parts: list[torch.Tensor] = []
+    rel_parts: list[torch.Tensor] = []
+    cache_max = {
+        "cache_last_channel": 0.0,
+        "cache_last_time": 0.0,
+        "cache_last_channel_len": 0.0,
+    }
+    mel_checks = 0
+    cache_checks = 0
+
+    def process_segment(
+        ts_state: ContinuousSession,
+        gold_state: ContinuousSession,
+        segment: dict[str, Any],
+        label: str,
+    ) -> None:
+        nonlocal mel_checks, cache_checks
+        wav = segment["audio"].detach().cpu().numpy().astype(np.float32, copy=True)
+        for state in (ts_state, gold_state):
+            state.pending_audio = np.concatenate([state.pending_audio, wav]).astype(np.float32, copy=False)
+            state.total_audio_samples += int(wav.shape[0])
+
+        for chunk_index, chunk in enumerate(segment["steady_chunks"]):
+            if not rt._session_ready(ts_state) or not rt._session_ready(gold_state):
+                raise RuntimeError(f"CI state not ready for {label}.chunk{chunk_index}")
+            new_audio = ts_state.pending_audio[: rt.geometry.preprocess_new_audio_samples]
+            ts_new_mel = _ci_preproc_new_mel(rt, preproc_ts, ts_state.raw_audio_ring, new_audio)
+            gold_new_mel = chunk["new_mel"].to(rt.device).contiguous()
+            _append_diff(abs_parts, rel_parts, ts_new_mel, gold_new_mel)
+            mel_checks += 1
+            _ci_process_steady_chunk(rt, ts_state, ts_new_mel)
+            _ci_process_steady_chunk(rt, gold_state, gold_new_mel)
+
+        fin = _ci_prepare_finalize_inputs(rt, preproc_ts, ts_state)
+        expected_keys = {
+            "padded_total_samples": "final_padded_total_samples",
+            "total_mel_frames": "final_total_mel_frames",
+            "remaining_frames": "final_remaining_frames",
+            "drop_extra": "final_drop_extra",
+            "final_T": "final_T",
+        }
+        for name, expected_key in expected_keys.items():
+            if int(fin[name]) != int(segment[expected_key]):
+                raise RuntimeError(f"CI finalize geometry mismatch for {label}.{name}: {fin[name]} vs {segment[expected_key]}")
+        if fin["has_inputs"]:
+            _append_diff(abs_parts, rel_parts, fin["new_mel"], segment["final_new_mel"].to(rt.device).contiguous())
+            _append_diff(abs_parts, rel_parts, fin["chunk_mel"], segment["final_chunk_mel"].to(rt.device).contiguous())
+            mel_checks += 2
+
+        _ci_cache_max(cache_max, ts_state.cache_last_channel, gold_state.cache_last_channel, "cache_last_channel")
+        _ci_cache_max(cache_max, ts_state.cache_last_time, gold_state.cache_last_time, "cache_last_time")
+        _ci_cache_max(cache_max, ts_state.cache_last_channel_len, gold_state.cache_last_channel_len, "cache_last_channel_len")
+        cache_checks += 3
+
+    with torch.inference_mode():
+        if rows is not None:
+            for row_index, row in enumerate(rows):
+                ts_state = rt.new_session(f"audio-ci-ts-row-{row_index}")
+                gold_state = rt.new_session(f"audio-ci-gold-row-{row_index}")
+                process_segment(ts_state, gold_state, row, f"row{row_index}")
+        if streams is not None:
+            for stream_index, stream in enumerate(streams):
+                ts_state = rt.new_session(f"audio-ci-ts-stream-{stream_index}")
+                gold_state = rt.new_session(f"audio-ci-gold-stream-{stream_index}")
+                for turn_index, turn in enumerate(stream["turns"]):
+                    process_segment(ts_state, gold_state, turn, f"stream{stream_index}.turn{turn_index}")
+                end = stream["end"]
+                fin = _ci_prepare_finalize_inputs(rt, preproc_ts, ts_state)
+                expected_keys = {
+                    "padded_total_samples": "final_padded_total_samples",
+                    "total_mel_frames": "final_total_mel_frames",
+                    "remaining_frames": "final_remaining_frames",
+                    "drop_extra": "final_drop_extra",
+                    "final_T": "final_T",
+                }
+                for name, expected_key in expected_keys.items():
+                    if int(fin[name]) != int(end[expected_key]):
+                        raise RuntimeError(
+                            f"CI true-boundary geometry mismatch for stream{stream_index}.{name}: "
+                            f"{fin[name]} vs {end[expected_key]}"
+                        )
+                if fin["has_inputs"]:
+                    _append_diff(abs_parts, rel_parts, fin["new_mel"], end["final_new_mel"].to(rt.device).contiguous())
+                    _append_diff(abs_parts, rel_parts, fin["chunk_mel"], end["final_chunk_mel"].to(rt.device).contiguous())
+                    mel_checks += 2
+
+    abs_values = torch.cat(abs_parts) if abs_parts else torch.empty((0,), dtype=torch.float32)
+    rel_values = torch.cat(rel_parts) if rel_parts else torch.empty((0,), dtype=torch.float32)
+    abs_stats = _summary(abs_values)
+    rel_stats = _summary(rel_values)
+    mel_ci_atol = max(
+        abs_stats["max"] * PREPROC_CI_MEL_MAX_HEADROOM,
+        abs_stats["p99"] * PREPROC_CI_MEL_P99_HEADROOM,
+    )
+    cache_ci_atol = max(cache_max["cache_last_channel"], cache_max["cache_last_time"]) * PREPROC_CI_CACHE_MAX_HEADROOM
+    rationale = (
+        "Fixed-K preproc.ts is measured against eager preprocessing on the bundle PCM. "
+        "mel_ci_atol=max(abs_max*{mel_max:g}, abs_p99*{mel_p99:g}); "
+        "cache_ci_atol=max(retained cache_last_channel/time max_abs)*{cache_max:g}. "
+        "This documents the cuFFT fixed-plan cross-process CI envelope; token/event exactness remains the semantic gate."
+    ).format(
+        mel_max=PREPROC_CI_MEL_MAX_HEADROOM,
+        mel_p99=PREPROC_CI_MEL_P99_HEADROOM,
+        cache_max=PREPROC_CI_CACHE_MAX_HEADROOM,
+    )
+    report = {
+        "mel_ci_atol": float(mel_ci_atol),
+        "cache_ci_atol": float(cache_ci_atol),
+        "mel": {
+            "checks": int(mel_checks),
+            "rel_eps": PREPROC_CI_REL_EPS,
+            "abs": abs_stats,
+            "rel": rel_stats,
+        },
+        "cache": {
+            "checks": int(cache_checks),
+            "cache_last_channel": {"max_abs": float(cache_max["cache_last_channel"])},
+            "cache_last_time": {"max_abs": float(cache_max["cache_last_time"])},
+            "cache_last_channel_len": {"max_abs": float(cache_max["cache_last_channel_len"])},
+        },
+        "headroom": {
+            "mel_max": PREPROC_CI_MEL_MAX_HEADROOM,
+            "mel_p99": PREPROC_CI_MEL_P99_HEADROOM,
+            "cache_max": PREPROC_CI_CACHE_MAX_HEADROOM,
+        },
+        "rationale": rationale,
+    }
+    print(
+        "audio CI: mel_abs max={max:.6e} mean={mean:.6e} p99={p99:.6e}; "
+        "mel_rel max={rmax:.6e} mean={rmean:.6e} p99={rp99:.6e}; "
+        "cache_last_channel={clc:.6e} cache_last_time={clt:.6e}; "
+        "thresholds mel_ci_atol={matol:.6e} cache_ci_atol={catol:.6e}".format(
+            max=abs_stats["max"],
+            mean=abs_stats["mean"],
+            p99=abs_stats["p99"],
+            rmax=rel_stats["max"],
+            rmean=rel_stats["mean"],
+            rp99=rel_stats["p99"],
+            clc=cache_max["cache_last_channel"],
+            clt=cache_max["cache_last_time"],
+            matol=mel_ci_atol,
+            catol=cache_ci_atol,
+        )
+    )
+    return report
+
+
+def _write_audio_ci_sidecar(bundle_path: str, audio_ci: dict[str, Any]) -> None:
+    sidecar = bundle_path + ".audio_ci.json"
+    with open(sidecar, "w", encoding="utf-8") as f:
+        json.dump(audio_ci, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"wrote audio CI sidecar: {sidecar}")
+
+
 def _capture_finalize_payload(
     rt: RecordingContinuousFinalizeRef,
     session: ContinuousSession,
@@ -226,6 +669,7 @@ def _capture_finalize_payload(
         final_T = 0
         remaining_frames = 0
         padded_total_samples = int(session.emitted_frames * rt.geometry.hop_samples)
+        total_mel_frames = 0
     else:
         final_chunk_mel = _as_cpu_tensor(inputs.chunk_mel)
         final_new_mel = _as_cpu_tensor(inputs.new_mel)
@@ -233,6 +677,7 @@ def _capture_finalize_payload(
         final_T = int(inputs.chunk_mel.shape[-1])
         remaining_frames = int(inputs.remaining_frames)
         padded_total_samples = int(inputs.padded_total_samples)
+        total_mel_frames = int(padded_total_samples // rt.geometry.hop_samples + 1)
 
     return {
         "final_chunk_mel": final_chunk_mel,
@@ -240,6 +685,7 @@ def _capture_finalize_payload(
         "final_drop_extra": final_drop_extra,
         "final_T": final_T,
         "final_remaining_frames": remaining_frames,
+        "final_total_mel_frames": total_mel_frames,
         "final_padded_total_samples": padded_total_samples,
     }
 
@@ -270,6 +716,10 @@ def _capture_retained_state(
             dtype=torch.int64,
         ),
         "retained_collector_text": session.continuous_emitted_text,
+        "retained_pending_audio": _audio_tensor(session.pending_audio),
+        "retained_raw_audio_ring": _audio_tensor(session.raw_audio_ring),
+        "retained_total_audio_samples": int(session.total_audio_samples),
+        "retained_synthetic_prefix_samples": int(session.synthetic_prefix_samples),
     }
 
 
@@ -480,6 +930,7 @@ def _build_row(
     return {
         "sample_index": int(sample_index),
         "audio_samples": int(len(wav)),
+        "audio": _audio_tensor(wav),
         "steady_chunks": steady_chunks,
         "steady_tokens": steady_tokens,
         "gold_tokens": gold_tokens,
@@ -497,7 +948,7 @@ def _build_multiturn_finalize_record(
     stream_index: int,
     turn_index: int,
     sample_index: int,
-    audio_samples: int,
+    audio: Any,
     steady_chunks: list[dict[str, Any]],
     event_start: int,
 ) -> dict[str, Any]:
@@ -519,7 +970,8 @@ def _build_multiturn_finalize_record(
         "stream_index": int(stream_index),
         "turn_index": int(turn_index),
         "sample_index": int(sample_index),
-        "audio_samples": int(audio_samples),
+        "audio_samples": int(len(audio)),
+        "audio": _audio_tensor(audio),
         "collector_text_before_finalize": collector_before,
         "steady_chunks": steady_chunks,
         "steady_tokens": torch.tensor(result.steady_tokens, dtype=torch.int64),
@@ -566,7 +1018,7 @@ def _build_multiturn_stream(
                 stream_index=stream_index,
                 turn_index=turn_index,
                 sample_index=sample_index,
-                audio_samples=len(wav),
+                audio=wav,
                 steady_chunks=steady_chunks,
                 event_start=event_start,
             )
@@ -602,6 +1054,10 @@ def _build_multiturn_stream(
         "post_reset_hyp_tokens": torch.tensor(session.hyp_tokens, dtype=torch.int64),
         "post_reset_collector_text": session.continuous_emitted_text,
         "post_reset_collector_tokens": torch.tensor([], dtype=torch.int64),
+        "post_reset_pending_audio": _audio_tensor(session.pending_audio),
+        "post_reset_raw_audio_ring": _audio_tensor(session.raw_audio_ring),
+        "post_reset_total_audio_samples": int(session.total_audio_samples),
+        "post_reset_synthetic_prefix_samples": int(session.synthetic_prefix_samples),
         "finalize_ref_meta": dict(end_result.meta),
     }
 
@@ -622,6 +1078,9 @@ class SessionBundle(torch.nn.Module):
         tokenizer_pieces: list[str],
         detok_sequences: list[list[int]],
         detok_texts: list[str],
+        *,
+        audio: bool = False,
+        audio_ci: dict[str, Any] | None = None,
     ):
         super().__init__()
         init_h, init_c = _decoder_state_hc(init_session.decoder_state)
@@ -644,6 +1103,8 @@ class SessionBundle(torch.nn.Module):
                 dtype=torch.int64,
             ),
         )
+        _register_audio_geometry(self, geometry, audio=audio)
+        _register_audio_ci(self, audio_ci, audio=audio)
         self.register_buffer("init_clc", _as_cpu_tensor(init_session.cache_last_channel))
         self.register_buffer("init_clt", _as_cpu_tensor(init_session.cache_last_time))
         self.register_buffer("init_clcl", _as_cpu_tensor(init_session.cache_last_channel_len))
@@ -665,6 +1126,8 @@ class SessionBundle(torch.nn.Module):
             steady_chunks = row["steady_chunks"]
             self.register_buffer(f"{prefix}_sample_index", _scalar(row["sample_index"]))
             self.register_buffer(f"{prefix}_audio_samples", _scalar(row["audio_samples"]))
+            if audio:
+                self.register_buffer(f"{prefix}_audio", row["audio"].cpu())
             self.register_buffer(f"{prefix}_num_steady", _scalar(len(steady_chunks)))
             self.register_buffer(f"{prefix}_steady_tokens", row["steady_tokens"].cpu().to(torch.int64))
             self.register_buffer(f"{prefix}_gold_tokens", row["gold_tokens"].cpu().to(torch.int64))
@@ -680,6 +1143,10 @@ class SessionBundle(torch.nn.Module):
             self.register_buffer(
                 f"{prefix}_final_remaining_frames",
                 _scalar(row["final_remaining_frames"]),
+            )
+            self.register_buffer(
+                f"{prefix}_final_total_mel_frames",
+                _scalar(row["final_total_mel_frames"]),
             )
             self.register_buffer(
                 f"{prefix}_final_padded_total_samples",
@@ -701,6 +1168,9 @@ class MultiTurnSessionBundle(torch.nn.Module):
         tokenizer_pieces: list[str],
         detok_sequences: list[list[int]],
         detok_texts: list[str],
+        *,
+        audio: bool = False,
+        audio_ci: dict[str, Any] | None = None,
     ):
         super().__init__()
         init_h, init_c = _decoder_state_hc(init_session.decoder_state)
@@ -724,6 +1194,8 @@ class MultiTurnSessionBundle(torch.nn.Module):
                 dtype=torch.int64,
             ),
         )
+        _register_audio_geometry(self, geometry, audio=audio)
+        _register_audio_ci(self, audio_ci, audio=audio)
         self.register_buffer("init_clc", _as_cpu_tensor(init_session.cache_last_channel))
         self.register_buffer("init_clt", _as_cpu_tensor(init_session.cache_last_time))
         self.register_buffer("init_clcl", _as_cpu_tensor(init_session.cache_last_channel_len))
@@ -752,6 +1224,8 @@ class MultiTurnSessionBundle(torch.nn.Module):
                 steady_chunks = turn["steady_chunks"]
                 self.register_buffer(f"{prefix}_sample_index", _scalar(turn["sample_index"]))
                 self.register_buffer(f"{prefix}_audio_samples", _scalar(turn["audio_samples"]))
+                if audio:
+                    self.register_buffer(f"{prefix}_audio", turn["audio"].cpu())
                 self.register_buffer(f"{prefix}_num_steady", _scalar(len(steady_chunks)))
                 self.register_buffer(f"{prefix}_steady_tokens", turn["steady_tokens"].cpu().to(torch.int64))
                 self.register_buffer(f"{prefix}_gold_tokens", turn["gold_tokens"].cpu().to(torch.int64))
@@ -780,6 +1254,10 @@ class MultiTurnSessionBundle(torch.nn.Module):
                     _scalar(turn["final_remaining_frames"]),
                 )
                 self.register_buffer(
+                    f"{prefix}_final_total_mel_frames",
+                    _scalar(turn["final_total_mel_frames"]),
+                )
+                self.register_buffer(
                     f"{prefix}_final_padded_total_samples",
                     _scalar(turn["final_padded_total_samples"]),
                 )
@@ -793,6 +1271,23 @@ class MultiTurnSessionBundle(torch.nn.Module):
                     "retained_ring",
                 ):
                     self.register_buffer(f"{prefix}_{name}", turn[name].cpu())
+                if audio:
+                    self.register_buffer(
+                        f"{prefix}_retained_pending_audio",
+                        turn["retained_pending_audio"].cpu(),
+                    )
+                    self.register_buffer(
+                        f"{prefix}_retained_raw_audio_ring",
+                        turn["retained_raw_audio_ring"].cpu(),
+                    )
+                    self.register_buffer(
+                        f"{prefix}_retained_total_audio_samples",
+                        _scalar(turn["retained_total_audio_samples"]),
+                    )
+                    self.register_buffer(
+                        f"{prefix}_retained_synthetic_prefix_samples",
+                        _scalar(turn["retained_synthetic_prefix_samples"]),
+                    )
                 self.register_buffer(
                     f"{prefix}_retained_ring_defined",
                     _scalar(turn["retained_ring_defined"]),
@@ -851,6 +1346,10 @@ class MultiTurnSessionBundle(torch.nn.Module):
                 _scalar(end["final_remaining_frames"]),
             )
             self.register_buffer(
+                f"{eprefix}_final_total_mel_frames",
+                _scalar(end["final_total_mel_frames"]),
+            )
+            self.register_buffer(
                 f"{eprefix}_final_padded_total_samples",
                 _scalar(end["final_padded_total_samples"]),
             )
@@ -874,6 +1373,23 @@ class MultiTurnSessionBundle(torch.nn.Module):
                 f"{eprefix}_post_reset_collector_tokens",
                 end["post_reset_collector_tokens"].cpu().to(torch.int64),
             )
+            if audio:
+                self.register_buffer(
+                    f"{eprefix}_post_reset_pending_audio",
+                    end["post_reset_pending_audio"].cpu(),
+                )
+                self.register_buffer(
+                    f"{eprefix}_post_reset_raw_audio_ring",
+                    end["post_reset_raw_audio_ring"].cpu(),
+                )
+                self.register_buffer(
+                    f"{eprefix}_post_reset_total_audio_samples",
+                    _scalar(end["post_reset_total_audio_samples"]),
+                )
+                self.register_buffer(
+                    f"{eprefix}_post_reset_synthetic_prefix_samples",
+                    _scalar(end["post_reset_synthetic_prefix_samples"]),
+                )
 
     def forward(self):
         return self.num_streams
@@ -889,15 +1405,27 @@ def main() -> int:
         action="store_true",
         help="export retained-context two-turn streams plus a true-boundary reset",
     )
+    parser.add_argument(
+        "--audio",
+        action="store_true",
+        help="export PCM-fed bundle; C++ computes mels and uses bundle mels/geometry as gold",
+    )
     args = parser.parse_args()
 
     if args.n <= 0:
         raise ValueError("--n must be positive")
-    if args.multiturn and args.out == os.path.join(ART, "session_bundle.ts"):
-        args.out = os.path.join(ART, "session_multiturn_bundle.ts")
+    if args.out == os.path.join(ART, "session_bundle.ts"):
+        if args.multiturn and args.audio:
+            args.out = os.path.join(ART, "session_multiturn_audio_bundle.ts")
+        elif args.multiturn:
+            args.out = os.path.join(ART, "session_multiturn_bundle.ts")
+        elif args.audio:
+            args.out = os.path.join(ART, "session_audio_bundle.ts")
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     model = load_model()
+    if args.audio:
+        _ensure_preproc_ts(model, os.path.dirname(args.out) or ART)
     rt = RecordingContinuousFinalizeRef(model)
     dataset = load_benchmark_dataset()
 
@@ -959,6 +1487,14 @@ def main() -> int:
             detok_rows.extend(stream["turns"])
             detok_rows.append(stream["end"])
         detok_sequences, detok_texts = _build_detok_selftest(detok_rows, rt.tokenizer)
+        audio_ci = None
+        if args.audio:
+            audio_ci = _measure_audio_ci(
+                rt,
+                artifacts_dir=os.path.dirname(args.out) or ART,
+                streams=streams,
+            )
+            _write_audio_ci_sidecar(args.out, audio_ci)
         bundle = torch.jit.script(
             MultiTurnSessionBundle(
                 streams,
@@ -967,12 +1503,14 @@ def main() -> int:
                 _tokenizer_pieces(rt.tokenizer),
                 detok_sequences,
                 detok_texts,
+                audio=args.audio,
+                audio_ci=audio_ci,
             )
         )
         bundle.save(args.out)
         print(
             f"wrote {args.out} ({len(streams)} multi-turn streams, "
-            f"detok_selftests={len(detok_sequences)})"
+            f"detok_selftests={len(detok_sequences)}, audio={args.audio})"
         )
         print(
             "schema: meta, init_*; stream{i}_{sample_indices,num_turns}; "
@@ -981,6 +1519,7 @@ def main() -> int:
             "ring,emitted,hyp_tokens,collector_tokens,collector_text}}; "
             "stream{i}_end_{gold_tokens,event_*,final_chunk_mel,final_drop_extra,"
             "final_T,post_reset_*}; tokenizer token_piece_* and detok_selftest_*"
+            + ("; AUDIO audio_geometry + audio CI thresholds/stats + per-turn *_audio + retained/post-reset raw audio state" if args.audio else "")
         )
         return 0
 
@@ -1000,6 +1539,14 @@ def main() -> int:
 
     init_session = rt.new_session("session-bundle-init")
     detok_sequences, detok_texts = _build_detok_selftest(rows, rt.tokenizer)
+    audio_ci = None
+    if args.audio:
+        audio_ci = _measure_audio_ci(
+            rt,
+            artifacts_dir=os.path.dirname(args.out) or ART,
+            rows=rows,
+        )
+        _write_audio_ci_sidecar(args.out, audio_ci)
     bundle = torch.jit.script(
         SessionBundle(
             rows,
@@ -1008,12 +1555,14 @@ def main() -> int:
             _tokenizer_pieces(rt.tokenizer),
             detok_sequences,
             detok_texts,
+            audio=args.audio,
+            audio_ci=audio_ci,
         )
     )
     bundle.save(args.out)
     print(
         f"wrote {args.out} ({len(rows)} utterances, "
-        f"detok_selftests={len(detok_sequences)})"
+        f"detok_selftests={len(detok_sequences)}, audio={args.audio})"
     )
     print(
         "schema: meta, init_*; utt{i}_{num_steady,steady_tokens,gold_tokens,"
@@ -1022,6 +1571,7 @@ def main() -> int:
         "event_collector_text_bytes,event_collector_text_offsets,"
         "final_chunk_mel,final_drop_extra,final_T}; tokenizer token_piece_* "
         "and detok_selftest_*; utt{i}_chunk{j}_*"
+        + ("; AUDIO audio_geometry + audio CI thresholds/stats + utt{i}_audio + final geometry gold" if args.audio else "")
     )
     return 0
 
