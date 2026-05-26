@@ -688,7 +688,17 @@ static std::unique_ptr<WorkerContext> make_worker_context(const std::string& dir
 
 static c10::cuda::CUDAStream stream_for_worker(bool explicit_stream, int worker, int device_index = 0) {
   if (!explicit_stream) return c10::cuda::getDefaultCUDAStream(device_index);
-  return c10::cuda::getStreamFromPool(/*isHighPriority=*/false, /*device=*/device_index);
+  static std::mutex mutex;
+  static std::map<int, std::vector<cudaStream_t>> streams_by_device;
+  if (worker < 0) throw std::runtime_error("negative worker index for stream allocation");
+  std::lock_guard<std::mutex> lock(mutex);
+  auto& streams = streams_by_device[device_index];
+  while (static_cast<int>(streams.size()) <= worker) {
+    cudaStream_t raw{};
+    CUDA_CHECK(cudaStreamCreateWithFlags(&raw, cudaStreamNonBlocking));
+    streams.push_back(raw);
+  }
+  return c10::cuda::getStreamFromExternal(streams[static_cast<size_t>(worker)], device_index);
 }
 
 static uintptr_t stream_handle_value(const c10::cuda::CUDAStream& stream) {
