@@ -26,6 +26,8 @@
 
 using Clock = std::chrono::steady_clock;
 
+static constexpr int kMinFinalizeP95Samples = 20;
+
 static void cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
   if (err != cudaSuccess) {
     std::ostringstream oss;
@@ -241,6 +243,20 @@ static std::string stats_json(const SummaryStats& s) {
       << ",\"p99_minus_p50_ms\":" << (s.p99 - s.p50)
       << ",\"mean_ms\":" << s.mean
       << ",\"max_ms\":" << s.max
+      << "}";
+  return oss.str();
+}
+
+static std::string value_stats_json(const SummaryStats& s) {
+  std::ostringstream oss;
+  oss << "{\"n\":" << s.n
+      << ",\"p50\":" << s.p50
+      << ",\"p95\":" << s.p95
+      << ",\"p99\":" << s.p99
+      << ",\"p95_minus_p50\":" << (s.p95 - s.p50)
+      << ",\"p99_minus_p50\":" << (s.p99 - s.p50)
+      << ",\"mean\":" << s.mean
+      << ",\"max\":" << s.max
       << "}";
   return oss.str();
 }
@@ -508,6 +524,18 @@ struct StartGate {
     go = true;
     cv.notify_all();
   }
+
+  void wait_until_ready() {
+    std::unique_lock<std::mutex> lock(mutex);
+    cv.wait(lock, [&] { return ready == expected; });
+  }
+
+  void start_now() {
+    std::unique_lock<std::mutex> lock(mutex);
+    start_time = Clock::now();
+    go = true;
+    cv.notify_all();
+  }
 };
 
 struct TimingBuckets {
@@ -520,6 +548,13 @@ struct TimingBuckets {
   std::vector<double> finalize_runner_wait_ms;
   std::vector<double> finalize_gpu_ms;
   std::vector<double> finalize_total_ms;
+  std::vector<double> finalize_fork_clone_ms;
+  std::vector<double> finalize_aoti_run_cuda_ms;
+  std::vector<double> finalize_enc_len_sync_ms;
+  std::vector<double> finalize_decode_wall_ms;
+  std::vector<double> finalize_decode_item_wait_ms;
+  std::vector<double> finalize_decode_tokens;
+  std::vector<double> finalize_glue_ms;
 
   void append(const TimingBuckets& other) {
     auto add = [](std::vector<double>& dst, const std::vector<double>& src) {
@@ -534,8 +569,28 @@ struct TimingBuckets {
     add(finalize_runner_wait_ms, other.finalize_runner_wait_ms);
     add(finalize_gpu_ms, other.finalize_gpu_ms);
     add(finalize_total_ms, other.finalize_total_ms);
+    add(finalize_fork_clone_ms, other.finalize_fork_clone_ms);
+    add(finalize_aoti_run_cuda_ms, other.finalize_aoti_run_cuda_ms);
+    add(finalize_enc_len_sync_ms, other.finalize_enc_len_sync_ms);
+    add(finalize_decode_wall_ms, other.finalize_decode_wall_ms);
+    add(finalize_decode_item_wait_ms, other.finalize_decode_item_wait_ms);
+    add(finalize_decode_tokens, other.finalize_decode_tokens);
+    add(finalize_glue_ms, other.finalize_glue_ms);
   }
 };
+
+static std::string finalize_phase_stats_json(const TimingBuckets& timings) {
+  std::ostringstream oss;
+  oss << "{\"fork_clone\":" << stats_json(summarize(timings.finalize_fork_clone_ms))
+      << ",\"aoti_run_cuda\":" << stats_json(summarize(timings.finalize_aoti_run_cuda_ms))
+      << ",\"enc_len_sync\":" << stats_json(summarize(timings.finalize_enc_len_sync_ms))
+      << ",\"decode_wall\":" << stats_json(summarize(timings.finalize_decode_wall_ms))
+      << ",\"decode_item_wait\":" << stats_json(summarize(timings.finalize_decode_item_wait_ms))
+      << ",\"decode_tokens\":" << value_stats_json(summarize(timings.finalize_decode_tokens))
+      << ",\"glue\":" << stats_json(summarize(timings.finalize_glue_ms))
+      << "}";
+  return oss.str();
+}
 
 struct WorkerContext {
   torch::jit::Module bundle;
@@ -1092,16 +1147,22 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
       parent.mode != SessionMode::PENDING_FINALIZE) {
     throw std::runtime_error("density true-boundary finalize outside live state");
   }
+  auto fork_clone_start = Clock::now();
   auto snapshot = snapshot_asr(parent);
   parent.mode = SessionMode::FINALIZED;
   snapshot.mode = SessionMode::FINALIZED;
   auto fork = clone_session(parent);
+  double fork_clone_ms = elapsed_ms_since(fork_clone_start);
 
   int64_t drop_extra = scalar_i64(prefix_tensor(bundle, prefix, "final_drop_extra"));
   int64_t final_T = scalar_i64(prefix_tensor(bundle, prefix, "final_T"));
   auto gold = tensor_to_vec(prefix_tensor(bundle, prefix, "gold_tokens"));
   double runner_host_ms = 0.0;
   double gpu_ms = 0.0;
+  double enc_len_sync_ms = 0.0;
+  double decode_wall_ms = 0.0;
+  double decode_item_wait_ms = 0.0;
+  double decode_tokens = 0.0;
 
   if (final_T > 0) {
     auto final_chunk = prefix_tensor(bundle, prefix, "final_chunk_mel").to(device).contiguous();
@@ -1129,15 +1190,28 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     runner_host_ms = elapsed_ms_since(run_start);
     CUDA_CHECK(cudaEventRecord(ev_stop, stream.stream()));
     if (out.size() < 2) throw std::runtime_error("density finalize AOTI bucket returned fewer than 2 outputs");
-    double scalar_wait_ms = 0.0;
-    int64_t enc_len = scalar_i64_timed(out[1], &scalar_wait_ms);
+    int64_t enc_len = scalar_i64_timed(out[1], &enc_len_sync_ms);
     if (out.size() >= 5) {
       fork.clc = out[2];
       fork.clt = out[3];
       fork.clcl = out[4];
     }
-    decode_range_density(joint, predict, out[0], enc_len, fork.g, fork.h, fork.c, fork.hyp, &scalar_wait_ms);
-    if (timings != nullptr) timings->scalar_sync_wait_ms.push_back(scalar_wait_ms);
+    size_t hyp_before_decode = fork.hyp.size();
+    auto decode_start = Clock::now();
+    decode_range_density(joint,
+                         predict,
+                         out[0],
+                         enc_len,
+                         fork.g,
+                         fork.h,
+                         fork.c,
+                         fork.hyp,
+                         &decode_item_wait_ms);
+    decode_wall_ms = elapsed_ms_since(decode_start);
+    decode_tokens = static_cast<double>(fork.hyp.size() - hyp_before_decode);
+    if (timings != nullptr) {
+      timings->scalar_sync_wait_ms.push_back(enc_len_sync_ms + decode_item_wait_ms);
+    }
     CUDA_CHECK(cudaEventSynchronize(ev_stop));
     float elapsed = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&elapsed, ev_start, ev_stop));
@@ -1181,9 +1255,19 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     cold_reset_after_finalize(parent, bundle, device, nullptr);
   }
   if (timings != nullptr) {
+    double total_ms = elapsed_ms_since(total_start);
+    double glue_ms = total_ms - fork_clone_ms - enc_len_sync_ms - decode_wall_ms;
+    if (glue_ms < 0.0) glue_ms = 0.0;
     timings->finalize_runner_wait_ms.push_back(std::max(0.0, runner_host_ms - gpu_ms));
     timings->finalize_gpu_ms.push_back(gpu_ms);
-    timings->finalize_total_ms.push_back(elapsed_ms_since(total_start));
+    timings->finalize_total_ms.push_back(total_ms);
+    timings->finalize_fork_clone_ms.push_back(fork_clone_ms);
+    timings->finalize_aoti_run_cuda_ms.push_back(gpu_ms);
+    timings->finalize_enc_len_sync_ms.push_back(enc_len_sync_ms);
+    timings->finalize_decode_wall_ms.push_back(decode_wall_ms);
+    timings->finalize_decode_item_wait_ms.push_back(decode_item_wait_ms);
+    timings->finalize_decode_tokens.push_back(decode_tokens);
+    timings->finalize_glue_ms.push_back(glue_ms);
   }
   return outcome;
 }
@@ -2575,6 +2659,7 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
        << ",\"finalize_wait\":" << stats_json(finalize_wait)
        << ",\"finalize_gpu\":" << stats_json(summarize(result.timings.finalize_gpu_ms))
        << ",\"finalize_total\":" << stats_json(finalize_total)
+       << ",\"finalize_phases\":" << finalize_phase_stats_json(result.timings)
        << ",\"finalize_runner_wait_pct_of_total_p95\":" << wait_pct
        << ",\"finalize_loader_memory\":" << finalize_loaders.memory_json(result.workers)
        << ",\"peak_gpu_mem_bytes\":" << result.peak_mem
@@ -2639,6 +2724,9 @@ struct DensitySweepRunResult {
   int requested_sessions = 0;
   int sessions_completed = 0;
   int chunks_completed = 0;
+  int finalize_samples = 0;
+  int warmup_steady_workers = 0;
+  int warmup_finalize_buckets = 0;
   int errors = 0;
   int mismatches = 0;
   int unique_streams = 0;
@@ -2647,6 +2735,7 @@ struct DensitySweepRunResult {
   bool oom = false;
   bool keepup_ok = false;
   bool ttfs_ok = false;
+  bool finalize_p95_valid = false;
   bool correctness_ok = false;
   bool slo_robust = false;
   bool explicit_stream = true;
@@ -2705,6 +2794,119 @@ static std::vector<FinalizeBucketKey> needed_finalize_buckets_for_assignments(to
   return unique_finalize_bucket_keys(keys);
 }
 
+static std::map<FinalizeBucketKey, FinalizeCase> representative_finalize_cases_for_assignments(
+    torch::jit::Module& bundle,
+    const std::vector<std::vector<int>>& assigned) {
+  std::map<FinalizeBucketKey, FinalizeCase> reps;
+  for (const auto& worker_utts : assigned) {
+    for (int utt : worker_utts) {
+      int64_t T = scalar_i64(utt_tensor(bundle, utt, "final_T"));
+      if (T <= 0) continue;
+      int64_t drop = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
+      FinalizeBucketKey key = std::make_pair(drop, T);
+      if (reps.find(key) == reps.end()) {
+        reps.emplace(key, FinalizeCase{utt, drop, T});
+      }
+    }
+  }
+  return reps;
+}
+
+static std::vector<FinalizeBucketKey> finalize_keys_from_representatives(
+    const std::map<FinalizeBucketKey, FinalizeCase>& reps) {
+  std::vector<FinalizeBucketKey> keys;
+  keys.reserve(reps.size());
+  for (const auto& kv : reps) keys.push_back(kv.first);
+  return keys;
+}
+
+static std::vector<std::map<FinalizeBucketKey, FinalizeCase>> representative_finalize_cases_by_worker(
+    torch::jit::Module& bundle,
+    const std::vector<std::vector<int>>& assigned) {
+  std::vector<std::map<FinalizeBucketKey, FinalizeCase>> reps(assigned.size());
+  for (size_t worker = 0; worker < assigned.size(); ++worker) {
+    for (int utt : assigned[worker]) {
+      int64_t T = scalar_i64(utt_tensor(bundle, utt, "final_T"));
+      if (T <= 0) continue;
+      int64_t drop = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
+      FinalizeBucketKey key = std::make_pair(drop, T);
+      if (reps[worker].find(key) == reps[worker].end()) {
+        reps[worker].emplace(key, FinalizeCase{utt, drop, T});
+      }
+    }
+  }
+  return reps;
+}
+
+static int count_finalize_samples_for_request(torch::jit::Module& bundle,
+                                              int rows_total,
+                                              int requested_sessions) {
+  int count = 0;
+  for (int i = 0; i < requested_sessions; ++i) {
+    int utt = i % rows_total;
+    if (scalar_i64(utt_tensor(bundle, utt, "final_T")) > 0) ++count;
+  }
+  return count;
+}
+
+static int raise_request_for_valid_finalize_p95(torch::jit::Module& bundle,
+                                                int rows_total,
+                                                int requested_sessions) {
+  int finalize_rows_per_cycle = count_finalize_samples_for_request(bundle, rows_total, rows_total);
+  if (finalize_rows_per_cycle <= 0) {
+    throw std::runtime_error("density sweep cannot collect finalize p95: no rows with final_T > 0");
+  }
+  int out = requested_sessions;
+  while (count_finalize_samples_for_request(bundle, rows_total, out) < kMinFinalizeP95Samples) {
+    ++out;
+  }
+  return out;
+}
+
+static int pick_assigned_steady_warmup_utt(torch::jit::Module& bundle,
+                                           const std::vector<int>& worker_utts) {
+  for (int utt : worker_utts) {
+    if (scalar_i64(utt_tensor(bundle, utt, "num_steady")) >= 2) return utt;
+  }
+  return -1;
+}
+
+static void warm_steady_encoder_once_density(int utt,
+                                             WorkerContext& ctx,
+                                             AOTIModelPackageLoader& enc_steady,
+                                             torch::Device device,
+                                             const Tokenizer& tokenizer,
+                                             bool explicit_stream,
+                                             bool mutex_serialize_run,
+                                             const std::string& label) {
+  int64_t num_steady = scalar_i64(utt_tensor(ctx.bundle, utt, "num_steady"));
+  if (num_steady < 2) {
+    throw std::runtime_error("density steady warmup requires an utterance with at least two steady chunks");
+  }
+  SessionState session;
+  reset_session(session, ctx.bundle, device);
+  std::vector<EmittedEvent> events;
+  std::string prefix = "utt" + std::to_string(utt);
+  for (int chunk = 0; chunk < 2; ++chunk) {
+    run_steady_chunk_density(session,
+                             ctx.bundle,
+                             prefix,
+                             chunk,
+                             ctx.enc_first,
+                             enc_steady,
+                             ctx.joint,
+                             ctx.predict,
+                             device,
+                             tokenizer,
+                             events,
+                             ctx.stream,
+                             explicit_stream,
+                             mutex_serialize_run,
+                             nullptr,
+                             label + ".chunk" + std::to_string(chunk));
+  }
+}
+
 static std::string uintptr_list_json(const std::vector<uintptr_t>& values) {
   std::ostringstream oss;
   oss << "[";
@@ -2744,19 +2946,39 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
     result.requested_sessions = rows_total;
   }
   if (result.requested_sessions <= 0) throw std::runtime_error("density sweep requested zero sessions");
+  torch::jit::Module assignment_bundle = torch::jit::load(args.dir + "/session_bundle.ts");
+  verify_session_bundle_meta(assignment_bundle, false);
+  int original_requested_sessions = result.requested_sessions;
+  result.requested_sessions = raise_request_for_valid_finalize_p95(assignment_bundle,
+                                                                   rows_total,
+                                                                   result.requested_sessions);
+  if (result.requested_sessions != original_requested_sessions) {
+    std::printf("=== DENSITY 1a SAMPLE FLOOR: bumped requested sessions from %d to %d "
+                "to collect at least %d finalize samples for valid p95 ===\n",
+                original_requested_sessions,
+                result.requested_sessions,
+                kMinFinalizeP95Samples);
+  }
   int reference_rows_needed = std::min(rows_total, result.requested_sessions);
   if (static_cast<int>(reference.size()) < reference_rows_needed) {
     throw std::runtime_error("density sweep serial reference is smaller than the assigned utterance set");
   }
+  auto assigned = assign_density_utts(result.workers, rows_total, result.requested_sessions);
+  auto bucket_reps = representative_finalize_cases_for_assignments(assignment_bundle, assigned);
+  auto needed_buckets = finalize_keys_from_representatives(bucket_reps);
+  auto worker_bucket_reps = representative_finalize_cases_by_worker(assignment_bundle, assigned);
 
   std::printf("=== DENSITY 1a RUN START: N=%d workers=%d steady_num_runners=%d finalize_num_runners=%d "
-              "sessions=%d rows_total=%d cadence=%.3fms ===\n",
+              "sessions=%d rows_total=%d finalize_samples_requested=%d min_finalize_p95_samples=%d "
+              "cadence=%.3fms ===\n",
               n,
               result.workers,
               result.num_runners,
               result.finalize_num_runners,
               result.requested_sessions,
               rows_total,
+              count_finalize_samples_for_request(assignment_bundle, rows_total, result.requested_sessions),
+              kMinFinalizeP95Samples,
               args.density_chunk_period_ms);
 
   cleanup_cuda_cache();
@@ -2769,10 +2991,6 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                             result.finalize_num_runners,
                                             "1a_density_sweep_capped_finalize_runner_pool");
 
-  torch::jit::Module assignment_bundle = torch::jit::load(args.dir + "/session_bundle.ts");
-  verify_session_bundle_meta(assignment_bundle, false);
-  auto assigned = assign_density_utts(result.workers, rows_total, result.requested_sessions);
-  auto needed_buckets = needed_finalize_buckets_for_assignments(assignment_bundle, assigned);
   finalize_loaders.preload(needed_buckets);
   CUDA_CHECK(cudaDeviceSynchronize());
   result.used_after_loaders_bytes = gpu_used_bytes();
@@ -2794,41 +3012,89 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   result.stream_uniqueness_ok = !result.explicit_stream || result.unique_streams == result.workers;
   auto tokenizer = tokenizer_from_bundle(contexts[0]->bundle);
 
-  if (args.density_warmup) {
-    for (int worker = 0; worker < result.workers; ++worker) {
-      if (assigned[static_cast<size_t>(worker)].empty()) continue;
-      int warm_utt = assigned[static_cast<size_t>(worker)][0];
-      auto warm = replay_row_density(warm_utt,
-                                     *contexts[worker],
-                                     enc_steady,
-                                     finalize_loaders,
-                                     device,
-                                     tokenizer,
-                                     result.explicit_stream,
-                                     args.mutex_serialize_run,
-                                     nullptr,
-                                     true);
-      if (!warm.ok) {
-        throw std::runtime_error("density sweep warmup failed for worker" + std::to_string(worker) +
-                                 " utt" + std::to_string(warm_utt) +
-                                 (warm.error.empty() ? "" : ": " + warm.error));
-      }
-    }
-    CUDA_CHECK(cudaDeviceSynchronize());
-  }
-
   ResourceSampler resources;
-  resources.start();
   StartGate gate(result.workers);
   std::vector<DensityWorkerOutput> worker_outputs(static_cast<size_t>(result.workers));
+  std::vector<int> warmup_steady_done(static_cast<size_t>(result.workers), 0);
+  std::vector<int> warmup_finalize_bucket_runs(static_cast<size_t>(result.workers), 0);
+  std::atomic<bool> warmup_failed{false};
   std::vector<std::thread> threads;
   threads.reserve(static_cast<size_t>(result.workers));
   for (int worker = 0; worker < result.workers; ++worker) {
     threads.emplace_back([&, worker] {
+      auto& out = worker_outputs[static_cast<size_t>(worker)];
       try {
         c10::cuda::CUDAGuard device_guard(device.index());
-        auto& out = worker_outputs[static_cast<size_t>(worker)];
+        if (args.density_warmup) {
+          int warm_utt = pick_assigned_steady_warmup_utt(contexts[worker]->bundle,
+                                                         assigned[static_cast<size_t>(worker)]);
+          if (warm_utt < 0) {
+            throw std::runtime_error("density sweep steady warmup failed for worker" +
+                                     std::to_string(worker) +
+                                     ": no assigned utterance has a steady AOTI continuation");
+          }
+          warm_steady_encoder_once_density(warm_utt,
+                                           *contexts[worker],
+                                           enc_steady,
+                                           device,
+                                           tokenizer,
+                                           result.explicit_stream,
+                                           args.mutex_serialize_run,
+                                           "density.1a.warmup.steady.worker" + std::to_string(worker) +
+                                               ".utt" + std::to_string(warm_utt));
+          warmup_steady_done[static_cast<size_t>(worker)] = 1;
+
+          for (const auto& kv : worker_bucket_reps[static_cast<size_t>(worker)]) {
+            const auto& fc = kv.second;
+            SessionState warm_session;
+            std::vector<EmittedEvent> warm_events;
+            prepare_finalize_parent(fc,
+                                    *contexts[worker],
+                                    enc_steady,
+                                    device,
+                                    tokenizer,
+                                    result.explicit_stream,
+                                    args.mutex_serialize_run,
+                                    warm_session,
+                                    warm_events);
+            std::string warm_label = "density.1a.warmup.worker" + std::to_string(worker) +
+                                     ".finalize_bucket.drop" + std::to_string(fc.drop) +
+                                     ".T" + std::to_string(fc.T) +
+                                     ".utt" + std::to_string(fc.utt);
+            auto warm = run_finalize_density(warm_session,
+                                             contexts[worker]->bundle,
+                                             "utt" + std::to_string(fc.utt),
+                                             warm_label,
+                                             finalize_loaders,
+                                             contexts[worker]->joint,
+                                             contexts[worker]->predict,
+                                             device,
+                                             tokenizer,
+                                             warm_events,
+                                             FinalizeFinish::SPECULATIVE_KEEP,
+                                             contexts[worker]->stream,
+                                             result.explicit_stream,
+                                             args.mutex_serialize_run,
+                                             nullptr);
+            if (!warm.token_ok || !warm.fork_ok) {
+              throw std::runtime_error("density sweep finalize bucket warmup failed for worker" +
+                                       std::to_string(worker) + " drop=" + std::to_string(fc.drop) +
+                                       " T=" + std::to_string(fc.T) +
+                                       " utt=" + std::to_string(fc.utt));
+            }
+            ++warmup_finalize_bucket_runs[static_cast<size_t>(worker)];
+          }
+          CUDA_CHECK(cudaStreamSynchronize(contexts[worker]->stream.stream()));
+        }
+      } catch (const std::exception& e) {
+        warmup_failed.store(true);
+        out.error = e.what();
+      }
+
+      try {
+        c10::cuda::CUDAGuard device_guard(device.index());
         gate.arrive_and_wait();
+        if (warmup_failed.load() || !out.error.empty()) return;
         for (int utt : assigned[static_cast<size_t>(worker)]) {
           SessionState session;
           reset_session(session, contexts[worker]->bundle, device);
@@ -2892,11 +3158,26 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
           ++out.sessions_completed;
         }
       } catch (const std::exception& e) {
-        worker_outputs[static_cast<size_t>(worker)].error = e.what();
+        out.error = e.what();
       }
     });
   }
-  gate.wait_until_ready_and_start();
+  gate.wait_until_ready();
+  for (int worker = 0; worker < result.workers; ++worker) {
+    result.warmup_steady_workers += warmup_steady_done[static_cast<size_t>(worker)];
+    result.warmup_finalize_buckets += warmup_finalize_bucket_runs[static_cast<size_t>(worker)];
+  }
+  if (args.density_warmup) {
+    std::printf("=== DENSITY 1a WARMUP COMPLETE: steady_workers=%d/%d "
+                "finalize_bucket_worker_runs=%d unique_loaded_buckets=%zu CUDA_MODULE_LOADING=%s ===\n",
+                result.warmup_steady_workers,
+                result.workers,
+                result.warmup_finalize_buckets,
+                needed_buckets.size(),
+                std::getenv("CUDA_MODULE_LOADING") ? std::getenv("CUDA_MODULE_LOADING") : "(unset)");
+  }
+  resources.start();
+  gate.start_now();
   for (auto& thread : threads) thread.join();
   auto end_time = Clock::now();
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -2925,10 +3206,12 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   result.throughput_sessions_per_s = result.wall_ms > 0.0
                                          ? 1000.0 * static_cast<double>(result.sessions_completed) / result.wall_ms
                                          : 0.0;
+  result.finalize_samples = static_cast<int>(result.timings.finalize_total_ms.size());
+  result.finalize_p95_valid = result.finalize_samples >= kMinFinalizeP95Samples;
   auto lag = summarize(result.lag_ms);
   auto ttfs = summarize(result.ttfs_ms);
   result.keepup_ok = lag.n > 0 && lag.p95 < 500.0;
-  result.ttfs_ok = ttfs.n > 0 && ttfs.p95 <= 175.0 && ttfs.p99 <= 250.0;
+  result.ttfs_ok = result.finalize_p95_valid && ttfs.n > 0 && ttfs.p95 <= 175.0 && ttfs.p99 <= 250.0;
   result.correctness_ok = result.errors == 0 &&
                           result.mismatches == 0 &&
                           result.sessions_completed == result.requested_sessions &&
@@ -2936,12 +3219,19 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   result.completed = result.sessions_completed == result.requested_sessions && result.errors == 0;
   result.slo_robust = result.completed && result.correctness_ok && result.keepup_ok && result.ttfs_ok;
 
+  auto steady_gpu = summarize(result.timings.steady_gpu_ms);
+  auto finalize_wait = summarize(result.timings.finalize_runner_wait_ms);
+  auto finalize_aoti = summarize(result.timings.finalize_aoti_run_cuda_ms);
+  auto finalize_total = summarize(result.timings.finalize_total_ms);
+  const char* cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");
+
   std::ostringstream json;
   json << "{\"check\":\"1a_density_sweep_full_session\""
        << ",\"num_runners\":" << result.num_runners
        << ",\"workers\":" << result.workers
        << ",\"steady_num_runners\":" << result.num_runners
        << ",\"finalize_num_runners_per_loaded_bucket\":" << result.finalize_num_runners
+       << ",\"cuda_module_loading\":" << json_quote(cuda_module_loading ? cuda_module_loading : "")
        << ",\"stream_mode\":\"" << stream_mode_label(result.explicit_stream, args.mutex_serialize_run) << "\""
        << ",\"topology\":\"shared_steady_loader_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
        << ",\"cadence_ms\":" << args.density_chunk_period_ms
@@ -2949,6 +3239,15 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"requested_sessions\":" << result.requested_sessions
        << ",\"sessions_completed\":" << result.sessions_completed
        << ",\"chunks_completed\":" << result.chunks_completed
+       << ",\"finalize_samples\":" << result.finalize_samples
+       << ",\"min_finalize_p95_samples\":" << kMinFinalizeP95Samples
+       << ",\"finalize_p95_valid\":" << json_bool(result.finalize_p95_valid)
+       << ",\"warmup\":{\"enabled\":" << json_bool(args.density_warmup)
+       << ",\"steady_workers\":" << result.warmup_steady_workers
+       << ",\"finalize_bucket_worker_runs\":" << result.warmup_finalize_buckets
+       << ",\"finalize_buckets\":" << result.warmup_finalize_buckets
+       << ",\"loaded_finalize_buckets\":" << needed_buckets.size()
+       << "}"
        << ",\"errors\":" << result.errors
        << ",\"mismatches\":" << result.mismatches
        << ",\"serial_oracle_match_pass\":" << json_bool(result.mismatches == 0 && result.errors == 0)
@@ -2965,12 +3264,13 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"ttfs\":" << stats_json(ttfs)
        << ",\"steady_latency\":" << stats_json(summarize(result.timings.latency_ms))
        << ",\"steady_runner_wait\":" << stats_json(summarize(result.timings.runner_wait_ms))
-       << ",\"steady_gpu\":" << stats_json(summarize(result.timings.steady_gpu_ms))
+       << ",\"steady_gpu\":" << stats_json(steady_gpu)
        << ",\"item_wait\":" << stats_json(summarize(result.timings.scalar_sync_wait_ms))
        << ",\"item_wait_pct_of_steady_gpu\":" << stats_json(summarize(result.timings.scalar_sync_pct_of_gpu))
-       << ",\"finalize_wait\":" << stats_json(summarize(result.timings.finalize_runner_wait_ms))
+       << ",\"finalize_wait\":" << stats_json(finalize_wait)
        << ",\"finalize_gpu\":" << stats_json(summarize(result.timings.finalize_gpu_ms))
-       << ",\"finalize_total\":" << stats_json(summarize(result.timings.finalize_total_ms))
+       << ",\"finalize_total\":" << stats_json(finalize_total)
+       << ",\"finalize_phases\":" << finalize_phase_stats_json(result.timings)
        << ",\"resource\":" << resource_stats_json(result.resource_stats)
        << ",\"finalize_loader_memory\":" << result.finalize_loader_memory_json
        << ",\"unique_streams\":" << result.unique_streams
@@ -2990,7 +3290,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
 
   std::printf("=== DENSITY 1a ROW N=%d %s: throughput_rt=%.3f streams sessions/s=%.3f "
               "ttfs_p50/p95/p99=%.3f/%.3f/%.3fms spread=%.3fms lag_p50/p95=%.3f/%.3fms "
-              "steady_gpu_p50/p95=%.3f/%.3fms finalize_wait_p95=%.3fms "
+              "steady_gpu_p50/p95=%.3f/%.3fms finalize_total_p50/p95=%.3f/%.3fms "
+              "finalize_aoti_p50/p95=%.3f/%.3fms finalize_wait_p95=%.3fms finalize_p95_valid=%s "
               "cpu_cores=%.2f/%d gpu_util_mean=%.1f%% peak_mem=%.3fGiB mismatches=%d errors=%d ===\n",
               result.n,
               result.slo_robust ? "SLO_ROBUST" : "NOT_SLO_ROBUST",
@@ -3002,9 +3303,14 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
               ttfs.p95 - ttfs.p50,
               lag.p50,
               lag.p95,
-              summarize(result.timings.steady_gpu_ms).p50,
-              summarize(result.timings.steady_gpu_ms).p95,
-              summarize(result.timings.finalize_runner_wait_ms).p95,
+              steady_gpu.p50,
+              steady_gpu.p95,
+              finalize_total.p50,
+              finalize_total.p95,
+              finalize_aoti.p50,
+              finalize_aoti.p95,
+              finalize_wait.p95,
+              result.finalize_p95_valid ? "true" : "false",
               result.resource_stats.cpu_cores_used,
               result.resource_stats.cpu_threads,
               result.resource_stats.gpu_util_mean_pct,
@@ -3090,6 +3396,7 @@ static std::string infer_binding_slo(const std::vector<DensitySweepRunResult>& r
     if (run.n <= knee_n) continue;
     if (run.oom) return "memory_oom";
     if (!run.correctness_ok && run.completed) return "correctness";
+    if (!run.finalize_p95_valid) return "finalize_p95_invalid";
     if (!run.ttfs_ok) return "ttfs_p95_or_p99";
     if (!run.keepup_ok) return "keepup_lag_p95";
     if (!run.completed) return "runtime_error";
@@ -3149,6 +3456,10 @@ static void emit_density_sweep_manifest(const DensityArgs& args,
       << ",\"rows_total\":" << rows_total
       << ",\"density_rows\":" << args.density_rows
       << ",\"density_sessions_per_worker\":" << args.density_sessions_per_worker
+      << ",\"density_warmup\":" << json_bool(args.density_warmup)
+      << ",\"min_finalize_p95_samples\":" << kMinFinalizeP95Samples
+      << ",\"cuda_module_loading\":"
+      << json_quote(std::getenv("CUDA_MODULE_LOADING") ? std::getenv("CUDA_MODULE_LOADING") : "")
       << ",\"cadence_ms\":" << args.density_chunk_period_ms
       << ",\"knee_n\":" << summary.knee_n
       << ",\"single_thread_keepup_n\":" << summary.single_thread_keepup_n
@@ -3174,7 +3485,12 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
   } else if (args.density_rows > 0) {
     max_requested_sessions = args.density_rows;
   }
-  int reference_rows = std::min(rows_total, std::max(1, max_requested_sessions));
+  torch::jit::Module reference_sizing_bundle = torch::jit::load(args.dir + "/session_bundle.ts");
+  verify_session_bundle_meta(reference_sizing_bundle, false);
+  int reference_sessions = raise_request_for_valid_finalize_p95(reference_sizing_bundle,
+                                                               rows_total,
+                                                               std::max(1, max_requested_sessions));
+  int reference_rows = std::min(rows_total, reference_sessions);
   std::printf("=== DENSITY 1a SERIAL ORACLE BUILD: rows=%d/%d ===\n", reference_rows, rows_total);
   TimingBuckets ref_timings;
   auto reference = build_serial_reference(args, device, reference_rows, &ref_timings);
@@ -3215,8 +3531,13 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
     rows_json << "{\"N\":" << run.n
               << ",\"slo_robust\":" << json_bool(run.slo_robust)
               << ",\"throughput_realtime_streams\":" << run.throughput_realtime_streams
+              << ",\"finalize_samples\":" << run.finalize_samples
+              << ",\"finalize_p95_valid\":" << json_bool(run.finalize_p95_valid)
               << ",\"ttfs\":" << stats_json(summarize(run.ttfs_ms))
               << ",\"lag\":" << stats_json(summarize(run.lag_ms))
+              << ",\"steady_gpu\":" << stats_json(summarize(run.timings.steady_gpu_ms))
+              << ",\"finalize_total\":" << stats_json(summarize(run.timings.finalize_total_ms))
+              << ",\"finalize_phases\":" << finalize_phase_stats_json(run.timings)
               << ",\"peak_gpu_mem_bytes\":" << run.peak_mem_bytes
               << ",\"mismatches\":" << run.mismatches
               << ",\"errors\":" << run.errors
@@ -3232,6 +3553,10 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
        << ",\"topology\":\"shared_steady_loader_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
        << ",\"ttfs_budget\":{\"p95_ms\":175,\"p99_ms\":250}"
        << ",\"keepup_budget\":{\"lag_p95_ms\":500}"
+       << ",\"density_warmup\":" << json_bool(args.density_warmup)
+       << ",\"min_finalize_p95_samples\":" << kMinFinalizeP95Samples
+       << ",\"cuda_module_loading\":"
+       << json_quote(std::getenv("CUDA_MODULE_LOADING") ? std::getenv("CUDA_MODULE_LOADING") : "")
        << ",\"rows_total\":" << rows_total
        << ",\"n_values\":" << int_list_json(args.n_values)
        << ",\"knee_n\":" << summary.knee_n
@@ -3318,8 +3643,16 @@ static void emit_run_manifest(const DensityArgs& args,
 
 int main(int argc, char** argv) {
   try {
-    torch::NoGradGuard ng;
     DensityArgs args = parse_density_args(argc, argv);
+    if (args.mode == "density-sweep") {
+      const char* previous_cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");
+      if (setenv("CUDA_MODULE_LOADING", "EAGER", 1) != 0) {
+        throw std::runtime_error("failed to set CUDA_MODULE_LOADING=EAGER");
+      }
+      std::printf("=== DENSITY CUDA_MODULE_LOADING=EAGER (was %s) ===\n",
+                  previous_cuda_module_loading ? previous_cuda_module_loading : "(unset)");
+    }
+    torch::NoGradGuard ng;
     auto device = torch::Device(torch::kCUDA, 0);
     c10::cuda::CUDAGuard device_guard(device.index());
     std::string stamp = timestamp_utc();
@@ -3334,14 +3667,16 @@ int main(int argc, char** argv) {
         std::printf("%s%d", i == 0 ? "" : ",", args.n_values[i]);
       }
       std::printf(" rows_total=%d density_rows=%d sessions_per_worker=%d cadence=%.3fms stream_mode=%s "
-                  "mutex=%s warmup=%s ===\n",
+                  "mutex=%s warmup=%s min_finalize_p95_samples=%d CUDA_MODULE_LOADING=%s ===\n",
                   rows_total,
                   args.density_rows,
                   args.density_sessions_per_worker,
                   args.density_chunk_period_ms,
                   args.stream_mode.c_str(),
                   args.mutex_serialize_run ? "true" : "false",
-                  args.density_warmup ? "true" : "false");
+                  args.density_warmup ? "true" : "false",
+                  kMinFinalizeP95Samples,
+                  std::getenv("CUDA_MODULE_LOADING") ? std::getenv("CUDA_MODULE_LOADING") : "(unset)");
       auto summary = run_density_sweep(args, device, stamp, rows_total);
       return summary.pass_to_1b ? 0 : 1;
     }
