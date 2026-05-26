@@ -27,12 +27,14 @@ Run from runtime/:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from typing import Any
 
 import numpy as np
 import torch
+from omegaconf import OmegaConf
 
 from finalize_ref import (
     BLANK,
@@ -56,6 +58,8 @@ PREPROC_CI_REL_EPS = 1.0e-6
 PREPROC_CI_MEL_MAX_HEADROOM = 2.0
 PREPROC_CI_MEL_P99_HEADROOM = 16.0
 PREPROC_CI_CACHE_MAX_HEADROOM = 2.0
+MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6b"
+PREPROC_MANIFEST_SCHEMA = 1
 
 
 def _as_cpu_tensor(value: torch.Tensor) -> torch.Tensor:
@@ -223,6 +227,15 @@ def _register_steady_chunks(
             f"{cprefix}_emitted_before",
             _scalar(chunk["emitted_before"]),
         )
+        if "first_eager_enc_out" in chunk:
+            module.register_buffer(
+                f"{cprefix}_first_eager_enc_out",
+                chunk["first_eager_enc_out"].cpu(),
+            )
+            module.register_buffer(
+                f"{cprefix}_first_eager_enc_len",
+                chunk["first_eager_enc_len"].cpu().to(torch.int64),
+            )
 
 
 def _register_audio_geometry(
@@ -300,12 +313,132 @@ def _register_audio_ci(
     module.register_buffer("audio_ci_rationale_offsets", rationale_offsets)
 
 
-def _ensure_preproc_ts(model, artifacts_dir: str) -> None:
-    path = os.path.join(artifacts_dir, "preproc.ts")
-    if os.path.exists(path):
-        print(f"using existing preprocessor TorchScript: {path}")
-        return
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
 
+
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if torch.is_tensor(value):
+        return value.detach().cpu().tolist()
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return str(value)
+
+
+def _audio_geometry_manifest_values(geometry) -> list[int]:
+    return [
+        int(geometry.shift_frames),
+        int(geometry.pre_encode_cache_size),
+        int(geometry.drop_extra),
+        int(geometry.final_padding_frames),
+        RIGHT_CONTEXT,
+        int(geometry.first_preprocess_mel_frame),
+        int(geometry.hop_samples),
+        int(geometry.raw_audio_ring_samples),
+        int(geometry.preprocess_align_pad_samples),
+        int(geometry.preprocess_new_audio_samples),
+        int(geometry.stream_preprocess_valid_samples),
+        int(geometry.constant_preprocess_frames),
+        int(geometry.constant_preprocess_samples),
+    ]
+
+
+def _preprocessor_config(model) -> Any:
+    pp = model.preprocessor
+    candidates = [
+        getattr(pp, "cfg", None),
+        getattr(pp, "_cfg", None),
+        getattr(getattr(pp, "featurizer", None), "cfg", None),
+        getattr(getattr(pp, "featurizer", None), "_cfg", None),
+    ]
+    for cfg in candidates:
+        if cfg is None:
+            continue
+        try:
+            return _jsonable(OmegaConf.to_container(cfg, resolve=True))
+        except Exception:
+            return _jsonable(cfg)
+
+    featurizer = getattr(pp, "featurizer", None)
+    if featurizer is None:
+        return {}
+    fallback: dict[str, Any] = {}
+    for name in (
+        "sample_rate",
+        "n_window_size",
+        "n_window_stride",
+        "window",
+        "normalize",
+        "n_fft",
+        "nfilt",
+        "features",
+        "dither",
+        "pad_to",
+        "frame_splicing",
+        "stft_exact_pad",
+        "stft_conv",
+        "mag_power",
+        "log_zero_guard_type",
+        "log_zero_guard_value",
+    ):
+        if hasattr(featurizer, name):
+            fallback[name] = _jsonable(getattr(featurizer, name))
+    return fallback
+
+
+def _preproc_manifest_payload(model, geometry, preproc_path: str) -> dict[str, Any]:
+    dither = getattr(getattr(model.preprocessor, "featurizer", None), "dither", None)
+    return {
+        "CONTRACT": {
+            "schema": PREPROC_MANIFEST_SCHEMA,
+            "model_id": MODEL_ID,
+            "dither": None if dither is None else float(dither),
+            "geometry": _audio_geometry_manifest_values(geometry),
+            "trace_k": int(geometry.constant_preprocess_samples),
+            "torch_version": str(torch.__version__),
+            "cuda_version": str(torch.version.cuda),
+            "cudnn_version": None
+            if torch.backends.cudnn.version() is None
+            else int(torch.backends.cudnn.version()),
+            "preproc_ts_sha256": _sha256_file(preproc_path),
+        },
+        "preprocessor_config": _preprocessor_config(model),
+    }
+
+
+def _preproc_manifest_matches(manifest: dict[str, Any], expected: dict[str, Any]) -> tuple[bool, str]:
+    for key in ("CONTRACT", "preprocessor_config"):
+        if key not in manifest or key not in expected:
+            return False, key
+    for key in (
+        "schema",
+        "model_id",
+        "dither",
+        "geometry",
+        "trace_k",
+        "torch_version",
+        "cuda_version",
+        "cudnn_version",
+        "preproc_ts_sha256",
+    ):
+        if manifest["CONTRACT"].get(key) != expected["CONTRACT"].get(key):
+            return False, f"CONTRACT.{key}"
+    if manifest.get("preprocessor_config") != expected.get("preprocessor_config"):
+        return False, "preprocessor_config"
+    return True, ""
+
+
+def _trace_preproc_ts(model, artifacts_dir: str, path: str) -> None:
     os.makedirs(artifacts_dir, exist_ok=True)
     pp = model.preprocessor
 
@@ -329,6 +462,71 @@ def _ensure_preproc_ts(model, artifacts_dir: str) -> None:
     print(f"exported preprocessor TorchScript: {path}")
 
 
+def _preproc_ts_vs_eager_self_check(model, preproc_path: str, geometry) -> dict[str, Any]:
+    dev = next(model.parameters()).device
+    preproc_ts = torch.jit.load(preproc_path).to(dev).eval()
+    audio = torch.linspace(
+        -0.25,
+        0.25,
+        int(geometry.constant_preprocess_samples),
+        device=dev,
+        dtype=torch.float32,
+    ).unsqueeze(0)
+    length = torch.full(
+        (1,),
+        int(geometry.stream_preprocess_valid_samples),
+        device=dev,
+        dtype=torch.long,
+    )
+    with torch.inference_mode():
+        eager_mel, eager_len = model.preprocessor(input_signal=audio, length=length)
+        ts_mel, ts_len = preproc_ts(audio, length)
+    byte_equal = bool(torch.equal(eager_mel, ts_mel) and torch.equal(eager_len, ts_len))
+    max_abs = float((eager_mel.float() - ts_mel.float()).abs().max().item()) if eager_mel.numel() else 0.0
+    if not byte_equal:
+        raise AssertionError(
+            "preproc.ts export-time TS-vs-eager self-check failed: "
+            f"byte_equal={byte_equal} max_abs={max_abs:.6e}"
+        )
+    print(
+        "preproc.ts TS-vs-eager self-check PASS: "
+        f"K={geometry.constant_preprocess_samples} valid={geometry.stream_preprocess_valid_samples} "
+        f"mel_shape={tuple(ts_mel.shape)} max_abs={max_abs:.6e}"
+    )
+    return {
+        "byte_equal": byte_equal,
+        "max_abs": max_abs,
+        "K": int(geometry.constant_preprocess_samples),
+        "valid_samples": int(geometry.stream_preprocess_valid_samples),
+    }
+
+
+def _ensure_preproc_ts(model, artifacts_dir: str) -> None:
+    path = os.path.join(artifacts_dir, "preproc.ts")
+    manifest_path = path + ".manifest.json"
+    geometry = ContinuousFinalizeRef(model).geometry
+
+    if os.path.exists(path) or os.path.exists(manifest_path):
+        print(f"regenerating preproc.ts and manifest unconditionally for audio export: {path}")
+
+    _trace_preproc_ts(model, artifacts_dir, path)
+    self_check = _preproc_ts_vs_eager_self_check(model, path, geometry)
+    manifest = _preproc_manifest_payload(model, geometry, path)
+    manifest["export_time_self_check"] = self_check
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    expected = _preproc_manifest_payload(model, geometry, path)
+    ok, mismatch_key = _preproc_manifest_matches(manifest, {**expected, "export_time_self_check": self_check})
+    if not ok:
+        raise AssertionError(f"internal preproc manifest verification failed at {mismatch_key}")
+    print(
+        "wrote preproc.ts manifest: "
+        f"{manifest_path} sha256={manifest['CONTRACT']['preproc_ts_sha256']} "
+        f"trace_k={manifest['CONTRACT']['trace_k']}"
+    )
+
+
 def _append_diff(
     abs_parts: list[torch.Tensor],
     rel_parts: list[torch.Tensor],
@@ -346,11 +544,12 @@ def _append_diff(
 def _summary(values: torch.Tensor) -> dict[str, float]:
     if values.numel() == 0:
         return {"max": 0.0, "mean": 0.0, "p99": 0.0}
-    values = values.to(torch.float64)
+    values = values.reshape(-1).to(torch.float64)
+    kth = max(1, min(values.numel(), int(np.ceil(0.99 * values.numel()))))
     return {
         "max": float(values.max().item()),
         "mean": float(values.mean().item()),
-        "p99": float(torch.quantile(values, 0.99).item()),
+        "p99": float(values.kthvalue(kth).values.item()),
     }
 
 
@@ -525,7 +724,7 @@ def _measure_audio_ci(
                 raise RuntimeError(f"CI state not ready for {label}.chunk{chunk_index}")
             new_audio = ts_state.pending_audio[: rt.geometry.preprocess_new_audio_samples]
             ts_new_mel = _ci_preproc_new_mel(rt, preproc_ts, ts_state.raw_audio_ring, new_audio)
-            gold_new_mel = chunk["new_mel"].to(rt.device).contiguous()
+            gold_new_mel = chunk.get("eager_new_mel", chunk["new_mel"]).to(rt.device).contiguous()
             _append_diff(abs_parts, rel_parts, ts_new_mel, gold_new_mel)
             mel_checks += 1
             _ci_process_steady_chunk(rt, ts_state, ts_new_mel)
@@ -543,8 +742,18 @@ def _measure_audio_ci(
             if int(fin[name]) != int(segment[expected_key]):
                 raise RuntimeError(f"CI finalize geometry mismatch for {label}.{name}: {fin[name]} vs {segment[expected_key]}")
         if fin["has_inputs"]:
-            _append_diff(abs_parts, rel_parts, fin["new_mel"], segment["final_new_mel"].to(rt.device).contiguous())
-            _append_diff(abs_parts, rel_parts, fin["chunk_mel"], segment["final_chunk_mel"].to(rt.device).contiguous())
+            _append_diff(
+                abs_parts,
+                rel_parts,
+                fin["new_mel"],
+                segment.get("final_eager_new_mel", segment["final_new_mel"]).to(rt.device).contiguous(),
+            )
+            _append_diff(
+                abs_parts,
+                rel_parts,
+                fin["chunk_mel"],
+                segment.get("final_eager_chunk_mel", segment["final_chunk_mel"]).to(rt.device).contiguous(),
+            )
             mel_checks += 2
 
         _ci_cache_max(cache_max, ts_state.cache_last_channel, gold_state.cache_last_channel, "cache_last_channel")
@@ -580,8 +789,18 @@ def _measure_audio_ci(
                             f"{fin[name]} vs {end[expected_key]}"
                         )
                 if fin["has_inputs"]:
-                    _append_diff(abs_parts, rel_parts, fin["new_mel"], end["final_new_mel"].to(rt.device).contiguous())
-                    _append_diff(abs_parts, rel_parts, fin["chunk_mel"], end["final_chunk_mel"].to(rt.device).contiguous())
+                    _append_diff(
+                        abs_parts,
+                        rel_parts,
+                        fin["new_mel"],
+                        end.get("final_eager_new_mel", end["final_new_mel"]).to(rt.device).contiguous(),
+                    )
+                    _append_diff(
+                        abs_parts,
+                        rel_parts,
+                        fin["chunk_mel"],
+                        end.get("final_eager_chunk_mel", end["final_chunk_mel"]).to(rt.device).contiguous(),
+                    )
                     mel_checks += 2
 
     abs_values = torch.cat(abs_parts) if abs_parts else torch.empty((0,), dtype=torch.float32)
@@ -653,6 +872,109 @@ def _write_audio_ci_sidecar(bundle_path: str, audio_ci: dict[str, Any]) -> None:
     print(f"wrote audio CI sidecar: {sidecar}")
 
 
+def _events_semantically_equal(lhs: list[dict[str, Any]], rhs: list[dict[str, Any]]) -> bool:
+    if len(lhs) != len(rhs):
+        return False
+    for a, b in zip(lhs, rhs):
+        for key in ("kind", "text", "tokens", "collector_text", "collector_tokens"):
+            if a[key] != b[key]:
+                return False
+    return True
+
+
+def _assert_segment_semantics_match(label: str, shipped: dict[str, Any], eager: dict[str, Any]) -> None:
+    checks = (
+        ("steady_tokens", shipped["steady_tokens"], eager["steady_tokens"]),
+        ("gold_tokens", shipped["gold_tokens"], eager["gold_tokens"]),
+        ("finalize_new_tokens", shipped["finalize_new_tokens"], eager["finalize_new_tokens"]),
+    )
+    for name, expected, actual in checks:
+        if not torch.equal(expected.cpu().to(torch.int64), actual.cpu().to(torch.int64)):
+            raise AssertionError(f"audio eager semantic subset mismatch for {label}.{name}")
+    if not _events_semantically_equal(shipped["events"], eager["events"]):
+        raise AssertionError(f"audio eager semantic subset mismatch for {label}.events")
+
+
+def _run_eager_audio_subset_gate(
+    model,
+    *,
+    artifacts_dir: str,
+    dataset: Any,
+    start: int,
+    n: int,
+    multiturn: bool,
+    shipped_rows: list[dict[str, Any]] | None = None,
+    shipped_streams: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    subset = min(n, 8)
+    eager_rt = RecordingContinuousFinalizeRef(
+        model,
+        artifacts_dir=artifacts_dir,
+        use_preproc_ts=False,
+        warm_encoder=multiturn,
+    )
+    segments = 0
+    if multiturn:
+        if shipped_streams is None:
+            raise ValueError("shipped_streams is required for multiturn eager subset gate")
+        for stream_index in range(subset):
+            sample_a_index = start + 2 * stream_index
+            sample_b_index = sample_a_index + 1
+            eager_stream = _build_multiturn_stream(
+                eager_rt,
+                load_wav(dataset[sample_a_index]),
+                load_wav(dataset[sample_b_index]),
+                stream_index=stream_index,
+                sample_a_index=sample_a_index,
+                sample_b_index=sample_b_index,
+            )
+            shipped_stream = shipped_streams[stream_index]
+            for turn_index, (shipped_turn, eager_turn) in enumerate(
+                zip(shipped_stream["turns"], eager_stream["turns"])
+            ):
+                _assert_segment_semantics_match(
+                    f"stream{stream_index}.turn{turn_index}",
+                    shipped_turn,
+                    eager_turn,
+                )
+                segments += 1
+            _assert_segment_semantics_match(
+                f"stream{stream_index}.true_boundary",
+                shipped_stream["end"],
+                eager_stream["end"],
+            )
+            segments += 1
+    else:
+        if shipped_rows is None:
+            raise ValueError("shipped_rows is required for single eager subset gate")
+        for offset in range(subset):
+            sample_index = start + offset
+            example = dataset[sample_index]
+            eager_row = _build_row(
+                eager_rt,
+                load_wav(example),
+                sample_index=sample_index,
+                sample_id=_sample_id_for(example, sample_index),
+                reference_text=str(example.get("transcription", "")),
+            )
+            _assert_segment_semantics_match(f"row{offset}", shipped_rows[offset], eager_row)
+            segments += 1
+
+    report = {
+        "status": "PASS",
+        "mode": "multiturn" if multiturn else "single",
+        "subset": int(subset),
+        "segments": int(segments),
+        "claim": "eager-preproc tokens/events match the shipped preproc.ts runtime bundle on this subset",
+    }
+    print(
+        "audio eager token/event subset PASS: "
+        f"mode={report['mode']} subset={subset} segments={segments} "
+        "eager_preproc_vs_shipped_preproc_ts_runtime=token_event_exact"
+    )
+    return report
+
+
 def _capture_finalize_payload(
     rt: RecordingContinuousFinalizeRef,
     session: ContinuousSession,
@@ -660,6 +982,10 @@ def _capture_finalize_payload(
 ) -> dict[str, Any]:
     fork = rt.build_continuous_finalize_fork(session)
     inputs = rt.prepare_finalize_inputs(fork)
+    eager_inputs = None
+    if getattr(rt, "use_preproc_ts", False) and inputs is not None:
+        eager_fork = rt.build_continuous_finalize_fork(session)
+        eager_inputs = rt.prepare_finalize_inputs_eager(eager_fork)
 
     if inputs is None:
         mel_dim = (
@@ -674,6 +1000,8 @@ def _capture_finalize_payload(
         remaining_frames = 0
         padded_total_samples = int(session.emitted_frames * rt.geometry.hop_samples)
         total_mel_frames = 0
+        final_eager_chunk_mel = final_chunk_mel
+        final_eager_new_mel = final_new_mel
     else:
         final_chunk_mel = _as_cpu_tensor(inputs.chunk_mel)
         final_new_mel = _as_cpu_tensor(inputs.new_mel)
@@ -682,10 +1010,18 @@ def _capture_finalize_payload(
         remaining_frames = int(inputs.remaining_frames)
         padded_total_samples = int(inputs.padded_total_samples)
         total_mel_frames = int(padded_total_samples // rt.geometry.hop_samples + 1)
+        if eager_inputs is not None:
+            final_eager_chunk_mel = _as_cpu_tensor(eager_inputs.chunk_mel)
+            final_eager_new_mel = _as_cpu_tensor(eager_inputs.new_mel)
+        else:
+            final_eager_chunk_mel = final_chunk_mel
+            final_eager_new_mel = final_new_mel
 
     return {
         "final_chunk_mel": final_chunk_mel,
         "final_new_mel": final_new_mel,
+        "final_eager_chunk_mel": final_eager_chunk_mel,
+        "final_eager_new_mel": final_eager_new_mel,
         "final_drop_extra": final_drop_extra,
         "final_T": final_T,
         "final_remaining_frames": remaining_frames,
@@ -730,13 +1066,95 @@ def _capture_retained_state(
 class RecordingContinuousFinalizeRef(ContinuousFinalizeRef):
     """Reference runtime with non-invasive steady chunk capture."""
 
-    def __init__(self, model, *, artifacts_dir: str = ART):
+    def __init__(
+        self,
+        model,
+        *,
+        artifacts_dir: str = ART,
+        use_preproc_ts: bool = False,
+        warm_encoder: bool = False,
+    ):
         super().__init__(model)
+        self.use_preproc_ts = bool(use_preproc_ts)
+        self._force_eager_preproc = False
         self.enc_first = torch.jit.load(os.path.join(artifacts_dir, "enc_first.ts")).to(self.device)
         self.enc_first.eval()
         self.enc_steady_aoti = torch._inductor.aoti_load_package(
             os.path.join(artifacts_dir, "enc_steady_aoti.pt2")
         )
+        self.preproc_ts = None
+        if self.use_preproc_ts:
+            self.preproc_ts = torch.jit.load(os.path.join(artifacts_dir, "preproc.ts")).to(self.device).eval()
+        if warm_encoder:
+            self._warm_stream_encoder_artifacts()
+
+    @torch.inference_mode()
+    def _warm_stream_encoder_artifacts(self) -> None:
+        warm = self.new_session("export-encoder-warmup")
+        g = self.geometry
+        first_mel = torch.zeros((1, 128, int(g.shift_frames)), device=self.device)
+        first_len = torch.tensor([int(g.shift_frames)], device=self.device)
+        first_out = self.enc_first(
+            first_mel.contiguous(),
+            first_len.contiguous(),
+            warm.cache_last_channel.contiguous(),
+            warm.cache_last_time.contiguous(),
+            warm.cache_last_channel_len.contiguous(),
+        )
+        steady_mel = torch.zeros(
+            (1, 128, int(g.pre_encode_cache_size + g.shift_frames)),
+            device=self.device,
+        )
+        steady_len = torch.tensor([int(g.pre_encode_cache_size + g.shift_frames)], device=self.device)
+        _ = self.enc_steady_aoti(
+            steady_mel.contiguous(),
+            steady_len.contiguous(),
+            first_out[2].contiguous(),
+            first_out[3].contiguous(),
+            first_out[4].contiguous(),
+        )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+
+    def _eager_fixed_mel_from_new_audio(
+        self,
+        raw_audio_ring: np.ndarray,
+        new_audio: np.ndarray,
+    ) -> torch.Tensor:
+        return super()._fixed_mel_from_new_audio(raw_audio_ring, new_audio)
+
+    def _ts_fixed_mel_from_new_audio(
+        self,
+        raw_audio_ring: np.ndarray,
+        new_audio: np.ndarray,
+    ) -> torch.Tensor:
+        if self.preproc_ts is None:
+            raise RuntimeError("preproc.ts requested but not loaded")
+        fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
+            raw_audio_ring,
+            new_audio,
+        )
+        audio = torch.from_numpy(np.ascontiguousarray(fixed_audio)).unsqueeze(0).to(self.device)
+        audio_len = torch.tensor([valid_samples], device=self.device, dtype=torch.long)
+        mel, _mel_len = self.preproc_ts(audio, audio_len)
+        return mel
+
+    def _fixed_mel_from_new_audio(
+        self,
+        raw_audio_ring: np.ndarray,
+        new_audio: np.ndarray,
+    ) -> torch.Tensor:
+        if self.use_preproc_ts and not self._force_eager_preproc:
+            return self._ts_fixed_mel_from_new_audio(raw_audio_ring, new_audio)
+        return self._eager_fixed_mel_from_new_audio(raw_audio_ring, new_audio)
+
+    def prepare_finalize_inputs_eager(self, fork: ContinuousSession):
+        old = self._force_eager_preproc
+        self._force_eager_preproc = True
+        try:
+            return super().prepare_finalize_inputs(fork)
+        finally:
+            self._force_eager_preproc = old
 
     def begin_recording(self) -> None:
         self.recorded_steady_chunks: list[dict[str, Any]] = []
@@ -789,6 +1207,24 @@ class RecordingContinuousFinalizeRef(ContinuousFinalizeRef):
         return tuple(out)  # type: ignore[return-value]
 
     @torch.inference_mode()
+    def _run_eager_steady_encoder(
+        self,
+        session: ContinuousSession,
+        chunk_mel: torch.Tensor,
+        drop_extra: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        chunk_len = torch.tensor([chunk_mel.shape[-1]], device=self.device)
+        return self.encoder.cache_aware_stream_step(
+            processed_signal=chunk_mel.contiguous(),
+            processed_signal_length=chunk_len.contiguous(),
+            cache_last_channel=session.cache_last_channel.contiguous(),
+            cache_last_time=session.cache_last_time.contiguous(),
+            cache_last_channel_len=session.cache_last_channel_len.contiguous(),
+            keep_all_outputs=False,
+            drop_extra_pre_encoded=drop_extra,
+        )
+
+    @torch.inference_mode()
     def _process_one_steady_chunk(self, session: ContinuousSession) -> None:
         g = self.geometry
         new_audio = session.pending_audio[: g.preprocess_new_audio_samples]
@@ -799,6 +1235,15 @@ class RecordingContinuousFinalizeRef(ContinuousFinalizeRef):
             g.first_preprocess_mel_frame : g.first_preprocess_mel_frame
             + g.shift_frames,
         ]
+        valid_eager_new_mel = None
+        if self.use_preproc_ts:
+            eager_mel = self._eager_fixed_mel_from_new_audio(session.raw_audio_ring, new_audio)
+            valid_eager_new_mel = eager_mel[
+                :,
+                :,
+                g.first_preprocess_mel_frame : g.first_preprocess_mel_frame
+                + g.shift_frames,
+            ]
 
         is_first = session.emitted_frames == 0
         chunk_T = (
@@ -815,6 +1260,8 @@ class RecordingContinuousFinalizeRef(ContinuousFinalizeRef):
                 "emitted_before": int(session.emitted_frames),
             }
         )
+        if valid_eager_new_mel is not None:
+            self.recorded_steady_chunks[-1]["eager_new_mel"] = _as_cpu_tensor(valid_eager_new_mel)
 
         old_text = session.current_text
         if is_first:
@@ -823,6 +1270,11 @@ class RecordingContinuousFinalizeRef(ContinuousFinalizeRef):
         else:
             chunk_mel = torch.cat((session.mel_frame_ring, valid_new_mel), dim=-1)
             drop_extra = g.drop_extra
+
+        if is_first:
+            eager_out = self._run_eager_steady_encoder(session, chunk_mel, int(drop_extra))
+            self.recorded_steady_chunks[-1]["first_eager_enc_out"] = _as_cpu_tensor(eager_out[0])
+            self.recorded_steady_chunks[-1]["first_eager_enc_len"] = _as_cpu_tensor(eager_out[1])
 
         enc_out, enc_len, clc, clt, clcl = self._run_aoti_consistent_steady_encoder(
             session,
@@ -1459,9 +1911,19 @@ def main() -> int:
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     model = load_model()
+    artifacts_dir = os.path.dirname(args.out) or ART
     if args.audio:
-        _ensure_preproc_ts(model, os.path.dirname(args.out) or ART)
-    rt = RecordingContinuousFinalizeRef(model)
+        _ensure_preproc_ts(model, artifacts_dir)
+        print(
+            "audio bundle oracle: C++ runtime vs the shipped preproc.ts artifact; "
+            "a separate eager-preproc token/event subset gate runs during export"
+        )
+    rt = RecordingContinuousFinalizeRef(
+        model,
+        artifacts_dir=artifacts_dir,
+        use_preproc_ts=args.audio,
+        warm_encoder=args.multiturn,
+    )
     dataset = load_benchmark_dataset()
     end_index = args.start + (args.n * 2 if args.multiturn else args.n)
     if args.start < 0 or args.start >= len(dataset) or end_index > len(dataset):
@@ -1532,8 +1994,17 @@ def main() -> int:
         if args.audio:
             audio_ci = _measure_audio_ci(
                 rt,
-                artifacts_dir=os.path.dirname(args.out) or ART,
+                artifacts_dir=artifacts_dir,
                 streams=streams,
+            )
+            audio_ci["eager_token_event_subset"] = _run_eager_audio_subset_gate(
+                model,
+                artifacts_dir=artifacts_dir,
+                dataset=dataset,
+                start=args.start,
+                n=args.n,
+                multiturn=True,
+                shipped_streams=streams,
             )
             _write_audio_ci_sidecar(args.out, audio_ci)
         bundle = torch.jit.script(
@@ -1591,8 +2062,17 @@ def main() -> int:
     if args.audio:
         audio_ci = _measure_audio_ci(
             rt,
-            artifacts_dir=os.path.dirname(args.out) or ART,
+            artifacts_dir=artifacts_dir,
             rows=rows,
+        )
+        audio_ci["eager_token_event_subset"] = _run_eager_audio_subset_gate(
+            model,
+            artifacts_dir=artifacts_dir,
+            dataset=dataset,
+            start=args.start,
+            n=args.n,
+            multiturn=False,
+            shipped_rows=rows,
         )
         _write_audio_ci_sidecar(args.out, audio_ci)
     bundle = torch.jit.script(

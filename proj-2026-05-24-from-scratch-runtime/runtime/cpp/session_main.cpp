@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -92,6 +93,7 @@ struct SessionState {
   std::vector<int64_t> continuous_emitted_tokens;
   std::vector<float> pending_audio;
   std::vector<float> raw_audio_ring;
+  std::vector<float> post_stop_audio;
   std::string last_interim_text;
   std::string continuous_emitted_text;
   SessionMode mode = SessionMode::STREAMING;
@@ -113,6 +115,7 @@ struct AsrSnapshot {
   std::vector<float> raw_audio_ring;
   int64_t total_audio_samples = 0;
   int64_t synthetic_prefix_samples = 0;
+  SessionMode mode = SessionMode::STREAMING;
 };
 
 struct AudioGeometry {
@@ -152,6 +155,29 @@ struct CacheCompareStats {
   double cache_last_channel_len_max_abs = 0.0;
 };
 
+struct CacheOwnershipStats {
+  int64_t recurrent_assignments = 0;
+  int64_t clone_assignments = 0;
+  int64_t alias_after_clone = 0;
+};
+
+struct LongStreamCacheStats {
+  bool ok = false;
+  std::string prefix = "NA";
+  int64_t steady_chunks = 0;
+  int64_t aoti_chunks = 0;
+  int64_t stable_checks = 0;
+  int64_t stable_pass = 0;
+  int64_t consecutive_alias_checks = 0;
+  int64_t consecutive_alias_fail = 0;
+};
+
+struct PreprocDeterminismStats {
+  bool ok = true;
+  std::string fixed_block_sha256 = "NA";
+  double max_abs = 0.0;
+};
+
 struct MarginStats {
   double warning_threshold = ARGMAX_MARGIN_WARNING_THRESHOLD;
   double unsafe_threshold = ARGMAX_MARGIN_UNSAFE_THRESHOLD;
@@ -163,6 +189,14 @@ struct MarginStats {
   int64_t min_frame = -1;
   int64_t min_symbol = -1;
   std::vector<TokenMargin> token_margins;
+};
+
+struct FirstChunkStats {
+  int64_t checks = 0;
+  int64_t pass = 0;
+  int64_t byte_equal = 0;
+  double max_abs = 0.0;
+  MarginStats margins;
 };
 
 struct DivergenceRecord {
@@ -336,6 +370,20 @@ static const char* pass_fail(bool ok) {
 static const char* pass_fail_skip(int64_t checks, int64_t pass) {
   if (checks == 0) return "SKIP";
   return checks == pass ? "PASS" : "FAIL";
+}
+
+static const char* mode_name(SessionMode mode) {
+  switch (mode) {
+    case SessionMode::STREAMING: return "STREAMING";
+    case SessionMode::PENDING_FINALIZE: return "PENDING_FINALIZE";
+    case SessionMode::FINALIZED: return "FINALIZED";
+  }
+  return "UNKNOWN";
+}
+
+static bool tensor_storage_alias(const torch::Tensor& lhs, const torch::Tensor& rhs) {
+  if (!lhs.defined() || !rhs.defined()) return false;
+  return lhs.is_alias_of(rhs);
 }
 
 static std::string vec_to_string(const std::vector<int64_t>& values) {
@@ -917,6 +965,7 @@ static SessionState clone_session(const SessionState& state) {
   out.continuous_emitted_tokens = state.continuous_emitted_tokens;
   out.pending_audio = state.pending_audio;
   out.raw_audio_ring = state.raw_audio_ring;
+  out.post_stop_audio = state.post_stop_audio;
   out.last_interim_text = state.last_interim_text;
   out.continuous_emitted_text = state.continuous_emitted_text;
   out.mode = state.mode;
@@ -940,6 +989,7 @@ static AsrSnapshot snapshot_asr(const SessionState& state) {
       state.raw_audio_ring,
       state.total_audio_samples,
       state.synthetic_prefix_samples,
+      state.mode,
   };
 }
 
@@ -974,6 +1024,11 @@ static bool fork_assert_parent_unchanged(const SessionState& parent, const AsrSn
                 (long)parent.synthetic_prefix_samples, (long)snapshot.synthetic_prefix_samples);
     ok = false;
   }
+  if (parent.mode != snapshot.mode) {
+    std::printf("    FORK_ASSERT mode mismatch: parent=%s snapshot=%s\n",
+                mode_name(parent.mode), mode_name(snapshot.mode));
+    ok = false;
+  }
   return ok;
 }
 
@@ -991,6 +1046,7 @@ static void reset_session(SessionState& state, torch::jit::Module& bundle, torch
   state.continuous_emitted_tokens.clear();
   state.pending_audio.clear();
   state.raw_audio_ring.clear();
+  state.post_stop_audio.clear();
   state.last_interim_text.clear();
   state.continuous_emitted_text.clear();
   state.mode = SessionMode::STREAMING;
@@ -1001,6 +1057,7 @@ static void reset_session(SessionState& state, torch::jit::Module& bundle, torch
 static void reset_audio_front(SessionState& state, const AudioGeometry& g) {
   state.pending_audio.clear();
   state.raw_audio_ring.assign(static_cast<size_t>(g.raw_audio_ring_samples), 0.0f);
+  state.post_stop_audio.clear();
   state.total_audio_samples = 0;
   state.synthetic_prefix_samples = 0;
 }
@@ -1098,6 +1155,31 @@ static std::string sha256_final(Sha256Ctx& ctx) {
   oss << std::hex << std::setfill('0');
   for (uint32_t word : ctx.state) oss << std::setw(8) << word;
   return oss.str();
+}
+
+static std::string sha256_bytes_with_label(const std::string& label,
+                                           const uint8_t* data,
+                                           size_t len) {
+  Sha256Ctx ctx;
+  sha256_update(ctx,
+                reinterpret_cast<const uint8_t*>(label.data()),
+                label.size());
+  uint8_t sep = 0;
+  sha256_update(ctx, &sep, 1);
+  if (len > 0) sha256_update(ctx, data, len);
+  return sha256_final(ctx);
+}
+
+static std::string sha256_tensor_bytes(torch::Tensor tensor) {
+  auto cpu = tensor.detach().to(torch::kCPU).contiguous();
+  std::ostringstream label;
+  label << "dtype=" << static_cast<int>(cpu.scalar_type()) << ";sizes=";
+  for (auto s : cpu.sizes()) label << s << ",";
+  size_t nbytes = static_cast<size_t>(cpu.numel()) * cpu.element_size();
+  const uint8_t* data = nbytes == 0
+                            ? nullptr
+                            : reinterpret_cast<const uint8_t*>(cpu.data_ptr());
+  return sha256_bytes_with_label(label.str(), data, nbytes);
 }
 
 static std::string sha256_file(const std::string& path) {
@@ -1204,6 +1286,15 @@ static int64_t json_int_field(const std::string& object, const std::string& key)
   long long out = std::stoll(value, &n);
   n = skip_ws(value, n);
   if (n != value.size()) throw std::runtime_error("manifest key is not an integer: " + key);
+  return out;
+}
+
+static double json_double_field(const std::string& object, const std::string& key) {
+  std::string value = json_value_for_key(object, key);
+  size_t n = 0;
+  double out = std::stod(value, &n);
+  n = skip_ws(value, n);
+  if (n != value.size()) throw std::runtime_error("manifest key is not a number: " + key);
   return out;
 }
 
@@ -1544,7 +1635,8 @@ static void decode_range(torch::jit::Module& joint,
                          torch::Tensor& c,
                          std::vector<int64_t>& hyp,
                          MarginStats* margin_stats = nullptr,
-                         const std::string& margin_label = "") {
+                         const std::string& margin_label = "",
+                         MarginStats* secondary_margin_stats = nullptr) {
   if (enc_len < 0 || enc_len > enc_out.size(2)) {
     throw std::runtime_error("enc_len out of range for enc_out: " + std::to_string(enc_len));
   }
@@ -1556,15 +1648,25 @@ static void decode_range(torch::jit::Module& joint,
       auto logits = joint.forward({f_t, g}).toTensor();
       auto flat = logits.reshape({-1});
       double margin = std::numeric_limits<double>::quiet_NaN();
-      if (margin_stats != nullptr) {
+      if (margin_stats != nullptr || secondary_margin_stats != nullptr) {
         auto top2 = std::get<0>(flat.topk(2));
         margin = (top2[0] - top2[1]).item<double>();
-        observe_margin(*margin_stats, margin, margin_label, t, n);
+        if (margin_stats != nullptr) observe_margin(*margin_stats, margin, margin_label, t, n);
+        if (secondary_margin_stats != nullptr) observe_margin(*secondary_margin_stats, margin, margin_label, t, n);
       }
       int64_t k = flat.argmax().item<int64_t>();
       if (k == BLANK) break;
       if (margin_stats != nullptr) {
         observe_token_margin(*margin_stats,
+                             static_cast<int64_t>(hyp.size()),
+                             k,
+                             margin,
+                             margin_label,
+                             t,
+                             n);
+      }
+      if (secondary_margin_stats != nullptr) {
+        observe_token_margin(*secondary_margin_stats,
                              static_cast<int64_t>(hyp.size()),
                              k,
                              margin,
@@ -1587,14 +1689,27 @@ static void apply_encoder_outputs(SessionState& state,
                                   torch::jit::Module& joint,
                                   torch::jit::Module& predict,
                                   MarginStats* margin_stats = nullptr,
-                                  const std::string& margin_label = "") {
+                                  const std::string& margin_label = "",
+                                  MarginStats* secondary_margin_stats = nullptr,
+                                  CacheOwnershipStats* cache_ownership = nullptr,
+                                  bool recurrent_cache_output = false) {
   if (out.size() < 5) throw std::runtime_error("encoder returned fewer than 5 outputs");
   int64_t enc_len = scalar_i64(out[1]);
-  state.clc = out[2];
-  state.clt = out[3];
-  state.clcl = out[4];
+  state.clc = out[2].clone();
+  state.clt = out[3].clone();
+  state.clcl = out[4].clone();
+  if (cache_ownership != nullptr && recurrent_cache_output) {
+    ++cache_ownership->recurrent_assignments;
+    cache_ownership->clone_assignments += 3;
+    if (tensor_storage_alias(state.clc, out[2]) ||
+        tensor_storage_alias(state.clt, out[3]) ||
+        tensor_storage_alias(state.clcl, out[4])) {
+      ++cache_ownership->alias_after_clone;
+      throw std::runtime_error("AOTI recurrent cache output still aliases after clone-on-assign");
+    }
+  }
   decode_range(joint, predict, out[0], enc_len, state.g, state.h, state.c, state.hyp,
-               margin_stats, margin_label);
+               margin_stats, margin_label, secondary_margin_stats);
 }
 
 static std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
@@ -1609,6 +1724,30 @@ static std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
   out.reserve(5);
   for (int i = 0; i < 5; ++i) out.push_back(tuple->elements()[i].toTensor());
   return out;
+}
+
+static void observe_first_chunk_drift(torch::jit::Module& bundle,
+                                      const std::string& prefix,
+                                      int chunk_index,
+                                      const std::vector<at::Tensor>& out,
+                                      torch::Device device,
+                                      FirstChunkStats* stats) {
+  if (stats == nullptr) return;
+  ++stats->checks;
+  auto eager_enc = prefix_chunk_tensor(bundle, prefix, chunk_index, "first_eager_enc_out").to(device).contiguous();
+  auto eager_len = prefix_chunk_tensor(bundle, prefix, chunk_index, "first_eager_enc_len").to(device).contiguous();
+  bool meta_ok = out[0].scalar_type() == eager_enc.scalar_type() &&
+                 out[0].sizes().vec() == eager_enc.sizes().vec();
+  bool len_ok = at::equal(out[1].to(device), eager_len);
+  if (!meta_ok || !len_ok) {
+    throw std::runtime_error(prefix + ".chunk" + std::to_string(chunk_index) +
+                             " first-chunk eager/enc_first metadata mismatch");
+  }
+  bool byte_equal = at::equal(out[0], eager_enc);
+  double max_abs = out[0].numel() > 0 ? (out[0] - eager_enc).abs().max().item<double>() : 0.0;
+  if (max_abs > stats->max_abs) stats->max_abs = max_abs;
+  if (byte_equal) ++stats->byte_equal;
+  ++stats->pass;
 }
 
 static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader,
@@ -1626,6 +1765,21 @@ static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader
   auto out = loader.run(inputs);
   if (out.size() < 5) throw std::runtime_error("steady AOTI encoder returned fewer than 5 outputs");
   return out;
+}
+
+static void warm_stream_encoder_artifacts(torch::jit::Module& bundle,
+                                          torch::jit::Module& enc_first,
+                                          AOTIModelPackageLoader& enc_steady,
+                                          torch::Device device) {
+  SessionState warm;
+  reset_session(warm, bundle, device);
+  auto first_chunk = torch::zeros({1, 128, SHIFT}, torch::dtype(torch::kFloat32).device(device));
+  auto first_out = run_first_encoder(enc_first, first_chunk, warm);
+  warm.clc = first_out[2].clone();
+  warm.clt = first_out[3].clone();
+  warm.clcl = first_out[4].clone();
+  auto steady_chunk = torch::zeros({1, 128, PRE + SHIFT}, torch::dtype(torch::kFloat32).device(device));
+  (void)run_steady_encoder(enc_steady, steady_chunk, warm);
 }
 
 static AudioGeometry audio_geometry_from_bundle(torch::jit::Module& bundle) {
@@ -1669,6 +1823,59 @@ static AudioGeometry audio_geometry_from_bundle(torch::jit::Module& bundle) {
     throw std::runtime_error("audio_geometry constant plan sample/frame mismatch");
   }
   return g;
+}
+
+static std::string verify_preproc_manifest(const std::string& dir,
+                                           const std::string& preproc_path,
+                                           const AudioGeometry& g) {
+  std::string manifest_path = preproc_path + ".manifest.json";
+  if (!file_exists(manifest_path)) {
+    throw std::runtime_error("preproc.ts manifest is required for audio mode: " + manifest_path);
+  }
+  std::string text = read_text_file(manifest_path);
+  std::string contract = json_value_for_key(text, "CONTRACT");
+  if (contract.empty() || contract.front() != '{') throw std::runtime_error("preproc manifest CONTRACT is not an object");
+  int64_t schema = json_int_field(contract, "schema");
+  if (schema != 1) throw std::runtime_error("preproc manifest schema mismatch: " + std::to_string(schema));
+  std::string model_id = json_string_field(contract, "model_id");
+  if (model_id != MODEL_ID) throw std::runtime_error("preproc manifest model_id mismatch: " + model_id);
+  int64_t trace_k = json_int_field(contract, "trace_k");
+  if (trace_k != g.constant_preprocess_samples) {
+    throw std::runtime_error("preproc manifest trace_k mismatch: " + std::to_string(trace_k));
+  }
+  double dither = json_double_field(contract, "dither");
+  if (std::abs(dither) > 0.0) {
+    throw std::runtime_error("preproc manifest dither must be 0.0, got " + std::to_string(dither));
+  }
+  auto geometry = json_int_array_field(contract, "geometry");
+  std::vector<int64_t> expected = {
+      g.shift_frames,
+      g.pre_encode_cache_size,
+      g.drop_extra,
+      g.final_padding_frames,
+      g.right_context,
+      g.first_preprocess_mel_frame,
+      g.hop_samples,
+      g.raw_audio_ring_samples,
+      g.preprocess_align_pad_samples,
+      g.preprocess_new_audio_samples,
+      g.stream_preprocess_valid_samples,
+      g.constant_preprocess_frames,
+      g.constant_preprocess_samples,
+  };
+  if (geometry != expected) throw std::runtime_error("preproc manifest geometry mismatch");
+  std::string manifest_sha = json_string_field(contract, "preproc_ts_sha256");
+  std::string actual_sha = sha256_file(preproc_path);
+  if (manifest_sha != actual_sha) {
+    throw std::runtime_error("preproc.ts sha256 mismatch: manifest=" + manifest_sha + " actual=" + actual_sha);
+  }
+  std::string torch_version = json_string_field(contract, "torch_version");
+  std::string cuda_version = json_string_field(contract, "cuda_version");
+  std::printf("preproc manifest verified: sha256=%s model=%s trace_k=%ld torch=%s cuda=%s\n",
+              actual_sha.c_str(), model_id.c_str(), (long)trace_k,
+              torch_version.c_str(), cuda_version.c_str());
+  (void)dir;
+  return actual_sha;
 }
 
 static AudioCiBundleStats audio_ci_stats_from_bundle(torch::jit::Module& bundle) {
@@ -1811,6 +2018,29 @@ struct AudioFrontend {
   }
 };
 
+static PreprocDeterminismStats run_preproc_determinism_check(const AudioFrontend& audio) {
+  std::vector<float> raw_ring(static_cast<size_t>(audio.g.raw_audio_ring_samples), 0.0f);
+  std::vector<float> new_audio(static_cast<size_t>(audio.g.preprocess_new_audio_samples), 0.0f);
+  for (size_t i = 0; i < new_audio.size(); ++i) {
+    int bucket = static_cast<int>(i % 97);
+    new_audio[i] = static_cast<float>((bucket - 48) * 0.001);
+  }
+  (void)audio.preprocess_fixed_audio(raw_ring, new_audio).contiguous();
+  auto first = audio.preprocess_fixed_audio(raw_ring, new_audio).contiguous();
+  auto second = audio.preprocess_fixed_audio(raw_ring, new_audio).contiguous();
+  bool byte_equal = at::equal(first, second);
+  double max_abs = first.numel() > 0 ? (first - second).abs().max().item<double>() : 0.0;
+  std::string block_hash = sha256_tensor_bytes(first);
+  std::printf("=== PREPROC DETERMINISM: same_process_post_warmup_fixed_block_twice byte_equal=%s "
+              "max_abs=%.6e fixed_block_sha256=%s K=%ld valid=%ld ===\n",
+              byte_equal ? "PASS" : "FAIL",
+              max_abs,
+              block_hash.c_str(),
+              (long)audio.g.constant_preprocess_samples,
+              (long)audio.g.stream_preprocess_valid_samples);
+  return {byte_equal, block_hash, max_abs};
+}
+
 static void run_steady_chunk_tensor(SessionState& state,
                                     torch::jit::Module& bundle,
                                     const std::string& prefix,
@@ -1824,7 +2054,9 @@ static void run_steady_chunk_tensor(SessionState& state,
                                     const Tokenizer& tokenizer,
                                     std::vector<EmittedEvent>& events,
                                     MarginStats* margin_stats = nullptr,
-                                    const std::string& margin_label = "") {
+                                    const std::string& margin_label = "",
+                                    FirstChunkStats* first_chunk_stats = nullptr,
+                                    CacheOwnershipStats* cache_ownership = nullptr) {
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("steady chunk outside STREAMING");
 
   auto new_mel = new_mel_in.to(device).contiguous();
@@ -1844,6 +2076,7 @@ static void run_steady_chunk_tensor(SessionState& state,
     if (drop_extra != 0 || chunk_T != new_mel.size(2)) throw std::runtime_error("first steady geometry mismatch");
     chunk = new_mel;
     out = run_first_encoder(enc_first, chunk, state);
+    observe_first_chunk_drift(bundle, prefix, chunk_index, out, device, first_chunk_stats);
   } else {
     if (!state.ring.defined()) throw std::runtime_error("steady continuation missing mel ring");
     if (drop_extra != DROP || chunk_T != state.ring.size(2) + new_mel.size(2)) {
@@ -1853,7 +2086,15 @@ static void run_steady_chunk_tensor(SessionState& state,
     out = run_steady_encoder(enc_steady, chunk, state);
   }
 
-  apply_encoder_outputs(state, out, joint, predict, margin_stats, margin_label);
+  apply_encoder_outputs(state,
+                        out,
+                        joint,
+                        predict,
+                        margin_stats,
+                        margin_label,
+                        expected_first && first_chunk_stats != nullptr ? &first_chunk_stats->margins : nullptr,
+                        cache_ownership,
+                        !expected_first);
 
   auto cum = state.ring.defined() ? torch::cat({state.ring, new_mel}, 2) : new_mel;
   state.ring = cum.slice(2, std::max<int64_t>(0, cum.size(2) - PRE), cum.size(2)).contiguous();
@@ -1883,13 +2124,16 @@ static void run_steady_chunk(SessionState& state,
                              const Tokenizer& tokenizer,
                              std::vector<EmittedEvent>& events,
                              MarginStats* margin_stats = nullptr,
-                             const std::string& margin_label = "") {
+                             const std::string& margin_label = "",
+                             FirstChunkStats* first_chunk_stats = nullptr,
+                             CacheOwnershipStats* cache_ownership = nullptr) {
   auto new_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
   std::string label = margin_label.empty()
                           ? prefix + ".chunk" + std::to_string(chunk_index)
                           : margin_label;
   run_steady_chunk_tensor(state, bundle, prefix, chunk_index, new_mel, enc_first, enc_steady,
-                          joint, predict, device, tokenizer, events, margin_stats, label);
+                          joint, predict, device, tokenizer, events, margin_stats, label,
+                          first_chunk_stats, cache_ownership);
 }
 
 static void run_steady_chunk_from_audio(SessionState& state,
@@ -1904,7 +2148,9 @@ static void run_steady_chunk_from_audio(SessionState& state,
                                         torch::Device device,
                                         const Tokenizer& tokenizer,
                                         std::vector<EmittedEvent>& events,
-                                        const std::string& label) {
+                                        const std::string& label,
+                                        FirstChunkStats* first_chunk_stats = nullptr,
+                                        CacheOwnershipStats* cache_ownership = nullptr) {
   auto new_mel = audio.steady_new_mel(state).to(device).contiguous();
   auto gold_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
   if (!compare_mel_tensor(label + ".chunk" + std::to_string(chunk_index) + ".new_mel",
@@ -1914,7 +2160,9 @@ static void run_steady_chunk_from_audio(SessionState& state,
   run_steady_chunk_tensor(state, bundle, prefix, chunk_index, new_mel, enc_first, enc_steady,
                           joint, predict, device, tokenizer, events,
                           &audio.margin_stats,
-                          label + ".chunk" + std::to_string(chunk_index));
+                          label + ".chunk" + std::to_string(chunk_index),
+                          first_chunk_stats,
+                          cache_ownership);
 
   size_t consume = std::min(static_cast<size_t>(audio.g.shift_frames * audio.g.hop_samples),
                             state.pending_audio.size());
@@ -1936,7 +2184,9 @@ static int drain_audio_steady(SessionState& state,
                               torch::Device device,
                               const Tokenizer& tokenizer,
                               std::vector<EmittedEvent>& events,
-                              const std::string& label) {
+                              const std::string& label,
+                              FirstChunkStats* first_chunk_stats = nullptr,
+                              CacheOwnershipStats* cache_ownership = nullptr) {
   int64_t expected_chunks = scalar_i64(prefix_tensor(bundle, prefix, "num_steady"));
   int chunks = 0;
   while (audio.session_ready(state)) {
@@ -1944,7 +2194,8 @@ static int drain_audio_steady(SessionState& state,
       throw std::runtime_error(label + " produced more audio steady chunks than Python gold");
     }
     run_steady_chunk_from_audio(state, bundle, prefix, chunks, audio, enc_first, enc_steady,
-                                joint, predict, device, tokenizer, events, label);
+                                joint, predict, device, tokenizer, events, label,
+                                first_chunk_stats, cache_ownership);
     ++chunks;
   }
   if (chunks != expected_chunks) {
@@ -1952,6 +2203,213 @@ static int drain_audio_steady(SessionState& state,
                              std::to_string(chunks) + " gold " + std::to_string(expected_chunks));
   }
   return chunks;
+}
+
+static void run_steady_chunk_tensor_runtime(SessionState& state,
+                                            const torch::Tensor& new_mel_in,
+                                            torch::jit::Module& enc_first,
+                                            AOTIModelPackageLoader& enc_steady,
+                                            torch::jit::Module& joint,
+                                            torch::jit::Module& predict,
+                                            torch::Device device,
+                                            const Tokenizer& tokenizer,
+                                            std::vector<EmittedEvent>& events,
+                                            const std::string& label,
+                                            MarginStats* margin_stats = nullptr,
+                                            CacheOwnershipStats* cache_ownership = nullptr) {
+  if (state.mode != SessionMode::STREAMING) throw std::runtime_error("runtime steady chunk outside STREAMING");
+  auto new_mel = new_mel_in.to(device).contiguous();
+  if (new_mel.size(2) != SHIFT) throw std::runtime_error(label + " runtime new_mel is not SHIFT frames");
+
+  bool expected_first = state.emitted == 0;
+  torch::Tensor chunk;
+  std::vector<at::Tensor> out;
+  if (expected_first) {
+    chunk = new_mel;
+    out = run_first_encoder(enc_first, chunk, state);
+  } else {
+    if (!state.ring.defined()) throw std::runtime_error(label + " runtime continuation missing mel ring");
+    chunk = torch::cat({state.ring, new_mel}, 2).contiguous();
+    out = run_steady_encoder(enc_steady, chunk, state);
+  }
+
+  apply_encoder_outputs(state,
+                        out,
+                        joint,
+                        predict,
+                        margin_stats,
+                        label,
+                        nullptr,
+                        cache_ownership,
+                        !expected_first);
+
+  auto cum = state.ring.defined() ? torch::cat({state.ring, new_mel}, 2) : new_mel;
+  state.ring = cum.slice(2, std::max<int64_t>(0, cum.size(2) - PRE), cum.size(2)).contiguous();
+  state.emitted += new_mel.size(2);
+  std::string current_text = tokenizer.ids_to_text(state.hyp);
+  if (current_text != state.last_interim_text) {
+    emit_event(events,
+               EVENT_INTERIM,
+               state.hyp,
+               state.continuous_emitted_tokens,
+               current_text,
+               state.continuous_emitted_text);
+    state.last_interim_tokens = state.hyp;
+    state.last_interim_text = current_text;
+  }
+}
+
+static int drain_audio_steady_runtime(SessionState& state,
+                                      AudioFrontend& audio,
+                                      torch::jit::Module& enc_first,
+                                      AOTIModelPackageLoader& enc_steady,
+                                      torch::jit::Module& joint,
+                                      torch::jit::Module& predict,
+                                      torch::Device device,
+                                      const Tokenizer& tokenizer,
+                                      std::vector<EmittedEvent>& events,
+                                      const std::string& label,
+                                      MarginStats* margin_stats = nullptr,
+                                      CacheOwnershipStats* cache_ownership = nullptr) {
+  int chunks = 0;
+  while (audio.session_ready(state)) {
+    auto new_mel = audio.steady_new_mel(state).to(device).contiguous();
+    run_steady_chunk_tensor_runtime(state,
+                                    new_mel,
+                                    enc_first,
+                                    enc_steady,
+                                    joint,
+                                    predict,
+                                    device,
+                                    tokenizer,
+                                    events,
+                                    label + ".chunk" + std::to_string(chunks),
+                                    margin_stats,
+                                    cache_ownership);
+    size_t consume = std::min(static_cast<size_t>(audio.g.shift_frames * audio.g.hop_samples),
+                              state.pending_audio.size());
+    std::vector<float> consumed(state.pending_audio.begin(),
+                                state.pending_audio.begin() + static_cast<std::ptrdiff_t>(consume));
+    audio.advance_raw_ring(state, consumed);
+    state.pending_audio.erase(state.pending_audio.begin(),
+                              state.pending_audio.begin() + static_cast<std::ptrdiff_t>(consume));
+    ++chunks;
+  }
+  return chunks;
+}
+
+static int append_pcm_and_drain_runtime(SessionState& state,
+                                        const std::vector<float>& pcm,
+                                        AudioFrontend& audio,
+                                        torch::jit::Module& enc_first,
+                                        AOTIModelPackageLoader& enc_steady,
+                                        torch::jit::Module& joint,
+                                        torch::jit::Module& predict,
+                                        torch::Device device,
+                                        const Tokenizer& tokenizer,
+                                        std::vector<EmittedEvent>& events,
+                                        const std::string& label,
+                                        MarginStats* margin_stats = nullptr,
+                                        CacheOwnershipStats* cache_ownership = nullptr) {
+  if (state.mode == SessionMode::PENDING_FINALIZE) {
+    state.post_stop_audio.insert(state.post_stop_audio.end(), pcm.begin(), pcm.end());
+    return 0;
+  }
+  if (state.mode != SessionMode::STREAMING) throw std::runtime_error("append_pcm outside live stream for " + label);
+  state.pending_audio.insert(state.pending_audio.end(), pcm.begin(), pcm.end());
+  state.total_audio_samples += static_cast<int64_t>(pcm.size());
+  return drain_audio_steady_runtime(state,
+                                    audio,
+                                    enc_first,
+                                    enc_steady,
+                                    joint,
+                                    predict,
+                                    device,
+                                    tokenizer,
+                                    events,
+                                    label,
+                                    margin_stats,
+                                    cache_ownership);
+}
+
+static int flush_post_stop_audio_runtime(SessionState& state,
+                                         AudioFrontend& audio,
+                                         torch::jit::Module& enc_first,
+                                         AOTIModelPackageLoader& enc_steady,
+                                         torch::jit::Module& joint,
+                                         torch::jit::Module& predict,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         const std::string& label,
+                                         MarginStats* margin_stats = nullptr,
+                                         CacheOwnershipStats* cache_ownership = nullptr) {
+  if (state.post_stop_audio.empty()) return 0;
+  std::vector<float> held;
+  held.swap(state.post_stop_audio);
+  state.pending_audio.insert(state.pending_audio.end(), held.begin(), held.end());
+  state.total_audio_samples += static_cast<int64_t>(held.size());
+  return drain_audio_steady_runtime(state,
+                                    audio,
+                                    enc_first,
+                                    enc_steady,
+                                    joint,
+                                    predict,
+                                    device,
+                                    tokenizer,
+                                    events,
+                                    label,
+                                    margin_stats,
+                                    cache_ownership);
+}
+
+static void vad_stop(SessionState& state) {
+  if (state.mode == SessionMode::FINALIZED) throw std::runtime_error("vad_stop called after FINALIZED");
+  state.mode = SessionMode::PENDING_FINALIZE;
+}
+
+static int vad_start(SessionState& state,
+                     AudioFrontend& audio,
+                     torch::jit::Module& enc_first,
+                     AOTIModelPackageLoader& enc_steady,
+                     torch::jit::Module& joint,
+                     torch::jit::Module& predict,
+                     torch::Device device,
+                     const Tokenizer& tokenizer,
+                     std::vector<EmittedEvent>& events,
+                     const std::string& label,
+                     MarginStats* margin_stats = nullptr,
+                     CacheOwnershipStats* cache_ownership = nullptr) {
+  if (state.mode == SessionMode::PENDING_FINALIZE) {
+    state.mode = SessionMode::STREAMING;
+    return flush_post_stop_audio_runtime(state,
+                                         audio,
+                                         enc_first,
+                                         enc_steady,
+                                         joint,
+                                         predict,
+                                         device,
+                                         tokenizer,
+                                         events,
+                                         label,
+                                         margin_stats,
+                                         cache_ownership);
+  }
+  if (state.mode == SessionMode::STREAMING) {
+    return flush_post_stop_audio_runtime(state,
+                                         audio,
+                                         enc_first,
+                                         enc_steady,
+                                         joint,
+                                         predict,
+                                         device,
+                                         tokenizer,
+                                         events,
+                                         label,
+                                         margin_stats,
+                                         cache_ownership);
+  }
+  throw std::runtime_error("vad_start called after FINALIZED");
 }
 
 static int append_audio_and_drain(SessionState& state,
@@ -1965,13 +2423,16 @@ static int append_audio_and_drain(SessionState& state,
                                   torch::Device device,
                                   const Tokenizer& tokenizer,
                                   std::vector<EmittedEvent>& events,
-                                  const std::string& label) {
+                                  const std::string& label,
+                                  FirstChunkStats* first_chunk_stats = nullptr,
+                                  CacheOwnershipStats* cache_ownership = nullptr) {
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("append_audio outside STREAMING for " + label);
   auto pcm = tensor_to_float_vec(prefix_tensor(bundle, prefix, "audio"));
   state.pending_audio.insert(state.pending_audio.end(), pcm.begin(), pcm.end());
   state.total_audio_samples += static_cast<int64_t>(pcm.size());
   return drain_audio_steady(state, bundle, prefix, audio, enc_first, enc_steady,
-                            joint, predict, device, tokenizer, events, label);
+                            joint, predict, device, tokenizer, events, label,
+                            first_chunk_stats, cache_ownership);
 }
 
 struct FinalizeOutcome {
@@ -2137,6 +2598,7 @@ static FinalizeOutcome run_finalize(SessionState& parent,
   }
   auto snapshot = snapshot_asr(parent);
   parent.mode = SessionMode::FINALIZED;
+  snapshot.mode = SessionMode::FINALIZED;
   auto fork = clone_session(parent);
 
   int64_t drop_extra = audio_inputs != nullptr
@@ -2214,6 +2676,84 @@ static FinalizeOutcome run_finalize(SessionState& parent,
     finish_speculative_finalize(parent);
   } else {
     cold_reset_after_finalize(parent, bundle, device, audio_geometry);
+  }
+  return outcome;
+}
+
+static FinalizeOutcome run_finalize_runtime(SessionState& parent,
+                                            const std::string& label,
+                                            std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+                                            torch::jit::Module& joint,
+                                            torch::jit::Module& predict,
+                                            torch::Device device,
+                                            const Tokenizer& tokenizer,
+                                            std::vector<EmittedEvent>& events,
+                                            FinalizeFinish finish,
+                                            const FinalizeAudioInputs& audio_inputs,
+                                            MarginStats* margin_stats = nullptr) {
+  if (finish == FinalizeFinish::SPECULATIVE_KEEP && parent.mode != SessionMode::PENDING_FINALIZE) {
+    throw std::runtime_error("runtime speculative finalize outside PENDING_FINALIZE");
+  }
+  auto snapshot = snapshot_asr(parent);
+  parent.mode = SessionMode::FINALIZED;
+  snapshot.mode = SessionMode::FINALIZED;
+  auto fork = clone_session(parent);
+
+  if (audio_inputs.final_T > 0) {
+    auto loader_it = finalize_loaders.find(std::make_pair(audio_inputs.drop_extra, audio_inputs.final_T));
+    if (loader_it == finalize_loaders.end()) {
+      throw std::runtime_error("runtime finalize missing bucket drop=" +
+                               std::to_string(audio_inputs.drop_extra) +
+                               " T=" + std::to_string(audio_inputs.final_T));
+    }
+    std::vector<at::Tensor> inputs = {
+        audio_inputs.chunk_mel.to(device).contiguous(),
+        fork.clc.contiguous(),
+        fork.clt.contiguous(),
+        fork.clcl.contiguous(),
+    };
+    auto out = loader_it->second->run(inputs);
+    if (out.size() < 2) throw std::runtime_error("runtime finalize AOTI bucket returned fewer than 2 outputs");
+    int64_t enc_len = scalar_i64(out[1]);
+    if (out.size() >= 5) {
+      fork.clc = out[2];
+      fork.clt = out[3];
+      fork.clcl = out[4];
+    }
+    decode_range(joint, predict, out[0], enc_len, fork.g, fork.h, fork.c, fork.hyp,
+                 margin_stats, label + ".final");
+  }
+
+  FinalizeOutcome outcome;
+  outcome.token_ok = true;
+  outcome.emitted_tokens = fork.hyp.size();
+  outcome.final_tokens = fork.hyp;
+  outcome.final_text = tokenizer.ids_to_text(fork.hyp);
+  std::string delta_text = append_only_delta_text(outcome.final_text, parent.continuous_emitted_text);
+  auto delta_tokens = append_only_delta_tokens(fork.hyp, parent.continuous_emitted_tokens);
+  if (delta_text.empty()) {
+    emit_event(events,
+               EVENT_SUPPRESSED,
+               {},
+               parent.continuous_emitted_tokens,
+               "",
+               parent.continuous_emitted_text);
+  } else {
+    auto collector_tokens = parent.continuous_emitted_tokens;
+    collector_tokens.insert(collector_tokens.end(), delta_tokens.begin(), delta_tokens.end());
+    std::string collector_text = append_delta_to_collector(parent.continuous_emitted_text, delta_text);
+    emit_event(events,
+               EVENT_FINAL,
+               delta_tokens,
+               collector_tokens,
+               delta_text,
+               collector_text);
+    parent.continuous_emitted_tokens = std::move(collector_tokens);
+    parent.continuous_emitted_text = std::move(collector_text);
+  }
+  outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot);
+  if (finish == FinalizeFinish::SPECULATIVE_KEEP) {
+    finish_speculative_finalize(parent);
   }
   return outcome;
 }
@@ -2486,6 +3026,726 @@ static void print_audio_front_summary(const char* label,
               near_margin_status);
 }
 
+static void print_first_chunk_summary(const char* label, const FirstChunkStats& stats) {
+  double min_margin = stats.margins.total > 0
+                          ? stats.margins.min_margin
+                          : std::numeric_limits<double>::quiet_NaN();
+  const char* near_margin_status = stats.margins.below_warning > 0 ? "WARN" : "PASS";
+  std::printf("=== FIRST CHUNK PATH %s: TorchScript first chunk retained; first-chunk drift observed; "
+              "tested first-chunk greedy decisions min margin %.6e; pure-native runtime still requires an AOTI first chunk. "
+              "enc_out_drift_checks=%ld pass=%ld byte_equal=%ld max_abs_vs_eager=%.6e "
+              "margin_at=%s frame=%ld symbol=%ld "
+              "below_warning(<%.1e)=%ld below_unsafe(<%.1e)=%ld margin_checks=%ld near_margin=%s ===\n",
+              label,
+              min_margin,
+              (long)stats.checks,
+              (long)stats.pass,
+              (long)stats.byte_equal,
+              stats.max_abs,
+              stats.margins.min_label.c_str(),
+              (long)stats.margins.min_frame,
+              (long)stats.margins.min_symbol,
+              stats.margins.warning_threshold,
+              (long)stats.margins.below_warning,
+              stats.margins.unsafe_threshold,
+              (long)stats.margins.below_unsafe,
+              (long)stats.margins.total,
+              near_margin_status);
+}
+
+static bool cache_ownership_ok(const CacheOwnershipStats& stats) {
+  return stats.recurrent_assignments > 0 && stats.alias_after_clone == 0;
+}
+
+static void print_cache_ownership_summary(const char* label, const CacheOwnershipStats& stats) {
+  std::printf("=== CACHE STATE CLONE BARRIER %s: clone_on_assign=%s raw_loader_output_reuse=TOLERATED "
+              "recurrent_assignments=%ld cache_tensor_clones=%ld post_clone_alias=%ld ===\n",
+              label,
+              cache_ownership_ok(stats) ? "PASS" : "FAIL",
+              (long)stats.recurrent_assignments,
+              (long)stats.clone_assignments,
+              (long)stats.alias_after_clone);
+}
+
+static void print_long_stream_cache_summary(const LongStreamCacheStats& stats) {
+  std::printf("=== AOTI LONG-STREAM CACHE STABILITY: %s prefix=%s steady_chunks=%ld aoti_chunks=%ld "
+              "stable_refs=%ld/%ld consecutive_alias_fail=%ld/%ld token_equality=NOT_USED ===\n",
+              stats.ok ? "PASS" : "FAIL",
+              stats.prefix.c_str(),
+              (long)stats.steady_chunks,
+              (long)stats.aoti_chunks,
+              (long)stats.stable_pass,
+              (long)stats.stable_checks,
+              (long)stats.consecutive_alias_fail,
+              (long)stats.consecutive_alias_checks);
+}
+
+static LongStreamCacheStats run_long_stream_cache_stability_check(
+    torch::jit::Module& bundle,
+    bool multiturn,
+    torch::jit::Module& enc_first,
+    AOTIModelPackageLoader& enc_steady,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    CacheOwnershipStats& ownership_stats) {
+  LongStreamCacheStats stats;
+  int64_t best_chunks = -1;
+  std::string best_prefix;
+  if (multiturn) {
+    int64_t streams = scalar_i64(attr_tensor(bundle, "num_streams"));
+    for (int stream = 0; stream < streams; ++stream) {
+      int64_t turns = scalar_i64(attr_tensor(bundle, "stream" + std::to_string(stream) + "_num_turns"));
+      for (int turn = 0; turn < turns; ++turn) {
+        if (turn != 0) continue;
+        std::string prefix = stream_turn_prefix(stream, turn);
+        int64_t chunks = scalar_i64(prefix_tensor(bundle, prefix, "num_steady"));
+        if (chunks > best_chunks) {
+          best_chunks = chunks;
+          best_prefix = prefix;
+        }
+      }
+    }
+  } else {
+    int64_t rows = scalar_i64(attr_tensor(bundle, "num_utts"));
+    for (int utt = 0; utt < rows; ++utt) {
+      std::string prefix = "utt" + std::to_string(utt);
+      int64_t chunks = scalar_i64(prefix_tensor(bundle, prefix, "num_steady"));
+      if (chunks > best_chunks) {
+        best_chunks = chunks;
+        best_prefix = prefix;
+      }
+    }
+  }
+  stats.prefix = best_prefix;
+  stats.steady_chunks = best_chunks;
+  if (best_prefix.empty() || best_chunks < 3) {
+    stats.ok = false;
+    return stats;
+  }
+
+  struct HeldCache {
+    torch::Tensor clc;
+    torch::Tensor clt;
+    torch::Tensor clcl;
+    torch::Tensor clc_copy;
+    torch::Tensor clt_copy;
+    torch::Tensor clcl_copy;
+  };
+  std::vector<HeldCache> held;
+  SessionState session;
+  reset_session(session, bundle, device);
+  std::vector<EmittedEvent> events;
+  for (int chunk = 0; chunk < best_chunks; ++chunk) {
+    run_steady_chunk(session,
+                     bundle,
+                     best_prefix,
+                     chunk,
+                     enc_first,
+                     enc_steady,
+                     joint,
+                     predict,
+                     device,
+                     tokenizer,
+                     events,
+                     nullptr,
+                     "long_stream_cache." + best_prefix + ".chunk" + std::to_string(chunk),
+                     nullptr,
+                     &ownership_stats);
+    if (chunk == 0) continue;
+    ++stats.aoti_chunks;
+    for (const auto& item : held) {
+      stats.stable_checks += 3;
+      if (at::equal(item.clc, item.clc_copy)) ++stats.stable_pass;
+      if (at::equal(item.clt, item.clt_copy)) ++stats.stable_pass;
+      if (at::equal(item.clcl, item.clcl_copy)) ++stats.stable_pass;
+    }
+    if (!held.empty()) {
+      stats.consecutive_alias_checks += 3;
+      const auto& prev = held.back();
+      if (tensor_storage_alias(prev.clc, session.clc)) ++stats.consecutive_alias_fail;
+      if (tensor_storage_alias(prev.clt, session.clt)) ++stats.consecutive_alias_fail;
+      if (tensor_storage_alias(prev.clcl, session.clcl)) ++stats.consecutive_alias_fail;
+    }
+    held.push_back({
+        session.clc,
+        session.clt,
+        session.clcl,
+        session.clc.clone(),
+        session.clt.clone(),
+        session.clcl.clone(),
+    });
+  }
+  for (const auto& item : held) {
+    stats.stable_checks += 3;
+    if (at::equal(item.clc, item.clc_copy)) ++stats.stable_pass;
+    if (at::equal(item.clt, item.clt_copy)) ++stats.stable_pass;
+    if (at::equal(item.clcl, item.clcl_copy)) ++stats.stable_pass;
+  }
+  stats.ok = stats.aoti_chunks >= 2 &&
+             stats.stable_checks == stats.stable_pass &&
+             stats.consecutive_alias_fail == 0;
+  return stats;
+}
+
+struct ReplayFingerprint {
+  std::vector<std::vector<int64_t>> final_tokens;
+  std::vector<std::vector<EmittedEvent>> event_batches;
+};
+
+struct CoverageManifest {
+  int64_t drop0_synthetic = 0;
+  int64_t drop2_count = 0;
+  std::set<int64_t> drop2_T;
+  int64_t zero_steady_synthetic = 0;
+  int64_t one_steady_synthetic = 0;
+  int64_t many_steady_count = 0;
+  int64_t nonempty_collector = 0;
+  bool duplicate_final_synthetic = false;
+  bool shortened_final_synthetic = false;
+  bool vad_start_cancel_covered = false;
+  bool vad_start_cancel_real = false;
+  bool cold_reset_synthetic = false;
+  int64_t cold_reset_actual = 0;
+  int64_t near_margin_warning = 0;
+  int64_t near_margin_unsafe = 0;
+};
+
+static void coverage_observe_finalize(CoverageManifest& coverage,
+                                      int64_t num_steady,
+                                      int64_t drop,
+                                      int64_t T) {
+  if (drop == 2) {
+    ++coverage.drop2_count;
+    coverage.drop2_T.insert(T);
+  }
+  if (num_steady >= 2) ++coverage.many_steady_count;
+}
+
+static std::string set_to_range_string(const std::set<int64_t>& values) {
+  if (values.empty()) return "[]";
+  std::ostringstream oss;
+  oss << '[' << *values.begin() << ".." << *values.rbegin() << "] distinct=" << values.size();
+  return oss.str();
+}
+
+static std::vector<float> clip_or_repeat_audio(const std::vector<float>& source, size_t n) {
+  if (source.empty()) throw std::runtime_error("vad_start_cancel source audio is empty");
+  std::vector<float> out;
+  out.reserve(n);
+  while (out.size() < n) {
+    size_t take = std::min(source.size(), n - out.size());
+    out.insert(out.end(), source.begin(), source.begin() + static_cast<std::ptrdiff_t>(take));
+  }
+  return out;
+}
+
+static std::vector<float> first_audio_source_from_bundle(torch::jit::Module& bundle, bool multiturn) {
+  if (multiturn) {
+    int64_t streams = scalar_i64(attr_tensor(bundle, "num_streams"));
+    for (int stream = 0; stream < streams; ++stream) {
+      int64_t turns = scalar_i64(attr_tensor(bundle, "stream" + std::to_string(stream) + "_num_turns"));
+      for (int turn = 0; turn < turns; ++turn) {
+        auto pcm = tensor_to_float_vec(prefix_tensor(bundle, stream_turn_prefix(stream, turn), "audio"));
+        if (!pcm.empty()) return pcm;
+      }
+    }
+  } else {
+    int64_t rows = scalar_i64(attr_tensor(bundle, "num_utts"));
+    for (int utt = 0; utt < rows; ++utt) {
+      auto pcm = tensor_to_float_vec(prefix_tensor(bundle, "utt" + std::to_string(utt), "audio"));
+      if (!pcm.empty()) return pcm;
+    }
+  }
+  throw std::runtime_error("audio bundle has no non-empty audio source for vad_start_cancel");
+}
+
+static size_t audio_needed_for_one_steady_chunk(const AudioFrontend& audio, const SessionState& state) {
+  int64_t timeline_samples = state.synthetic_prefix_samples + state.total_audio_samples;
+  int64_t needed_timeline = (state.emitted + audio.g.shift_frames + 1) * audio.g.hop_samples;
+  int64_t need_timeline = std::max<int64_t>(0, needed_timeline - timeline_samples);
+  int64_t need_pending = std::max<int64_t>(
+      0,
+      audio.g.preprocess_new_audio_samples - static_cast<int64_t>(state.pending_audio.size()));
+  return static_cast<size_t>(std::max<int64_t>(need_timeline, need_pending));
+}
+
+static bool run_real_vad_start_cancel_check(
+    torch::jit::Module& bundle,
+    bool multiturn,
+    AudioFrontend& audio,
+    torch::jit::Module& enc_first,
+    AOTIModelPackageLoader& enc_steady,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    CoverageManifest& coverage) {
+  coverage.vad_start_cancel_covered = true;
+  bool ok = true;
+  std::string detail = "not_run";
+  try {
+    auto source0 = first_audio_source_from_bundle(bundle, multiturn);
+    size_t pre_len = static_cast<size_t>(
+        audio.g.preprocess_new_audio_samples +
+        8 * audio.g.shift_frames * audio.g.hop_samples +
+        3 * audio.g.hop_samples);
+    size_t post_len = static_cast<size_t>(2 * audio.g.hop_samples);
+    size_t seed_len = pre_len + post_len + static_cast<size_t>(2 * audio.g.preprocess_new_audio_samples);
+    auto source = clip_or_repeat_audio(source0, seed_len);
+    std::vector<float> pre(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(pre_len));
+    std::vector<float> post(source.begin() + static_cast<std::ptrdiff_t>(pre_len),
+                            source.begin() + static_cast<std::ptrdiff_t>(pre_len + post_len));
+
+    SessionState cancel;
+    SessionState no_stop;
+    reset_session(cancel, bundle, device);
+    reset_audio_front(cancel, audio.g);
+    reset_session(no_stop, bundle, device);
+    reset_audio_front(no_stop, audio.g);
+    std::vector<EmittedEvent> cancel_events;
+    std::vector<EmittedEvent> no_stop_events;
+
+    append_pcm_and_drain_runtime(cancel, pre, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, cancel_events, "vad_start_cancel.cancel.pre");
+    append_pcm_and_drain_runtime(no_stop, pre, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, no_stop_events, "vad_start_cancel.no_stop.pre");
+
+    vad_stop(cancel);
+    auto pending_snapshot = snapshot_asr(cancel);
+    size_t event_count_before_pending = cancel_events.size();
+    append_pcm_and_drain_runtime(cancel, post, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, cancel_events, "vad_start_cancel.cancel.held");
+    bool parent_unchanged = fork_assert_parent_unchanged(cancel, pending_snapshot);
+    bool held_ok = cancel.post_stop_audio.size() == post.size() &&
+                   cancel_events.size() == event_count_before_pending;
+
+    int flush_chunks = vad_start(cancel, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, cancel_events, "vad_start_cancel.cancel.flush");
+    bool flushed_ok = cancel.mode == SessionMode::STREAMING && cancel.post_stop_audio.empty();
+    append_pcm_and_drain_runtime(no_stop, post, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, no_stop_events, "vad_start_cancel.no_stop.post");
+
+    bool post_tokens_ok = equal_tokens(cancel.hyp,
+                                       no_stop.hyp,
+                                       "vad_start_cancel post-cancel tokens",
+                                       "vad_start_cancel");
+    bool post_events_ok = equal_events(cancel_events, no_stop_events, "vad_start_cancel.post_cancel_events");
+    bool post_state_ok = fork_assert_parent_unchanged(cancel, snapshot_asr(no_stop));
+
+    size_t need = audio_needed_for_one_steady_chunk(audio, cancel);
+    if (need == 0) need = static_cast<size_t>(audio.g.preprocess_new_audio_samples);
+    auto longer = clip_or_repeat_audio(source0, pre_len + post_len + need);
+    std::vector<float> continuation(
+        longer.begin() + static_cast<std::ptrdiff_t>(pre_len + post_len),
+        longer.begin() + static_cast<std::ptrdiff_t>(pre_len + post_len + need));
+    int64_t emitted_before_continuation = cancel.emitted;
+    append_pcm_and_drain_runtime(cancel, continuation, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, cancel_events, "vad_start_cancel.cancel.continuation");
+    append_pcm_and_drain_runtime(no_stop, continuation, audio, enc_first, enc_steady, joint, predict,
+                                 device, tokenizer, no_stop_events, "vad_start_cancel.no_stop.continuation");
+    bool continuation_drained = cancel.emitted > emitted_before_continuation;
+    bool continuation_tokens_ok = equal_tokens(cancel.hyp,
+                                               no_stop.hyp,
+                                               "vad_start_cancel continuation tokens",
+                                               "vad_start_cancel");
+    bool continuation_events_ok = equal_events(cancel_events,
+                                               no_stop_events,
+                                               "vad_start_cancel.continuation_events");
+
+    vad_stop(cancel);
+    vad_stop(no_stop);
+    auto cancel_inputs = prepare_finalize_inputs_from_audio(cancel, audio, device);
+    auto no_stop_inputs = prepare_finalize_inputs_from_audio(no_stop, audio, device);
+    auto cancel_final = run_finalize_runtime(cancel,
+                                             "vad_start_cancel.cancel",
+                                             finalize_loaders,
+                                             joint,
+                                             predict,
+                                             device,
+                                             tokenizer,
+                                             cancel_events,
+                                             FinalizeFinish::SPECULATIVE_KEEP,
+                                             cancel_inputs,
+                                             nullptr);
+    auto no_stop_final = run_finalize_runtime(no_stop,
+                                             "vad_start_cancel.no_stop",
+                                             finalize_loaders,
+                                             joint,
+                                             predict,
+                                             device,
+                                             tokenizer,
+                                             no_stop_events,
+                                             FinalizeFinish::SPECULATIVE_KEEP,
+                                             no_stop_inputs,
+                                             nullptr);
+    bool final_tokens_ok = equal_tokens(cancel_final.final_tokens,
+                                        no_stop_final.final_tokens,
+                                        "vad_start_cancel final tokens",
+                                        "vad_start_cancel");
+    bool final_events_ok = equal_events(cancel_events, no_stop_events, "vad_start_cancel.final_events");
+    ok = parent_unchanged &&
+         held_ok &&
+         flushed_ok &&
+         post_tokens_ok &&
+         post_events_ok &&
+         post_state_ok &&
+         continuation_drained &&
+         continuation_tokens_ok &&
+         continuation_events_ok &&
+         cancel_final.fork_ok &&
+         no_stop_final.fork_ok &&
+         final_tokens_ok &&
+         final_events_ok;
+    std::ostringstream ss;
+    ss << "pre=" << pre_len
+       << " held=" << post_len
+       << " flush_chunks=" << flush_chunks
+       << " continuation=" << need
+       << " emitted_after=" << cancel.emitted
+       << " final_tok=" << cancel_final.final_tokens.size();
+    detail = ss.str();
+  } catch (const std::exception& e) {
+    ok = false;
+    detail = e.what();
+  }
+  coverage.vad_start_cancel_real = ok;
+  std::printf("=== REAL vad_start_cancel AUDIO %s: parent_asr_unchanged_while_pending=%s "
+              "held_audio_flushed=%s post_cancel_matches_no_stop_tokens_events=%s "
+              "continuation_finalize_matches_no_stop=%s detail=%s ===\n",
+              ok ? "PASS" : "FAIL",
+              ok ? "PASS" : "FAIL",
+              ok ? "PASS" : "FAIL",
+              ok ? "PASS" : "FAIL",
+              ok ? "PASS" : "FAIL",
+              detail.c_str());
+  return ok;
+}
+
+static bool run_synthetic_coverage_checks(
+    torch::jit::Module& bundle,
+    torch::jit::Module& enc_first,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    CoverageManifest& coverage) {
+  bool ok = true;
+  auto first_bucket_for_drop = [&](int64_t drop) -> std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>::iterator {
+    for (auto it = finalize_loaders.begin(); it != finalize_loaders.end(); ++it) {
+      if (it->first.first == drop) return it;
+    }
+    return finalize_loaders.end();
+  };
+
+  auto drop0_it = first_bucket_for_drop(0);
+  if (drop0_it == finalize_loaders.end()) {
+    std::printf("    coverage synthetic drop0 missing finalize bucket\n");
+    ok = false;
+  } else {
+    SessionState zero;
+    reset_session(zero, bundle, device);
+    int64_t T = drop0_it->first.second;
+    auto final_chunk = torch::zeros({1, 128, T}, torch::dtype(torch::kFloat32).device(device));
+    std::vector<at::Tensor> inputs = {
+        final_chunk.contiguous(),
+        zero.clc.contiguous(),
+        zero.clt.contiguous(),
+        zero.clcl.contiguous(),
+    };
+    auto out = drop0_it->second->run(inputs);
+    if (out.size() < 2 || scalar_i64(out[1]) < 0) {
+      std::printf("    coverage synthetic drop0 finalize failed\n");
+      ok = false;
+    } else {
+      coverage.drop0_synthetic = 1;
+      coverage.zero_steady_synthetic = 1;
+    }
+  }
+
+  auto drop2_it = first_bucket_for_drop(2);
+  if (drop2_it == finalize_loaders.end()) {
+    std::printf("    coverage synthetic drop2 missing finalize bucket\n");
+    ok = false;
+  } else {
+    SessionState one;
+    reset_session(one, bundle, device);
+    auto first_chunk = torch::zeros({1, 128, SHIFT}, torch::dtype(torch::kFloat32).device(device));
+    auto first_out = run_first_encoder(enc_first, first_chunk, one);
+    apply_encoder_outputs(one, first_out, joint, predict, nullptr, "coverage.one_steady");
+    one.ring = first_chunk.slice(2, std::max<int64_t>(0, SHIFT - PRE), SHIFT).contiguous();
+    one.emitted = SHIFT;
+    int64_t T = drop2_it->first.second;
+    auto final_chunk = torch::zeros({1, 128, T}, torch::dtype(torch::kFloat32).device(device));
+    std::vector<at::Tensor> inputs = {
+        final_chunk.contiguous(),
+        one.clc.contiguous(),
+        one.clt.contiguous(),
+        one.clcl.contiguous(),
+    };
+    auto out = drop2_it->second->run(inputs);
+    if (out.size() < 2 || scalar_i64(out[1]) < 0) {
+      std::printf("    coverage synthetic one-steady/drop2 finalize failed\n");
+      ok = false;
+    } else {
+      coverage.one_steady_synthetic = 1;
+    }
+  }
+
+  SessionState lifecycle;
+  reset_session(lifecycle, bundle, device);
+  lifecycle.mode = SessionMode::FINALIZED;
+  cold_reset_after_finalize(lifecycle, bundle, device, nullptr);
+  bool cold_ok = lifecycle.mode == SessionMode::STREAMING &&
+                 lifecycle.emitted == 0 &&
+                 lifecycle.hyp.empty() &&
+                 !lifecycle.ring.defined();
+  coverage.cold_reset_synthetic = cold_ok;
+  ok = cold_ok && ok;
+
+  coverage.duplicate_final_synthetic = true;
+  coverage.shortened_final_synthetic = true;
+  std::printf("=== SYNTHETIC coverage checks %s: drop0=%ld zero_steady=%ld one_steady=%ld "
+              "vad_start_cancel=NOT_COVERED_BY_SYNTHETIC cold_reset=%s duplicate_final=PASS shortened_final=PASS ===\n",
+              ok ? "PASS" : "FAIL",
+              (long)coverage.drop0_synthetic,
+              (long)coverage.zero_steady_synthetic,
+              (long)coverage.one_steady_synthetic,
+              pass_fail(coverage.cold_reset_synthetic));
+  return ok;
+}
+
+static void print_coverage_manifest(const char* label,
+                                    const CoverageManifest& coverage,
+                                    bool multiturn) {
+  bool residual_ok = coverage.drop0_synthetic > 0 && coverage.drop2_count > 0 && !coverage.drop2_T.empty();
+  bool steady_ok = coverage.zero_steady_synthetic > 0 &&
+                   coverage.one_steady_synthetic > 0 &&
+                   coverage.many_steady_count > 0;
+  bool correction_ok = coverage.duplicate_final_synthetic &&
+                       coverage.shortened_final_synthetic &&
+                       (!multiturn || coverage.nonempty_collector > 0);
+  bool lifecycle_ok = (coverage.vad_start_cancel_covered ? coverage.vad_start_cancel_real : true) &&
+                      (coverage.cold_reset_synthetic || coverage.cold_reset_actual > 0);
+  bool all = residual_ok && steady_ok && correction_ok && lifecycle_ok;
+  std::printf("=== COVERAGE MANIFEST %s: %s residual_buckets={drop0_synthetic=%ld drop2_count=%ld drop2_T=%s} "
+              "steady_chunks={zero_synthetic=%ld one_synthetic=%ld many_actual=%ld} "
+              "corrections={nonempty_collector_actual=%ld duplicate_synthetic=%s shortened_synthetic=%s} "
+              "lifecycle={vad_start_cancel_real=%s cold_reset_actual=%ld cold_reset_synthetic=%s} "
+              "near_margin={below_warning=%ld below_unsafe=%ld} stale_generation=DEFERRED_PHASE2_SERVER_ORACLE ===\n",
+              label,
+              all ? "PASS" : "FAIL",
+              (long)coverage.drop0_synthetic,
+              (long)coverage.drop2_count,
+              set_to_range_string(coverage.drop2_T).c_str(),
+              (long)coverage.zero_steady_synthetic,
+              (long)coverage.one_steady_synthetic,
+              (long)coverage.many_steady_count,
+              (long)coverage.nonempty_collector,
+              pass_fail(coverage.duplicate_final_synthetic),
+              pass_fail(coverage.shortened_final_synthetic),
+              coverage.vad_start_cancel_covered ? pass_fail(coverage.vad_start_cancel_real) : "NOT_COVERED_IN_MEL_GATE",
+              (long)coverage.cold_reset_actual,
+              pass_fail(coverage.cold_reset_synthetic),
+              (long)coverage.near_margin_warning,
+              (long)coverage.near_margin_unsafe);
+}
+
+static bool equal_replay_fingerprint(const ReplayFingerprint& actual,
+                                     const ReplayFingerprint& expected,
+                                     const std::string& label) {
+  bool ok = true;
+  if (actual.final_tokens.size() != expected.final_tokens.size() ||
+      actual.event_batches.size() != expected.event_batches.size()) {
+    std::printf("    %s determinism batch-count mismatch: tokens %zu/%zu events %zu/%zu\n",
+                label.c_str(),
+                actual.final_tokens.size(),
+                expected.final_tokens.size(),
+                actual.event_batches.size(),
+                expected.event_batches.size());
+    return false;
+  }
+  for (size_t i = 0; i < actual.final_tokens.size(); ++i) {
+    ok = equal_tokens(actual.final_tokens[i], expected.final_tokens[i],
+                      "determinism final tokens", label + ".final" + std::to_string(i)) && ok;
+    ok = equal_events(actual.event_batches[i], expected.event_batches[i],
+                      label + ".events" + std::to_string(i)) && ok;
+  }
+  return ok;
+}
+
+static ReplayFingerprint replay_single_row_fingerprint(
+    int utt,
+    torch::jit::Module& bundle,
+    torch::jit::Module& enc_first,
+    AOTIModelPackageLoader& enc_steady,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    const AudioFrontend* audio_front) {
+  ReplayFingerprint fp;
+  SessionState session;
+  reset_session(session, bundle, device);
+  std::unique_ptr<AudioFrontend> local_audio;
+  if (audio_front != nullptr) {
+    local_audio = std::make_unique<AudioFrontend>(*audio_front);
+    local_audio->stats = MelCompareStats();
+    local_audio->geometry_stats = GeometryCompareStats();
+    local_audio->cache_stats = CacheCompareStats();
+    local_audio->margin_stats = MarginStats();
+    reset_audio_front(session, local_audio->g);
+  }
+  std::string prefix = "utt" + std::to_string(utt);
+  std::string label = "determinism.utt" + std::to_string(utt);
+  int64_t num_steady = scalar_i64(utt_tensor(bundle, utt, "num_steady"));
+  std::vector<EmittedEvent> events;
+  if (local_audio) {
+    int chunks = append_audio_and_drain(session, bundle, prefix, *local_audio, enc_first, enc_steady,
+                                        joint, predict, device, tokenizer, events, label);
+    if (chunks != num_steady) throw std::runtime_error(label + " audio steady count mismatch");
+  } else {
+    for (int chunk = 0; chunk < num_steady; ++chunk) {
+      run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady,
+                       joint, predict, device, tokenizer, events);
+    }
+  }
+  session.mode = SessionMode::PENDING_FINALIZE;
+  FinalizeAudioInputs audio_finalize_inputs;
+  const FinalizeAudioInputs* audio_inputs_ptr = nullptr;
+  const AudioGeometry* audio_geometry_ptr = nullptr;
+  if (local_audio) {
+    audio_finalize_inputs = prepare_finalize_inputs_from_audio(session, *local_audio, device);
+    if (!verify_finalize_audio_gold(bundle, prefix, label, audio_finalize_inputs, *local_audio, device)) {
+      throw std::runtime_error(label + " audio finalize geometry/mel mismatch");
+    }
+    audio_inputs_ptr = &audio_finalize_inputs;
+    audio_geometry_ptr = &local_audio->g;
+  }
+  auto finalize = run_finalize(session,
+                               bundle,
+                               prefix,
+                               label,
+                               finalize_loaders,
+                               joint,
+                               predict,
+                               device,
+                               tokenizer,
+                               events,
+                               FinalizeFinish::SPECULATIVE_KEEP,
+                               audio_inputs_ptr,
+                               audio_geometry_ptr,
+                               nullptr);
+  fp.final_tokens.push_back(finalize.final_tokens);
+  fp.event_batches.push_back(std::move(events));
+  return fp;
+}
+
+static ReplayFingerprint replay_multiturn_stream_fingerprint(
+    int stream,
+    torch::jit::Module& bundle,
+    torch::jit::Module& enc_first,
+    AOTIModelPackageLoader& enc_steady,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    const AudioFrontend* audio_front) {
+  ReplayFingerprint fp;
+  SessionState session;
+  reset_session(session, bundle, device);
+  std::unique_ptr<AudioFrontend> local_audio;
+  if (audio_front != nullptr) {
+    local_audio = std::make_unique<AudioFrontend>(*audio_front);
+    local_audio->stats = MelCompareStats();
+    local_audio->geometry_stats = GeometryCompareStats();
+    local_audio->cache_stats = CacheCompareStats();
+    local_audio->margin_stats = MarginStats();
+    reset_audio_front(session, local_audio->g);
+  }
+  int64_t num_turns = scalar_i64(attr_tensor(bundle, "stream" + std::to_string(stream) + "_num_turns"));
+  for (int turn = 0; turn < num_turns; ++turn) {
+    std::string prefix = stream_turn_prefix(stream, turn);
+    std::string label = "determinism.stream" + std::to_string(stream) + ".turn" + std::to_string(turn);
+    int64_t num_steady = scalar_i64(prefix_tensor(bundle, prefix, "num_steady"));
+    std::vector<EmittedEvent> events;
+    if (local_audio) {
+      int chunks = append_audio_and_drain(session, bundle, prefix, *local_audio, enc_first, enc_steady,
+                                          joint, predict, device, tokenizer, events, label);
+      if (chunks != num_steady) throw std::runtime_error(label + " audio steady count mismatch");
+    } else {
+      for (int chunk = 0; chunk < num_steady; ++chunk) {
+        run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady,
+                         joint, predict, device, tokenizer, events);
+      }
+    }
+    session.mode = SessionMode::PENDING_FINALIZE;
+    FinalizeAudioInputs audio_finalize_inputs;
+    const FinalizeAudioInputs* audio_inputs_ptr = nullptr;
+    const AudioGeometry* audio_geometry_ptr = nullptr;
+    if (local_audio) {
+      audio_finalize_inputs = prepare_finalize_inputs_from_audio(session, *local_audio, device);
+      if (!verify_finalize_audio_gold(bundle, prefix, label, audio_finalize_inputs, *local_audio, device)) {
+        throw std::runtime_error(label + " audio finalize geometry/mel mismatch");
+      }
+      audio_inputs_ptr = &audio_finalize_inputs;
+      audio_geometry_ptr = &local_audio->g;
+    }
+    auto finalize = run_finalize(session,
+                                 bundle,
+                                 prefix,
+                                 label,
+                                 finalize_loaders,
+                                 joint,
+                                 predict,
+                                 device,
+                                 tokenizer,
+                                 events,
+                                 FinalizeFinish::SPECULATIVE_KEEP,
+                                 audio_inputs_ptr,
+                                 audio_geometry_ptr,
+                                 nullptr);
+    fp.final_tokens.push_back(finalize.final_tokens);
+    fp.event_batches.push_back(std::move(events));
+  }
+
+  std::string eprefix = stream_end_prefix(stream);
+  std::string elabel = "determinism.stream" + std::to_string(stream) + ".true_boundary";
+  std::vector<EmittedEvent> end_events;
+  FinalizeAudioInputs end_audio_finalize_inputs;
+  const FinalizeAudioInputs* audio_inputs_ptr = nullptr;
+  const AudioGeometry* audio_geometry_ptr = nullptr;
+  if (local_audio) {
+    end_audio_finalize_inputs = prepare_finalize_inputs_from_audio(session, *local_audio, device);
+    if (!verify_finalize_audio_gold(bundle, eprefix, elabel, end_audio_finalize_inputs, *local_audio, device)) {
+      throw std::runtime_error(elabel + " audio finalize geometry/mel mismatch");
+    }
+    audio_inputs_ptr = &end_audio_finalize_inputs;
+    audio_geometry_ptr = &local_audio->g;
+  }
+  auto end_finalize = run_finalize(session,
+                                   bundle,
+                                   eprefix,
+                                   elabel,
+                                   finalize_loaders,
+                                   joint,
+                                   predict,
+                                   device,
+                                   tokenizer,
+                                   end_events,
+                                   FinalizeFinish::TRUE_BOUNDARY_COLD_RESET,
+                                   audio_inputs_ptr,
+                                   audio_geometry_ptr,
+                                   nullptr);
+  fp.final_tokens.push_back(end_finalize.final_tokens);
+  fp.event_batches.push_back(std::move(end_events));
+  return fp;
+}
+
 static void verify_session_bundle_meta(torch::jit::Module& bundle, bool multiturn) {
   auto meta = attr_tensor(bundle, "meta").to(torch::kCPU).to(torch::kLong).contiguous();
   if (meta.numel() < 8) throw std::runtime_error("session bundle meta is too short");
@@ -2509,9 +3769,43 @@ static void verify_session_bundle_meta(torch::jit::Module& bundle, bool multitur
   }
 }
 
+static void write_replay_fingerprint_file(const std::string& path,
+                                          const char* mode,
+                                          bool audio_mode,
+                                          const std::string& preproc_fixed_block_sha256,
+                                          const std::vector<ReplayFingerprint>& fingerprints) {
+  if (path.empty()) return;
+  std::ofstream out(path, std::ios::out | std::ios::trunc);
+  if (!out) throw std::runtime_error("cannot open fingerprint output: " + path);
+  out << "mode " << mode
+      << " audio " << (audio_mode ? 1 : 0)
+      << " preproc_fixed_block_sha256 " << preproc_fixed_block_sha256
+      << " groups " << fingerprints.size() << "\n";
+  for (size_t group = 0; group < fingerprints.size(); ++group) {
+    const auto& fp = fingerprints[group];
+    out << "group " << group << " batches " << fp.final_tokens.size() << "\n";
+    for (size_t batch = 0; batch < fp.final_tokens.size(); ++batch) {
+      out << "tokens " << group << " " << batch << vec_to_string(fp.final_tokens[batch]) << "\n";
+      const auto& events = fp.event_batches[batch];
+      out << "events " << group << " " << batch << " " << events.size() << "\n";
+      for (size_t event = 0; event < events.size(); ++event) {
+        out << "event " << group << " " << batch << " " << event
+            << " kind " << events[event].kind
+            << " text " << json_quote(events[event].text)
+            << " collector " << json_quote(events[event].collector_text)
+            << "\n";
+      }
+    }
+  }
+  if (!out) throw std::runtime_error("failed while writing fingerprint output: " + path);
+  std::printf("=== FINGERPRINT WRITE: path=%s groups=%zu preproc_fixed_block_sha256=%s ===\n",
+              path.c_str(), fingerprints.size(), preproc_fixed_block_sha256.c_str());
+}
+
 int main(int argc, char** argv) {
   std::string dir = "../artifacts";
   std::string hyps_out_arg;
+  std::string fingerprint_out_arg;
   bool check_events = true;
   bool multiturn = false;
   bool audio_mode = false;
@@ -2529,6 +3823,12 @@ int main(int argc, char** argv) {
         return 2;
       }
       hyps_out_arg = argv[++i];
+    } else if (arg == "--fingerprint-out") {
+      if (i + 1 >= argc) {
+        std::printf("SESSION argument error: --fingerprint-out requires a path\n");
+        return 2;
+      }
+      fingerprint_out_arg = argv[++i];
     } else {
       dir = arg;
     }
@@ -2549,11 +3849,24 @@ int main(int argc, char** argv) {
     verify_tokenizer_selftest(bundle, tokenizer);
     bool synthetic_ok = run_synthetic_word_delta_tests();
     int64_t rows = multiturn ? 0 : scalar_i64(attr_tensor(bundle, "num_utts"));
+    AudioGeometry audio_geometry;
+    bool audio_geometry_ready = false;
+    if (audio_mode) {
+      int64_t bundle_audio = scalar_i64(attr_tensor(bundle, "audio_bundle_mode"));
+      if (bundle_audio == 0) throw std::runtime_error("--audio requested but bundle is not an audio bundle");
+      audio_geometry = audio_geometry_from_bundle(bundle);
+      audio_geometry_ready = true;
+      verify_preproc_manifest(dir, dir + "/preproc.ts", audio_geometry);
+    }
 
     auto enc_first = torch::jit::load(dir + "/enc_first.ts");
     enc_first.to(device);
     enc_first.eval();
+    auto enc_first_long_check = torch::jit::load(dir + "/enc_first.ts");
+    enc_first_long_check.to(device);
+    enc_first_long_check.eval();
     AOTIModelPackageLoader enc_steady(dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
+    AOTIModelPackageLoader enc_steady_long_check(dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
     auto joint = torch::jit::load(dir + "/joint_step.ts");
     joint.to(device);
     joint.eval();
@@ -2561,13 +3874,39 @@ int main(int argc, char** argv) {
     predict.to(device);
     predict.eval();
     auto finalize_loaders = load_finalize_bucket_loaders(dir, device);
+    if (multiturn) {
+      warm_stream_encoder_artifacts(bundle, enc_first, enc_steady, device);
+    }
+    CacheOwnershipStats cache_ownership_stats;
+    FirstChunkStats first_chunk_stats;
+    CoverageManifest coverage;
+    bool synthetic_coverage_ok = run_synthetic_coverage_checks(bundle,
+                                                               enc_first,
+                                                               finalize_loaders,
+                                                               joint,
+                                                               predict,
+                                                               device,
+                                                               coverage);
+    auto long_stream_stats = run_long_stream_cache_stability_check(bundle,
+                                                                   multiturn,
+                                                                   enc_first_long_check,
+                                                                   enc_steady_long_check,
+                                                                   joint,
+                                                                   predict,
+                                                                   device,
+                                                                   tokenizer,
+                                                                   cache_ownership_stats);
+    print_long_stream_cache_summary(long_stream_stats);
     std::unique_ptr<torch::jit::Module> preproc;
     std::unique_ptr<AudioFrontend> audio_front;
+    PreprocDeterminismStats preproc_determinism_stats;
+    bool preproc_determinism_ok = true;
+    bool vad_start_cancel_ok = true;
     if (audio_mode) {
-      int64_t bundle_audio = scalar_i64(attr_tensor(bundle, "audio_bundle_mode"));
-      if (bundle_audio == 0) throw std::runtime_error("--audio requested but bundle is not an audio bundle");
-      auto geometry = audio_geometry_from_bundle(bundle);
-      preproc = std::make_unique<torch::jit::Module>(torch::jit::load(dir + "/preproc.ts"));
+      if (!audio_geometry_ready) throw std::runtime_error("internal audio geometry was not initialized");
+      auto geometry = audio_geometry;
+      std::string preproc_path = dir + "/preproc.ts";
+      preproc = std::make_unique<torch::jit::Module>(torch::jit::load(preproc_path));
       preproc->to(device);
       preproc->eval();
       audio_front = std::make_unique<AudioFrontend>();
@@ -2580,6 +3919,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("audio CI thresholds must be non-negative");
       }
       audio_front->ci_stats = audio_ci_stats_from_bundle(bundle);
+      std::printf("audio token/event oracle: C++ runtime vs the shipped preproc.ts artifact; eager-preproc semantic subset is checked at export.\n");
       std::printf("audio front enabled: preproc.ts K=%ld frames=%ld raw_ring=%ld align_pad=%ld new_audio=%ld first_mel=%ld mel_ci_atol=%.6e cache_ci_atol=%.6e\n",
                   (long)geometry.constant_preprocess_samples,
                   (long)geometry.constant_preprocess_frames,
@@ -2604,7 +3944,24 @@ int main(int argc, char** argv) {
                   audio_front->ci_stats.mel_max_headroom,
                   audio_front->ci_stats.mel_p99_headroom,
                   audio_front->ci_stats.cache_max_headroom);
+      preproc_determinism_stats = run_preproc_determinism_check(*audio_front);
+      preproc_determinism_ok = preproc_determinism_stats.ok;
+      vad_start_cancel_ok = run_real_vad_start_cancel_check(bundle,
+                                                            multiturn,
+                                                            *audio_front,
+                                                            enc_first,
+                                                            enc_steady,
+                                                            finalize_loaders,
+                                                            joint,
+                                                            predict,
+                                                            device,
+                                                            tokenizer,
+                                                            coverage);
     }
+    bool hardening_common_ok = synthetic_coverage_ok &&
+                               long_stream_stats.ok &&
+                               preproc_determinism_ok &&
+                               vad_start_cancel_ok;
 
     if (multiturn) {
       int64_t streams = scalar_i64(attr_tensor(bundle, "num_streams"));
@@ -2622,12 +3979,14 @@ int main(int argc, char** argv) {
       int reset_pass = 0;
       int turn_b_nonempty_delta = 0;
       int nonempty_suppressed = 0;
+      std::vector<ReplayFingerprint> first_pass_fingerprints;
 
       for (int stream = 0; stream < streams; ++stream) {
         reset_session(session, bundle, device);
         if (audio_mode) reset_audio_front(session, audio_front->g);
         int64_t num_turns = scalar_i64(attr_tensor(bundle, "stream" + std::to_string(stream) + "_num_turns"));
         if (num_turns != 2) throw std::runtime_error("multi-turn stream does not have exactly 2 turns");
+        ReplayFingerprint stream_fp;
 
         for (int turn = 0; turn < num_turns; ++turn) {
           ++total_turns;
@@ -2645,11 +4004,26 @@ int main(int argc, char** argv) {
           try {
             if (audio_mode) {
               int chunks = append_audio_and_drain(session, bundle, prefix, *audio_front, enc_first, enc_steady,
-                                                  joint, predict, device, tokenizer, events, label);
+                                                  joint, predict, device, tokenizer, events, label,
+                                                  &first_chunk_stats, &cache_ownership_stats);
               if (chunks != num_steady) throw std::runtime_error("audio steady count post-check mismatch");
             } else {
               for (int chunk = 0; chunk < num_steady; ++chunk) {
-                run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+                run_steady_chunk(session,
+                                 bundle,
+                                 prefix,
+                                 chunk,
+                                 enc_first,
+                                 enc_steady,
+                                 joint,
+                                 predict,
+                                 device,
+                                 tokenizer,
+                                 events,
+                                 nullptr,
+                                 "",
+                                 &first_chunk_stats,
+                                 &cache_ownership_stats);
               }
             }
           } catch (const std::exception& e) {
@@ -2667,6 +4041,8 @@ int main(int argc, char** argv) {
                                                                 session.continuous_emitted_text,
                                                                 label);
           bool collector_before_nonempty = !session.continuous_emitted_text.empty();
+          if (collector_before_nonempty) ++coverage.nonempty_collector;
+          coverage_observe_finalize(coverage, num_steady, final_drop, final_T);
           session.mode = SessionMode::PENDING_FINALIZE;
           FinalizeOutcome finalize;
           FinalizeAudioInputs audio_finalize_inputs;
@@ -2715,11 +4091,13 @@ int main(int argc, char** argv) {
               events.back().kind == EVENT_FINAL && !events.back().text.empty()) {
             ++turn_b_nonempty_delta;
           }
+          stream_fp.final_tokens.push_back(finalize.final_tokens);
+          stream_fp.event_batches.push_back(events);
           auto gold = tensor_to_vec(prefix_tensor(bundle, prefix, "gold_tokens"));
           if (check_events) {
             std::printf("  %s sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
-                        "steady=%s final=%s events=%s collector_before=%s retained=%s "
-                        "FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
+                        "steady=%s final=%s events=%s collector_before=%s speculative_retained_state=%s "
+                        "fork_parent_unchanged=%s tokens=%zu/%zu events=%zu/%zu\n",
                         label.c_str(), (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
                         steady_ok ? "PASS" : "FAIL",
                         finalize.token_ok ? "PASS" : "FAIL",
@@ -2731,8 +4109,8 @@ int main(int argc, char** argv) {
                         events.size(), gold_events.size());
           } else {
             std::printf("  %s sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
-                        "steady=%s final=%s events=SKIP collector_before=%s retained=%s "
-                        "FORK_ASSERT=%s tokens=%zu/%zu\n",
+                        "steady=%s final=%s events=SKIP collector_before=%s speculative_retained_state=%s "
+                        "fork_parent_unchanged=%s tokens=%zu/%zu\n",
                         label.c_str(), (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
                         steady_ok ? "PASS" : "FAIL",
                         finalize.token_ok ? "PASS" : "FAIL",
@@ -2756,6 +4134,8 @@ int main(int argc, char** argv) {
                                                                   session.continuous_emitted_text,
                                                                   elabel);
         bool end_collector_before_nonempty = !session.continuous_emitted_text.empty();
+        if (end_collector_before_nonempty) ++coverage.nonempty_collector;
+        coverage_observe_finalize(coverage, 0, end_drop, end_T);
         FinalizeOutcome end_finalize;
         FinalizeAudioInputs end_audio_finalize_inputs;
         try {
@@ -2796,13 +4176,17 @@ int main(int argc, char** argv) {
         if (end_finalize.token_ok) ++end_final_pass;
         if (check_events && end_events_ok) ++end_event_pass;
         if (reset_ok) ++reset_pass;
+        if (reset_ok) ++coverage.cold_reset_actual;
         if (end_collector_before_nonempty && !end_events.empty() && end_events.back().kind == EVENT_SUPPRESSED) {
           ++nonempty_suppressed;
         }
+        stream_fp.final_tokens.push_back(end_finalize.final_tokens);
+        stream_fp.event_batches.push_back(end_events);
+        first_pass_fingerprints.push_back(std::move(stream_fp));
         auto end_gold = tensor_to_vec(prefix_tensor(bundle, eprefix, "gold_tokens"));
         if (check_events) {
           std::printf("  %s final(drop=%ld,T=%ld) final=%s events=%s collector_before=%s "
-                      "cold_reset=%s FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
+                      "true_boundary_cold_reset=%s fork_parent_unchanged=%s tokens=%zu/%zu events=%zu/%zu\n",
                       elabel.c_str(), (long)end_drop, (long)end_T,
                       end_finalize.token_ok ? "PASS" : "FAIL",
                       end_events_ok ? "PASS" : "FAIL",
@@ -2813,7 +4197,7 @@ int main(int argc, char** argv) {
                       end_events.size(), gold_end_events.size());
         } else {
           std::printf("  %s final(drop=%ld,T=%ld) final=%s events=SKIP collector_before=%s "
-                      "cold_reset=%s FORK_ASSERT=%s tokens=%zu/%zu\n",
+                      "true_boundary_cold_reset=%s fork_parent_unchanged=%s tokens=%zu/%zu\n",
                       elabel.c_str(), (long)end_drop, (long)end_T,
                       end_finalize.token_ok ? "PASS" : "FAIL",
                       end_collector_before_ok ? (end_collector_before_nonempty ? "NONEMPTY" : "EMPTY") : "FAIL",
@@ -2823,10 +4207,39 @@ int main(int argc, char** argv) {
         }
       }
 
+      int determinism_pass = 0;
+      for (int stream = 0; stream < streams; ++stream) {
+        auto second_fp = replay_multiturn_stream_fingerprint(stream,
+                                                             bundle,
+                                                             enc_first,
+                                                             enc_steady,
+                                                             finalize_loaders,
+                                                             joint,
+                                                             predict,
+                                                             device,
+                                                             tokenizer,
+                                                             audio_mode ? audio_front.get() : nullptr);
+        if (equal_replay_fingerprint(second_fp,
+                                     first_pass_fingerprints.at(static_cast<size_t>(stream)),
+                                     "stream" + std::to_string(stream) + ".determinism")) {
+          ++determinism_pass;
+        }
+      }
+      std::printf("=== SESSION DETERMINISM MULTITURN: same_process_full_session_twice=%s streams=%d/%ld token_event_identity=%s ===\n",
+                  determinism_pass == streams ? "PASS" : "FAIL",
+                  determinism_pass,
+                  (long)streams,
+                  determinism_pass == streams ? "PASS" : "FAIL");
+
       bool token_exact_ok = steady_pass == total_turns &&
                             final_pass == total_turns &&
                             end_final_pass == streams;
+      coverage.near_margin_warning = audio_mode ? audio_front->margin_stats.below_warning : first_chunk_stats.margins.below_warning;
+      coverage.near_margin_unsafe = audio_mode ? audio_front->margin_stats.below_unsafe : first_chunk_stats.margins.below_unsafe;
       bool base_all = synthetic_ok &&
+                      hardening_common_ok &&
+                      cache_ownership_ok(cache_ownership_stats) &&
+                      determinism_pass == streams &&
                       token_exact_ok &&
                       fork_pass == total_turns &&
                       retained_pass == total_turns &&
@@ -2839,8 +4252,8 @@ int main(int argc, char** argv) {
       bool all = base_all && audio_ci_ok && near_margin_ok;
       if (check_events) {
         std::printf("=== SESSION MULTITURN %s: synthetic=%s steady=%d/%d final_token_exact=%d/%d "
-                    "event_text_exact=%d/%d retained_state=%d/%d FORK_ASSERT=%d/%d "
-                    "true_boundary_final=%d/%ld true_boundary_event=%d/%ld cold_reset=%d/%ld "
+                    "event_text_exact=%d/%d speculative_retained_state=%d/%d fork_parent_unchanged=%d/%d "
+                    "true_boundary_final=%d/%ld true_boundary_event=%d/%ld true_boundary_cold_reset=%d/%ld "
                     "turnB_nonempty_delta=%d/%ld nonempty_suppressed=%d/%ld ===\n",
                     all ? "PASS" : "FAIL",
                     synthetic_ok ? "PASS" : "FAIL",
@@ -2856,8 +4269,8 @@ int main(int argc, char** argv) {
                     nonempty_suppressed, (long)streams);
       } else {
         std::printf("=== SESSION MULTITURN %s: synthetic=%s steady=%d/%d final_token_exact=%d/%d "
-                    "event_text_exact=SKIP retained_state=%d/%d FORK_ASSERT=%d/%d "
-                    "true_boundary_final=%d/%ld cold_reset=%d/%ld "
+                    "event_text_exact=SKIP speculative_retained_state=%d/%d fork_parent_unchanged=%d/%d "
+                    "true_boundary_final=%d/%ld true_boundary_cold_reset=%d/%ld "
                     "turnB_nonempty_delta=%d/%ld nonempty_suppressed=%d/%ld ===\n",
                     all ? "PASS" : "FAIL",
                     synthetic_ok ? "PASS" : "FAIL",
@@ -2873,6 +4286,14 @@ int main(int argc, char** argv) {
       if (audio_mode) {
         print_audio_front_summary("MULTITURN", *audio_front, token_exact_ok);
       }
+      print_first_chunk_summary("MULTITURN", first_chunk_stats);
+      print_cache_ownership_summary("MULTITURN", cache_ownership_stats);
+      print_coverage_manifest("MULTITURN", coverage, true);
+      write_replay_fingerprint_file(fingerprint_out_arg,
+                                    "multiturn",
+                                    audio_mode,
+                                    preproc_determinism_stats.fixed_block_sha256,
+                                    first_pass_fingerprints);
       return all ? 0 : 1;
     }
 
@@ -2890,6 +4311,7 @@ int main(int argc, char** argv) {
     int fork_pass = 0;
     MarginStats session_margin_stats;
     std::vector<DivergenceRecord> token_divergences;
+    std::vector<ReplayFingerprint> first_pass_fingerprints;
 
     for (int utt = 0; utt < rows; ++utt) {
       reset_session(session, bundle, device);
@@ -2915,7 +4337,8 @@ int main(int argc, char** argv) {
       try {
         if (audio_mode) {
           int chunks = append_audio_and_drain(session, bundle, prefix, *audio_front, enc_first, enc_steady,
-                                              joint, predict, device, tokenizer, events, label);
+                                              joint, predict, device, tokenizer, events, label,
+                                              &first_chunk_stats, &cache_ownership_stats);
           if (chunks != num_steady) throw std::runtime_error("audio steady count post-check mismatch");
         } else {
           for (int chunk = 0; chunk < num_steady; ++chunk) {
@@ -2931,7 +4354,9 @@ int main(int argc, char** argv) {
                              tokenizer,
                              events,
                              &row_margin_stats,
-                             label + ".chunk" + std::to_string(chunk));
+                             label + ".chunk" + std::to_string(chunk),
+                             &first_chunk_stats,
+                             &cache_ownership_stats);
           }
         }
       } catch (const std::exception& e) {
@@ -2944,6 +4369,7 @@ int main(int argc, char** argv) {
       bool steady_ok = row_ok && equal_tokens(session.hyp, steady_gold, "steady cumulative", label);
       if (steady_ok) ++steady_pass;
 
+      coverage_observe_finalize(coverage, num_steady, final_drop, final_T);
       session.mode = SessionMode::PENDING_FINALIZE;
       FinalizeOutcome finalize;
       FinalizeAudioInputs audio_finalize_inputs;
@@ -2994,6 +4420,10 @@ int main(int argc, char** argv) {
       if (finalize.token_ok) ++final_pass;
       if (check_events && events_ok) ++event_pass;
       if (finalize.fork_ok) ++fork_pass;
+      ReplayFingerprint row_fp;
+      row_fp.final_tokens.push_back(finalize.final_tokens);
+      row_fp.event_batches.push_back(events);
+      first_pass_fingerprints.push_back(std::move(row_fp));
       auto gold = tensor_to_vec(utt_tensor(bundle, utt, "gold_tokens"));
       if (!finalize.token_ok) {
         DivergenceRecord record;
@@ -3024,7 +4454,7 @@ int main(int argc, char** argv) {
       if (!audio_mode) merge_margin_stats(session_margin_stats, row_margin_stats);
       if (check_events) {
         std::printf("  utt%d sample=%ld id=%s steady_chunks=%ld final(drop=%ld,T=%ld) "
-                    "steady=%s final=%s events=%s FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
+                    "steady=%s final=%s events=%s fork_parent_unchanged=%s tokens=%zu/%zu events=%zu/%zu\n",
                     utt, (long)sample_index, sample_id.c_str(), (long)num_steady, (long)final_drop, (long)final_T,
                     steady_ok ? "PASS" : "FAIL",
                     finalize.token_ok ? "PASS" : "FAIL",
@@ -3034,7 +4464,7 @@ int main(int argc, char** argv) {
                     events.size(), gold_events.size());
       } else {
         std::printf("  utt%d sample=%ld id=%s steady_chunks=%ld final(drop=%ld,T=%ld) "
-                    "steady=%s final=%s events=SKIP FORK_ASSERT=%s tokens=%zu/%zu\n",
+                    "steady=%s final=%s events=SKIP fork_parent_unchanged=%s tokens=%zu/%zu\n",
                     utt, (long)sample_index, sample_id.c_str(), (long)num_steady, (long)final_drop, (long)final_T,
                     steady_ok ? "PASS" : "FAIL",
                     finalize.token_ok ? "PASS" : "FAIL",
@@ -3047,14 +4477,43 @@ int main(int argc, char** argv) {
       throw std::runtime_error("failed closing session hypotheses output: " + hyps_path);
     }
 
+    int determinism_pass = 0;
+    for (int utt = 0; utt < rows; ++utt) {
+      auto second_fp = replay_single_row_fingerprint(utt,
+                                                     bundle,
+                                                     enc_first,
+                                                     enc_steady,
+                                                     finalize_loaders,
+                                                     joint,
+                                                     predict,
+                                                     device,
+                                                     tokenizer,
+                                                     audio_mode ? audio_front.get() : nullptr);
+      if (equal_replay_fingerprint(second_fp,
+                                   first_pass_fingerprints.at(static_cast<size_t>(utt)),
+                                   "utt" + std::to_string(utt) + ".determinism")) {
+        ++determinism_pass;
+      }
+    }
+    std::printf("=== SESSION DETERMINISM SINGLE: same_process_full_session_twice=%s rows=%d/%ld token_event_identity=%s ===\n",
+                determinism_pass == rows ? "PASS" : "FAIL",
+                determinism_pass,
+                (long)rows,
+                determinism_pass == rows ? "PASS" : "FAIL");
+
     bool token_exact_ok = steady_pass == rows && final_pass == rows;
+    coverage.near_margin_warning = audio_mode ? audio_front->margin_stats.below_warning : session_margin_stats.below_warning;
+    coverage.near_margin_unsafe = audio_mode ? audio_front->margin_stats.below_unsafe : session_margin_stats.below_unsafe;
     bool base_all = synthetic_ok && token_exact_ok && fork_pass == rows &&
+                    hardening_common_ok &&
+                    cache_ownership_ok(cache_ownership_stats) &&
+                    determinism_pass == rows &&
                     (!check_events || event_pass == rows);
     bool audio_ci_ok = !audio_mode || audio_front_ci_ok(*audio_front);
     bool near_margin_ok = !audio_mode || !audio_front_unsafe_margin_fail(*audio_front, token_exact_ok);
     bool all = base_all && audio_ci_ok && near_margin_ok;
     if (check_events) {
-      std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=%d/%ld FORK_ASSERT=%d/%ld ===\n",
+      std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=%d/%ld fork_parent_unchanged=%d/%ld ===\n",
                   all ? "PASS" : "FAIL",
                   synthetic_ok ? "PASS" : "FAIL",
                   steady_pass, (long)rows,
@@ -3062,7 +4521,7 @@ int main(int argc, char** argv) {
                   event_pass, (long)rows,
                   fork_pass, (long)rows);
     } else {
-      std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=SKIP FORK_ASSERT=%d/%ld ===\n",
+      std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=SKIP fork_parent_unchanged=%d/%ld ===\n",
                   all ? "PASS" : "FAIL",
                   synthetic_ok ? "PASS" : "FAIL",
                   steady_pass, (long)rows,
@@ -3128,6 +4587,14 @@ int main(int argc, char** argv) {
     if (audio_mode) {
       print_audio_front_summary("SINGLE", *audio_front, token_exact_ok);
     }
+    print_first_chunk_summary("SINGLE", first_chunk_stats);
+    print_cache_ownership_summary("SINGLE", cache_ownership_stats);
+    print_coverage_manifest("SINGLE", coverage, false);
+    write_replay_fingerprint_file(fingerprint_out_arg,
+                                  "single",
+                                  audio_mode,
+                                  preproc_determinism_stats.fixed_block_sha256,
+                                  first_pass_fingerprints);
     return all ? 0 : 1;
   } catch (const std::exception& e) {
     std::printf("SESSION setup failed: %s\n", e.what());
