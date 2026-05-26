@@ -45,3 +45,12 @@ target_link_directories(finalize PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${
 target_link_libraries(finalize torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 set_target_properties(finalize PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 add_custom_target(aoti_finalize DEPENDS finalize)
+
+# 1.4: single-stream session composition gate, replaying session_bundle.ts through steady AOTI + finalize buckets.
+add_executable(session_main session_main.cpp)
+target_include_directories(session_main PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
+target_compile_definitions(session_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+target_link_directories(session_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
+target_link_libraries(session_main torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+set_target_properties(session_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+add_custom_target(session DEPENDS session_main)
