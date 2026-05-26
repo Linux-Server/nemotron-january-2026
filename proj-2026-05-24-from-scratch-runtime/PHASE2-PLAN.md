@@ -127,7 +127,15 @@ default-stream, `num_runners=1`. Log `num_runners`/stream-mode/topology in every
 - [ ] **Step 1a — 5090 mini-sweep (spend-control proxy, NOT a project GO).** Real decode + real finalize +
   per-thread streams/handles + the full telemetry schema, with a **BOUNDED workload** (`--density-sessions-per-worker`,
   not the full corpus at real-time — the unbounded default ran ~30min/N; pre-register a MINIMUM sessions-per-worker
-  + repeat count, SAME bound for headline + floor). **Headline = sm_120-AUTOTUNE-ON** (recompiled locally to a
+  + repeat count, SAME bound for headline + floor). **WARMUP IS MANDATORY (paired investigation finding, FOLDED):**
+  the native AOTI loaders pay a one-time ~225ms CUDA-12 lazy-module-load/first-launch per loader (universal — the
+  steady encoder shows the same max spike, amortized over ~292 chunks; finalize buckets run ≈once so it dominated a
+  6-sample p95 → the "234ms@N=1 / finalize-NO_PASS" was a COLD-START + tiny-sample artifact, NOT a 10× bug — warm
+  native finalize is ~11ms p95, Python-class). → **the RUNTIME must warm EVERY finalize bucket at startup** (one
+  throwaway forward per `(drop,T)`, like Python's `NEMOTRON_WARMUP_MS=200`; optionally `CUDA_MODULE_LOADING=EAGER`),
+  and **the harness must warm ALL buckets + take ≥20–100 finalize samples for a valid p95 + split telemetry**
+  (`fork_clone/aoti_run/enc_len_sync/decode_wall/decode_item_wait/decode_tokens/glue`). Autotune is ORTHOGONAL to
+  cold-start (won't fix it). Re-sweep after de-contaminating before trusting any finalize/ttfs verdict. **Headline = sm_120-AUTOTUNE-ON** (recompiled locally to a
   SEPARATE dir, not clobbering `enc_steady_aoti.pt2`) + a **bounded autotune-OFF floor** run → report the
   **autotune win** (absolute SLO-robust streams/box Δ + %, headline vs floor). Knee **attributed to a binding resource (BW / launch / lock / CPU-core)** via Nsight/CUPTI
   counters — "BW-bound" is a hypothesis, not NVML util. PASS-to-1b = autotune-on real-decode multiplier **≥2.00×**

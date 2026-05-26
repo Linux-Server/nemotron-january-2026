@@ -20,7 +20,9 @@
 #include <ctime>
 #include <mutex>
 #include <numeric>
+#include <sys/resource.h>
 #include <thread>
+#include <unistd.h>
 
 using Clock = std::chrono::steady_clock;
 
@@ -36,8 +38,11 @@ static void cuda_check(cudaError_t err, const char* expr, const char* file, int 
 #define CUDA_CHECK(expr) cuda_check((expr), #expr, __FILE__, __LINE__)
 
 struct DensityArgs {
+  std::string mode = "step0";
   std::string dir = "../artifacts";
   std::vector<int> n_values{1, 2, 4};
+  bool n_values_set = false;
+  bool target_n_set = false;
   int target_n = 16;
   int workers = 0;
   int num_runners = 0;
@@ -58,6 +63,10 @@ struct DensityArgs {
   bool correctness_default_stream_control = true;
   bool scalar_locality_probe = true;
   bool steady_overlap_probe = true;
+  int density_rows = -1;
+  int density_sessions_per_worker = 0;
+  double density_chunk_period_ms = 160.0;
+  bool density_warmup = true;
 };
 
 static double elapsed_ms(Clock::time_point start, Clock::time_point end) {
@@ -90,10 +99,14 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       if (i + 1 >= argc) throw std::runtime_error(std::string(flag) + " requires a value");
       return argv[++i];
     };
-    if (arg == "--n-values") {
+    if (arg == "--mode") {
+      args.mode = need_value("--mode");
+    } else if (arg == "--n-values") {
       args.n_values = parse_int_list(need_value("--n-values"));
+      args.n_values_set = true;
     } else if (arg == "--target-n") {
       args.target_n = std::stoi(need_value("--target-n"));
+      args.target_n_set = true;
     } else if (arg == "--workers") {
       args.workers = std::stoi(need_value("--workers"));
     } else if (arg == "--num-runners") {
@@ -134,6 +147,14 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       args.scalar_locality_probe = false;
     } else if (arg == "--no-steady-overlap-probe") {
       args.steady_overlap_probe = false;
+    } else if (arg == "--density-rows") {
+      args.density_rows = std::stoi(need_value("--density-rows"));
+    } else if (arg == "--density-sessions-per-worker") {
+      args.density_sessions_per_worker = std::stoi(need_value("--density-sessions-per-worker"));
+    } else if (arg == "--density-chunk-period-ms") {
+      args.density_chunk_period_ms = std::stod(need_value("--density-chunk-period-ms"));
+    } else if (arg == "--no-density-warmup") {
+      args.density_warmup = false;
     } else if (!dir_set) {
       args.dir = arg;
       dir_set = true;
@@ -141,8 +162,18 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       throw std::runtime_error("unknown argument: " + arg);
     }
   }
+  if (args.mode != "step0" && args.mode != "density-sweep") {
+    throw std::runtime_error("--mode must be step0 or density-sweep");
+  }
+  if (args.mode == "density-sweep" && !args.n_values_set) {
+    args.n_values = {1, 2, 4, 8, 16};
+  }
   if (args.n_values.empty()) throw std::runtime_error("--n-values cannot be empty");
+  for (int n : args.n_values) {
+    if (n <= 0) throw std::runtime_error("--n-values entries must be positive");
+  }
   if (args.target_n > 0 &&
+      (args.mode != "density-sweep" || !args.n_values_set || args.target_n_set) &&
       std::find(args.n_values.begin(), args.n_values.end(), args.target_n) == args.n_values.end()) {
     args.n_values.push_back(args.target_n);
   }
@@ -159,6 +190,15 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   }
   if (args.finalize_mode != "both" && args.finalize_mode != "same" && args.finalize_mode != "mixed") {
     throw std::runtime_error("--finalize-mode must be both, same, or mixed");
+  }
+  if (args.density_rows == 0 || args.density_rows < -1) {
+    throw std::runtime_error("--density-rows must be positive or -1");
+  }
+  if (args.density_sessions_per_worker < 0) {
+    throw std::runtime_error("--density-sessions-per-worker must be non-negative");
+  }
+  if (args.density_chunk_period_ms <= 0.0) {
+    throw std::runtime_error("--density-chunk-period-ms must be positive");
   }
   return args;
 }
@@ -261,6 +301,21 @@ static size_t gpu_used_bytes() {
   return total_bytes - free_bytes;
 }
 
+static size_t gpu_total_bytes() {
+  size_t free_bytes = 0;
+  size_t total_bytes = 0;
+  CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
+  return total_bytes;
+}
+
+static Clock::duration ms_duration(double ms) {
+  return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(ms));
+}
+
+static double signed_elapsed_ms(Clock::time_point start, Clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 static void cleanup_cuda_cache() {
   CUDA_CHECK(cudaDeviceSynchronize());
   c10::cuda::CUDACachingAllocator::emptyCache();
@@ -307,6 +362,127 @@ struct MemorySampler {
     return peak.load(std::memory_order_relaxed);
   }
 };
+
+struct ResourceStats {
+  bool gpu_util_available = false;
+  int gpu_util_samples = 0;
+  double gpu_util_mean_pct = 0.0;
+  double gpu_util_p50_pct = 0.0;
+  double gpu_util_p95_pct = 0.0;
+  double cpu_cores_used = 0.0;
+  double cpu_util_pct_of_box = 0.0;
+  int cpu_threads = 0;
+};
+
+static bool read_nvidia_smi_sample(double* gpu_util_pct, double* mem_used_mib) {
+  FILE* pipe = popen("nvidia-smi --id=0 --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null", "r");
+  if (pipe == nullptr) return false;
+  char buffer[256];
+  bool ok = false;
+  if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+    std::string text(buffer);
+    std::replace(text.begin(), text.end(), ',', ' ');
+    std::istringstream iss(text);
+    double util = 0.0;
+    double mem = 0.0;
+    if (iss >> util >> mem) {
+      if (gpu_util_pct != nullptr) *gpu_util_pct = util;
+      if (mem_used_mib != nullptr) *mem_used_mib = mem;
+      ok = true;
+    }
+  }
+  int rc = pclose(pipe);
+  (void)rc;
+  return ok;
+}
+
+static double rusage_seconds(const struct rusage& usage) {
+  return static_cast<double>(usage.ru_utime.tv_sec) +
+         static_cast<double>(usage.ru_utime.tv_usec) / 1000000.0 +
+         static_cast<double>(usage.ru_stime.tv_sec) +
+         static_cast<double>(usage.ru_stime.tv_usec) / 1000000.0;
+}
+
+struct ResourceSampler {
+  std::atomic<bool> stop{false};
+  std::thread thread;
+  std::mutex mutex;
+  std::vector<double> gpu_util_pct;
+  Clock::time_point start_wall;
+  Clock::time_point end_wall;
+  struct rusage start_usage {};
+  struct rusage end_usage {};
+  int cpu_threads = 0;
+
+  ~ResourceSampler() {
+    stop.store(true);
+    if (thread.joinable()) {
+      try {
+        thread.join();
+      } catch (const std::exception&) {
+      }
+    }
+  }
+
+  void start() {
+    stop.store(false);
+    cpu_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    getrusage(RUSAGE_SELF, &start_usage);
+    start_wall = Clock::now();
+    thread = std::thread([this] {
+      while (!stop.load(std::memory_order_relaxed)) {
+        double util = 0.0;
+        double mem = 0.0;
+        if (read_nvidia_smi_sample(&util, &mem)) {
+          std::lock_guard<std::mutex> lock(mutex);
+          gpu_util_pct.push_back(util);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      }
+    });
+  }
+
+  ResourceStats finish() {
+    stop.store(true);
+    if (thread.joinable()) thread.join();
+    end_wall = Clock::now();
+    getrusage(RUSAGE_SELF, &end_usage);
+    ResourceStats out;
+    out.cpu_threads = cpu_threads;
+    double wall_s = std::chrono::duration<double>(end_wall - start_wall).count();
+    double cpu_s = rusage_seconds(end_usage) - rusage_seconds(start_usage);
+    if (wall_s > 0.0) {
+      out.cpu_cores_used = cpu_s / wall_s;
+      if (cpu_threads > 0) out.cpu_util_pct_of_box = 100.0 * out.cpu_cores_used / static_cast<double>(cpu_threads);
+    }
+    std::vector<double> samples;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      samples = gpu_util_pct;
+    }
+    auto gpu = summarize(samples);
+    out.gpu_util_available = !samples.empty();
+    out.gpu_util_samples = static_cast<int>(samples.size());
+    out.gpu_util_mean_pct = gpu.mean;
+    out.gpu_util_p50_pct = gpu.p50;
+    out.gpu_util_p95_pct = gpu.p95;
+    return out;
+  }
+};
+
+static std::string resource_stats_json(const ResourceStats& stats) {
+  std::ostringstream oss;
+  oss << "{\"gpu_util_available\":" << json_bool(stats.gpu_util_available)
+      << ",\"gpu_util_samples\":" << stats.gpu_util_samples
+      << ",\"gpu_util_mean_pct\":" << stats.gpu_util_mean_pct
+      << ",\"gpu_util_p50_pct\":" << stats.gpu_util_p50_pct
+      << ",\"gpu_util_p95_pct\":" << stats.gpu_util_p95_pct
+      << ",\"cpu_cores_used\":" << stats.cpu_cores_used
+      << ",\"cpu_util_pct_of_box\":" << stats.cpu_util_pct_of_box
+      << ",\"cpu_threads\":" << stats.cpu_threads
+      << "}";
+  return oss.str();
+}
 
 struct StartGate {
   std::mutex mutex;
@@ -2454,6 +2630,638 @@ static bool run_finalize_gate(const DensityArgs& args,
   return ok;
 }
 
+struct DensitySweepRunResult {
+  int n = 0;
+  int workers = 0;
+  int num_runners = 0;
+  int finalize_num_runners = 0;
+  int rows_total = 0;
+  int requested_sessions = 0;
+  int sessions_completed = 0;
+  int chunks_completed = 0;
+  int errors = 0;
+  int mismatches = 0;
+  int unique_streams = 0;
+  bool stream_uniqueness_ok = false;
+  bool completed = false;
+  bool oom = false;
+  bool keepup_ok = false;
+  bool ttfs_ok = false;
+  bool correctness_ok = false;
+  bool slo_robust = false;
+  bool explicit_stream = true;
+  double wall_ms = 0.0;
+  double offered_audio_ms = 0.0;
+  double throughput_realtime_streams = 0.0;
+  double throughput_sessions_per_s = 0.0;
+  size_t used_before_bytes = 0;
+  size_t used_after_loaders_bytes = 0;
+  size_t used_after_run_bytes = 0;
+  size_t peak_mem_bytes = 0;
+  size_t total_mem_bytes = 0;
+  TimingBuckets timings;
+  std::vector<double> lag_ms;
+  std::vector<double> ttfs_ms;
+  std::vector<uintptr_t> stream_handles;
+  ResourceStats resource_stats;
+  std::string finalize_loader_memory_json = "{}";
+  std::string error;
+};
+
+struct DensityWorkerOutput {
+  TimingBuckets timings;
+  std::vector<double> lag_ms;
+  std::vector<double> ttfs_ms;
+  int sessions_completed = 0;
+  int chunks_completed = 0;
+  int mismatches = 0;
+  double offered_audio_ms = 0.0;
+  std::string error;
+};
+
+static std::vector<std::vector<int>> assign_density_utts(int workers,
+                                                         int rows_total,
+                                                         int requested_sessions) {
+  if (workers <= 0) throw std::runtime_error("density sweep workers must be positive");
+  if (rows_total <= 0) throw std::runtime_error("density sweep requires at least one utterance");
+  std::vector<std::vector<int>> assigned(static_cast<size_t>(workers));
+  for (int i = 0; i < requested_sessions; ++i) {
+    assigned[static_cast<size_t>(i % workers)].push_back(i % rows_total);
+  }
+  return assigned;
+}
+
+static std::vector<FinalizeBucketKey> needed_finalize_buckets_for_assignments(torch::jit::Module& bundle,
+                                                                              const std::vector<std::vector<int>>& assigned) {
+  std::vector<FinalizeBucketKey> keys;
+  for (const auto& worker_utts : assigned) {
+    for (int utt : worker_utts) {
+      int64_t T = scalar_i64(utt_tensor(bundle, utt, "final_T"));
+      if (T <= 0) continue;
+      int64_t drop = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
+      keys.emplace_back(drop, T);
+    }
+  }
+  return unique_finalize_bucket_keys(keys);
+}
+
+static std::string uintptr_list_json(const std::vector<uintptr_t>& values) {
+  std::ostringstream oss;
+  oss << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) oss << ",";
+    oss << values[i];
+  }
+  oss << "]";
+  return oss.str();
+}
+
+static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
+                                                        torch::Device device,
+                                                        const std::string& stamp,
+                                                        int n,
+                                                        int rows_total,
+                                                        const std::vector<RowReplayResult>& reference) {
+  DensitySweepRunResult result;
+  result.n = n;
+  result.workers = n;
+  result.num_runners = n;
+  result.finalize_num_runners = capped_general_finalize_runners(n);
+  result.rows_total = rows_total;
+  result.explicit_stream = args.stream_mode == "explicit";
+  result.total_mem_bytes = gpu_total_bytes();
+  if (n <= 0) throw std::runtime_error("density sweep N must be positive");
+  if (!result.explicit_stream) {
+    std::printf("=== DENSITY 1a WARNING: --stream-mode=%s is a control, not the Step-1a proven topology ===\n",
+                args.stream_mode.c_str());
+  }
+
+  if (args.density_sessions_per_worker > 0) {
+    result.requested_sessions = args.density_sessions_per_worker * n;
+  } else if (args.density_rows > 0) {
+    result.requested_sessions = args.density_rows;
+  } else {
+    result.requested_sessions = rows_total;
+  }
+  if (result.requested_sessions <= 0) throw std::runtime_error("density sweep requested zero sessions");
+  int reference_rows_needed = std::min(rows_total, result.requested_sessions);
+  if (static_cast<int>(reference.size()) < reference_rows_needed) {
+    throw std::runtime_error("density sweep serial reference is smaller than the assigned utterance set");
+  }
+
+  std::printf("=== DENSITY 1a RUN START: N=%d workers=%d steady_num_runners=%d finalize_num_runners=%d "
+              "sessions=%d rows_total=%d cadence=%.3fms ===\n",
+              n,
+              result.workers,
+              result.num_runners,
+              result.finalize_num_runners,
+              result.requested_sessions,
+              rows_total,
+              args.density_chunk_period_ms);
+
+  cleanup_cuda_cache();
+  MemorySampler mem;
+  mem.start();
+  result.used_before_bytes = gpu_used_bytes();
+  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, result.num_runners, -1);
+  FinalizeBucketLoaderPool finalize_loaders(args.dir,
+                                            device,
+                                            result.finalize_num_runners,
+                                            "1a_density_sweep_capped_finalize_runner_pool");
+
+  torch::jit::Module assignment_bundle = torch::jit::load(args.dir + "/session_bundle.ts");
+  verify_session_bundle_meta(assignment_bundle, false);
+  auto assigned = assign_density_utts(result.workers, rows_total, result.requested_sessions);
+  auto needed_buckets = needed_finalize_buckets_for_assignments(assignment_bundle, assigned);
+  finalize_loaders.preload(needed_buckets);
+  CUDA_CHECK(cudaDeviceSynchronize());
+  result.used_after_loaders_bytes = gpu_used_bytes();
+
+  std::vector<std::unique_ptr<WorkerContext>> contexts;
+  contexts.reserve(static_cast<size_t>(result.workers));
+  std::vector<c10::cuda::CUDAStream> streams;
+  streams.reserve(static_cast<size_t>(result.workers));
+  std::set<uintptr_t> stream_ids;
+  for (int worker = 0; worker < result.workers; ++worker) {
+    auto stream = stream_for_worker(result.explicit_stream, worker);
+    streams.push_back(stream);
+    uintptr_t handle = stream_handle_value(stream);
+    stream_ids.insert(handle);
+    result.stream_handles.push_back(handle);
+    contexts.push_back(make_worker_context(args.dir, device, stream));
+  }
+  result.unique_streams = static_cast<int>(stream_ids.size());
+  result.stream_uniqueness_ok = !result.explicit_stream || result.unique_streams == result.workers;
+  auto tokenizer = tokenizer_from_bundle(contexts[0]->bundle);
+
+  if (args.density_warmup) {
+    for (int worker = 0; worker < result.workers; ++worker) {
+      if (assigned[static_cast<size_t>(worker)].empty()) continue;
+      int warm_utt = assigned[static_cast<size_t>(worker)][0];
+      auto warm = replay_row_density(warm_utt,
+                                     *contexts[worker],
+                                     enc_steady,
+                                     finalize_loaders,
+                                     device,
+                                     tokenizer,
+                                     result.explicit_stream,
+                                     args.mutex_serialize_run,
+                                     nullptr,
+                                     true);
+      if (!warm.ok) {
+        throw std::runtime_error("density sweep warmup failed for worker" + std::to_string(worker) +
+                                 " utt" + std::to_string(warm_utt) +
+                                 (warm.error.empty() ? "" : ": " + warm.error));
+      }
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+  }
+
+  ResourceSampler resources;
+  resources.start();
+  StartGate gate(result.workers);
+  std::vector<DensityWorkerOutput> worker_outputs(static_cast<size_t>(result.workers));
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<size_t>(result.workers));
+  for (int worker = 0; worker < result.workers; ++worker) {
+    threads.emplace_back([&, worker] {
+      try {
+        c10::cuda::CUDAGuard device_guard(device.index());
+        auto& out = worker_outputs[static_cast<size_t>(worker)];
+        gate.arrive_and_wait();
+        for (int utt : assigned[static_cast<size_t>(worker)]) {
+          SessionState session;
+          reset_session(session, contexts[worker]->bundle, device);
+          std::vector<EmittedEvent> events;
+          std::string prefix = "utt" + std::to_string(utt);
+          std::string label = "density.1a.N" + std::to_string(n) +
+                              ".worker" + std::to_string(worker) +
+                              ".utt" + std::to_string(utt);
+          int64_t num_steady = scalar_i64(utt_tensor(contexts[worker]->bundle, utt, "num_steady"));
+          auto session_start = Clock::now();
+          for (int chunk = 0; chunk < num_steady; ++chunk) {
+            auto feed_time = session_start + ms_duration(args.density_chunk_period_ms * static_cast<double>(chunk));
+            std::this_thread::sleep_until(feed_time);
+            run_steady_chunk_density(session,
+                                     contexts[worker]->bundle,
+                                     prefix,
+                                     chunk,
+                                     contexts[worker]->enc_first,
+                                     enc_steady,
+                                     contexts[worker]->joint,
+                                     contexts[worker]->predict,
+                                     device,
+                                     tokenizer,
+                                     events,
+                                     contexts[worker]->stream,
+                                     result.explicit_stream,
+                                     args.mutex_serialize_run,
+                                     &out.timings,
+                                     label + ".chunk" + std::to_string(chunk));
+            auto finish = Clock::now();
+            auto deadline = session_start + ms_duration(args.density_chunk_period_ms * static_cast<double>(chunk + 1));
+            out.lag_ms.push_back(signed_elapsed_ms(deadline, finish));
+            ++out.chunks_completed;
+          }
+          out.offered_audio_ms += args.density_chunk_period_ms * static_cast<double>(num_steady);
+          auto vad_deadline = session_start + ms_duration(args.density_chunk_period_ms * static_cast<double>(num_steady));
+          std::this_thread::sleep_until(vad_deadline);
+          auto ttfs_start = Clock::now();
+          vad_stop(session);
+          auto finalize = run_finalize_density(session,
+                                               contexts[worker]->bundle,
+                                               prefix,
+                                               label,
+                                               finalize_loaders,
+                                               contexts[worker]->joint,
+                                               contexts[worker]->predict,
+                                               device,
+                                               tokenizer,
+                                               events,
+                                               FinalizeFinish::SPECULATIVE_KEEP,
+                                               contexts[worker]->stream,
+                                               result.explicit_stream,
+                                               args.mutex_serialize_run,
+                                               &out.timings);
+          out.ttfs_ms.push_back(elapsed_ms_since(ttfs_start));
+          bool same = finalize.token_ok &&
+                      finalize.fork_ok &&
+                      finalize.final_tokens == reference[static_cast<size_t>(utt)].final_tokens &&
+                      strict_events_equal(events, reference[static_cast<size_t>(utt)].events, label + ".serial_oracle");
+          if (!same) ++out.mismatches;
+          ++out.sessions_completed;
+        }
+      } catch (const std::exception& e) {
+        worker_outputs[static_cast<size_t>(worker)].error = e.what();
+      }
+    });
+  }
+  gate.wait_until_ready_and_start();
+  for (auto& thread : threads) thread.join();
+  auto end_time = Clock::now();
+  CUDA_CHECK(cudaDeviceSynchronize());
+  result.resource_stats = resources.finish();
+  result.wall_ms = elapsed_ms(gate.start_time, end_time);
+  result.peak_mem_bytes = mem.finish();
+  result.used_after_run_bytes = gpu_used_bytes();
+  result.finalize_loader_memory_json = finalize_loaders.memory_json(result.num_runners);
+
+  for (int worker = 0; worker < result.workers; ++worker) {
+    const auto& out = worker_outputs[static_cast<size_t>(worker)];
+    result.timings.append(out.timings);
+    result.lag_ms.insert(result.lag_ms.end(), out.lag_ms.begin(), out.lag_ms.end());
+    result.ttfs_ms.insert(result.ttfs_ms.end(), out.ttfs_ms.begin(), out.ttfs_ms.end());
+    result.sessions_completed += out.sessions_completed;
+    result.chunks_completed += out.chunks_completed;
+    result.mismatches += out.mismatches;
+    result.offered_audio_ms += out.offered_audio_ms;
+    if (!out.error.empty()) {
+      ++result.errors;
+      std::printf("  density sweep N=%d worker%d exception: %s\n", n, worker, out.error.c_str());
+    }
+  }
+
+  result.throughput_realtime_streams = result.wall_ms > 0.0 ? result.offered_audio_ms / result.wall_ms : 0.0;
+  result.throughput_sessions_per_s = result.wall_ms > 0.0
+                                         ? 1000.0 * static_cast<double>(result.sessions_completed) / result.wall_ms
+                                         : 0.0;
+  auto lag = summarize(result.lag_ms);
+  auto ttfs = summarize(result.ttfs_ms);
+  result.keepup_ok = lag.n > 0 && lag.p95 < 500.0;
+  result.ttfs_ok = ttfs.n > 0 && ttfs.p95 <= 175.0 && ttfs.p99 <= 250.0;
+  result.correctness_ok = result.errors == 0 &&
+                          result.mismatches == 0 &&
+                          result.sessions_completed == result.requested_sessions &&
+                          result.stream_uniqueness_ok;
+  result.completed = result.sessions_completed == result.requested_sessions && result.errors == 0;
+  result.slo_robust = result.completed && result.correctness_ok && result.keepup_ok && result.ttfs_ok;
+
+  std::ostringstream json;
+  json << "{\"check\":\"1a_density_sweep_full_session\""
+       << ",\"num_runners\":" << result.num_runners
+       << ",\"workers\":" << result.workers
+       << ",\"steady_num_runners\":" << result.num_runners
+       << ",\"finalize_num_runners_per_loaded_bucket\":" << result.finalize_num_runners
+       << ",\"stream_mode\":\"" << stream_mode_label(result.explicit_stream, args.mutex_serialize_run) << "\""
+       << ",\"topology\":\"shared_steady_loader_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
+       << ",\"cadence_ms\":" << args.density_chunk_period_ms
+       << ",\"rows_total\":" << rows_total
+       << ",\"requested_sessions\":" << result.requested_sessions
+       << ",\"sessions_completed\":" << result.sessions_completed
+       << ",\"chunks_completed\":" << result.chunks_completed
+       << ",\"errors\":" << result.errors
+       << ",\"mismatches\":" << result.mismatches
+       << ",\"serial_oracle_match_pass\":" << json_bool(result.mismatches == 0 && result.errors == 0)
+       << ",\"stream_uniqueness_pass\":" << json_bool(result.stream_uniqueness_ok)
+       << ",\"slo_robust\":" << json_bool(result.slo_robust)
+       << ",\"keepup_lag_p95_lt_500ms\":" << json_bool(result.keepup_ok)
+       << ",\"ttfs_budget_p95_175_p99_250_pass\":" << json_bool(result.ttfs_ok)
+       << ",\"ttfs_budget\":{\"p95_ms\":175,\"p99_ms\":250}"
+       << ",\"throughput_realtime_streams\":" << result.throughput_realtime_streams
+       << ",\"throughput_sessions_per_s\":" << result.throughput_sessions_per_s
+       << ",\"wall_ms\":" << result.wall_ms
+       << ",\"offered_audio_ms\":" << result.offered_audio_ms
+       << ",\"lag\":" << stats_json(lag)
+       << ",\"ttfs\":" << stats_json(ttfs)
+       << ",\"steady_latency\":" << stats_json(summarize(result.timings.latency_ms))
+       << ",\"steady_runner_wait\":" << stats_json(summarize(result.timings.runner_wait_ms))
+       << ",\"steady_gpu\":" << stats_json(summarize(result.timings.steady_gpu_ms))
+       << ",\"item_wait\":" << stats_json(summarize(result.timings.scalar_sync_wait_ms))
+       << ",\"item_wait_pct_of_steady_gpu\":" << stats_json(summarize(result.timings.scalar_sync_pct_of_gpu))
+       << ",\"finalize_wait\":" << stats_json(summarize(result.timings.finalize_runner_wait_ms))
+       << ",\"finalize_gpu\":" << stats_json(summarize(result.timings.finalize_gpu_ms))
+       << ",\"finalize_total\":" << stats_json(summarize(result.timings.finalize_total_ms))
+       << ",\"resource\":" << resource_stats_json(result.resource_stats)
+       << ",\"finalize_loader_memory\":" << result.finalize_loader_memory_json
+       << ",\"unique_streams\":" << result.unique_streams
+       << ",\"stream_handles\":" << uintptr_list_json(result.stream_handles)
+       << ",\"peak_gpu_mem_bytes\":" << result.peak_mem_bytes
+       << ",\"total_gpu_mem_bytes\":" << result.total_mem_bytes
+       << ",\"used_before_bytes\":" << result.used_before_bytes
+       << ",\"used_after_loaders_bytes\":" << result.used_after_loaders_bytes
+       << ",\"used_after_run_bytes\":" << result.used_after_run_bytes
+       << "}";
+  emit_telemetry(args.dir,
+                 stamp,
+                 result.num_runners,
+                 stream_mode_label(result.explicit_stream, args.mutex_serialize_run),
+                 "1a_full_session_density_sweep",
+                 json.str());
+
+  std::printf("=== DENSITY 1a ROW N=%d %s: throughput_rt=%.3f streams sessions/s=%.3f "
+              "ttfs_p50/p95/p99=%.3f/%.3f/%.3fms spread=%.3fms lag_p50/p95=%.3f/%.3fms "
+              "steady_gpu_p50/p95=%.3f/%.3fms finalize_wait_p95=%.3fms "
+              "cpu_cores=%.2f/%d gpu_util_mean=%.1f%% peak_mem=%.3fGiB mismatches=%d errors=%d ===\n",
+              result.n,
+              result.slo_robust ? "SLO_ROBUST" : "NOT_SLO_ROBUST",
+              result.throughput_realtime_streams,
+              result.throughput_sessions_per_s,
+              ttfs.p50,
+              ttfs.p95,
+              ttfs.p99,
+              ttfs.p95 - ttfs.p50,
+              lag.p50,
+              lag.p95,
+              summarize(result.timings.steady_gpu_ms).p50,
+              summarize(result.timings.steady_gpu_ms).p95,
+              summarize(result.timings.finalize_runner_wait_ms).p95,
+              result.resource_stats.cpu_cores_used,
+              result.resource_stats.cpu_threads,
+              result.resource_stats.gpu_util_mean_pct,
+              static_cast<double>(result.peak_mem_bytes) / (1024.0 * 1024.0 * 1024.0),
+              result.mismatches,
+              result.errors);
+  return result;
+}
+
+static DensitySweepRunResult run_density_sweep_one(const DensityArgs& args,
+                                                   torch::Device device,
+                                                   const std::string& stamp,
+                                                   int n,
+                                                   int rows_total,
+                                                   const std::vector<RowReplayResult>& reference) {
+  try {
+    return run_density_sweep_one_impl(args, device, stamp, n, rows_total, reference);
+  } catch (const std::exception& e) {
+    DensitySweepRunResult result;
+    result.n = n;
+    result.workers = n;
+    result.num_runners = n;
+    result.finalize_num_runners = capped_general_finalize_runners(std::max(1, n));
+    result.rows_total = rows_total;
+    result.total_mem_bytes = gpu_total_bytes();
+    result.error = e.what();
+    std::string lower = result.error;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) {
+      return static_cast<char>(std::tolower(ch));
+    });
+    result.oom = lower.find("out of memory") != std::string::npos ||
+                 lower.find("cuda error") != std::string::npos ||
+                 lower.find("memory") != std::string::npos;
+    try {
+      result.peak_mem_bytes = gpu_used_bytes();
+      cleanup_cuda_cache();
+    } catch (const std::exception&) {
+    }
+    std::ostringstream json;
+    json << "{\"check\":\"1a_density_sweep_full_session\""
+         << ",\"num_runners\":" << result.num_runners
+         << ",\"workers\":" << result.workers
+         << ",\"slo_robust\":false"
+         << ",\"oom\":" << json_bool(result.oom)
+         << ",\"error\":" << json_quote(result.error)
+         << ",\"peak_gpu_mem_bytes\":" << result.peak_mem_bytes
+         << ",\"total_gpu_mem_bytes\":" << result.total_mem_bytes
+         << "}";
+    emit_telemetry(args.dir,
+                   stamp,
+                   result.num_runners,
+                   stream_mode_label(args.stream_mode == "explicit", args.mutex_serialize_run),
+                   "1a_full_session_density_sweep_error",
+                   json.str());
+    std::printf("=== DENSITY 1a ROW N=%d ERROR: oom=%s error=%s ===\n",
+                n,
+                result.oom ? "true" : "false",
+                result.error.c_str());
+    return result;
+  }
+}
+
+struct DensitySweepSummary {
+  std::vector<DensitySweepRunResult> runs;
+  int knee_n = 0;
+  int single_thread_keepup_n = 0;
+  double multiplier = 0.0;
+  bool pass_to_1b = false;
+  bool correctness_at_knee = false;
+  std::string binding_slo = "none";
+  std::string binding_resource = "not_observed";
+};
+
+static const DensitySweepRunResult* find_density_result(const std::vector<DensitySweepRunResult>& runs, int n) {
+  for (const auto& run : runs) {
+    if (run.n == n) return &run;
+  }
+  return nullptr;
+}
+
+static std::string infer_binding_slo(const std::vector<DensitySweepRunResult>& runs, int knee_n) {
+  for (const auto& run : runs) {
+    if (run.n <= knee_n) continue;
+    if (run.oom) return "memory_oom";
+    if (!run.correctness_ok && run.completed) return "correctness";
+    if (!run.ttfs_ok) return "ttfs_p95_or_p99";
+    if (!run.keepup_ok) return "keepup_lag_p95";
+    if (!run.completed) return "runtime_error";
+  }
+  return "none_observed_in_sweep";
+}
+
+static std::string infer_binding_resource(const std::vector<DensitySweepRunResult>& runs, int knee_n) {
+  const DensitySweepRunResult* base = find_density_result(runs, 1);
+  SummaryStats base_steady_gpu = base != nullptr ? summarize(base->timings.steady_gpu_ms) : SummaryStats{};
+  const DensitySweepRunResult* first_bound = nullptr;
+  for (const auto& run : runs) {
+    if (run.n <= knee_n) continue;
+    first_bound = &run;
+    break;
+  }
+  if (first_bound == nullptr) {
+    first_bound = runs.empty() ? nullptr : &runs.back();
+  }
+  if (first_bound == nullptr) return "not_observed";
+  if (first_bound->oom) return "memory";
+  if (first_bound->total_mem_bytes > 0 &&
+      static_cast<double>(first_bound->peak_mem_bytes) / static_cast<double>(first_bound->total_mem_bytes) >= 0.92) {
+    return "memory";
+  }
+  if (first_bound->resource_stats.cpu_threads > 0 &&
+      first_bound->resource_stats.cpu_cores_used >= 0.85 * static_cast<double>(first_bound->resource_stats.cpu_threads)) {
+    return "CPU cores";
+  }
+  auto steady_gpu = summarize(first_bound->timings.steady_gpu_ms);
+  if (base_steady_gpu.p50 > 0.0 && steady_gpu.p50 / base_steady_gpu.p50 >= 1.50) {
+    return "GPU encoder contention";
+  }
+  if (first_bound->resource_stats.gpu_util_available && first_bound->resource_stats.gpu_util_mean_pct >= 80.0) {
+    return "GPU encoder contention";
+  }
+  if (!first_bound->ttfs_ok) return "finalize/TTFS tail";
+  if (!first_bound->keepup_ok) return "mixed_or_unknown_keepup";
+  return "not_observed";
+}
+
+static void emit_density_sweep_manifest(const DensityArgs& args,
+                                        const std::string& stamp,
+                                        const DensitySweepSummary& summary,
+                                        int rows_total) {
+  std::string logs_dir = args.dir + "/logs/" + stamp;
+  fs::create_directories(logs_dir);
+  std::string path = logs_dir + "/density_sweep_manifest.json";
+  std::ofstream out(path, std::ios::out | std::ios::trunc);
+  if (!out) throw std::runtime_error("failed to open density sweep manifest: " + path);
+  out << "{"
+      << "\"stamp\":\"" << stamp << "\""
+      << ",\"mode\":\"density-sweep\""
+      << ",\"status\":\"" << (summary.pass_to_1b ? "PASS_TO_1B" : "NO_PASS_TO_1B") << "\""
+      << ",\"dir\":\"" << args.dir << "\""
+      << ",\"n_values\":" << int_list_json(args.n_values)
+      << ",\"rows_total\":" << rows_total
+      << ",\"density_rows\":" << args.density_rows
+      << ",\"density_sessions_per_worker\":" << args.density_sessions_per_worker
+      << ",\"cadence_ms\":" << args.density_chunk_period_ms
+      << ",\"knee_n\":" << summary.knee_n
+      << ",\"single_thread_keepup_n\":" << summary.single_thread_keepup_n
+      << ",\"multiplier\":" << summary.multiplier
+      << ",\"pass_to_1b\":" << json_bool(summary.pass_to_1b)
+      << ",\"binding_slo\":\"" << summary.binding_slo << "\""
+      << ",\"binding_resource\":\"" << summary.binding_resource << "\""
+      << "}\n";
+  if (!out) throw std::runtime_error("failed to write density sweep manifest: " + path);
+  std::printf("DENSITY_SWEEP_MANIFEST path=%s status=%s\n",
+              path.c_str(),
+              summary.pass_to_1b ? "PASS_TO_1B" : "NO_PASS_TO_1B");
+}
+
+static DensitySweepSummary run_density_sweep(const DensityArgs& args,
+                                             torch::Device device,
+                                             const std::string& stamp,
+                                             int rows_total) {
+  int max_n = *std::max_element(args.n_values.begin(), args.n_values.end());
+  int max_requested_sessions = rows_total;
+  if (args.density_sessions_per_worker > 0) {
+    max_requested_sessions = args.density_sessions_per_worker * max_n;
+  } else if (args.density_rows > 0) {
+    max_requested_sessions = args.density_rows;
+  }
+  int reference_rows = std::min(rows_total, std::max(1, max_requested_sessions));
+  std::printf("=== DENSITY 1a SERIAL ORACLE BUILD: rows=%d/%d ===\n", reference_rows, rows_total);
+  TimingBuckets ref_timings;
+  auto reference = build_serial_reference(args, device, reference_rows, &ref_timings);
+  std::printf("=== DENSITY 1a SERIAL ORACLE PASS: rows=%d/%d ===\n", reference_rows, rows_total);
+  cleanup_cuda_cache();
+
+  DensitySweepSummary summary;
+  for (int n : args.n_values) {
+    auto run = run_density_sweep_one(args, device, stamp, n, rows_total, reference);
+    bool stop_after = run.oom;
+    summary.runs.push_back(std::move(run));
+    cleanup_cuda_cache();
+    if (stop_after) {
+      std::printf("=== DENSITY 1a STOPPING SWEEP AFTER N=%d: memory/runtime bound hit ===\n", n);
+      break;
+    }
+  }
+
+  for (const auto& run : summary.runs) {
+    if (run.slo_robust) summary.knee_n = std::max(summary.knee_n, run.n);
+  }
+  const auto* n1 = find_density_result(summary.runs, 1);
+  summary.single_thread_keepup_n = (n1 != nullptr && n1->slo_robust) ? 1 : 0;
+  summary.multiplier = summary.single_thread_keepup_n > 0
+                           ? static_cast<double>(summary.knee_n) / static_cast<double>(summary.single_thread_keepup_n)
+                           : 0.0;
+  const auto* knee = find_density_result(summary.runs, summary.knee_n);
+  summary.correctness_at_knee = knee != nullptr && knee->correctness_ok;
+  summary.pass_to_1b = summary.multiplier >= 2.0 && summary.correctness_at_knee && summary.knee_n > 0;
+  summary.binding_slo = infer_binding_slo(summary.runs, summary.knee_n);
+  summary.binding_resource = infer_binding_resource(summary.runs, summary.knee_n);
+
+  std::ostringstream rows_json;
+  rows_json << "[";
+  for (size_t i = 0; i < summary.runs.size(); ++i) {
+    if (i > 0) rows_json << ",";
+    const auto& run = summary.runs[i];
+    rows_json << "{\"N\":" << run.n
+              << ",\"slo_robust\":" << json_bool(run.slo_robust)
+              << ",\"throughput_realtime_streams\":" << run.throughput_realtime_streams
+              << ",\"ttfs\":" << stats_json(summarize(run.ttfs_ms))
+              << ",\"lag\":" << stats_json(summarize(run.lag_ms))
+              << ",\"peak_gpu_mem_bytes\":" << run.peak_mem_bytes
+              << ",\"mismatches\":" << run.mismatches
+              << ",\"errors\":" << run.errors
+              << ",\"oom\":" << json_bool(run.oom)
+              << "}";
+  }
+  rows_json << "]";
+
+  std::ostringstream json;
+  json << "{\"check\":\"1a_density_sweep_summary\""
+       << ",\"num_runners\":0"
+       << ",\"stream_mode\":\"" << stream_mode_label(args.stream_mode == "explicit", args.mutex_serialize_run) << "\""
+       << ",\"topology\":\"shared_steady_loader_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
+       << ",\"ttfs_budget\":{\"p95_ms\":175,\"p99_ms\":250}"
+       << ",\"keepup_budget\":{\"lag_p95_ms\":500}"
+       << ",\"rows_total\":" << rows_total
+       << ",\"n_values\":" << int_list_json(args.n_values)
+       << ",\"knee_n\":" << summary.knee_n
+       << ",\"single_thread_keepup_n\":" << summary.single_thread_keepup_n
+       << ",\"multiplier\":" << summary.multiplier
+       << ",\"pass_to_1b\":" << json_bool(summary.pass_to_1b)
+       << ",\"correctness_at_knee\":" << json_bool(summary.correctness_at_knee)
+       << ",\"binding_slo\":\"" << summary.binding_slo << "\""
+       << ",\"binding_resource\":\"" << summary.binding_resource << "\""
+       << ",\"rows\":" << rows_json.str()
+       << "}";
+  emit_telemetry(args.dir,
+                 stamp,
+                 0,
+                 stream_mode_label(args.stream_mode == "explicit", args.mutex_serialize_run),
+                 "1a_full_session_density_sweep_summary",
+                 json.str());
+  emit_density_sweep_manifest(args, stamp, summary, rows_total);
+  std::printf("=== DENSITY 1a SUMMARY %s: knee_N=%d single_thread_keepup_N=%d multiplier=%.3fx "
+              "binding_slo=%s binding_resource=%s correctness_at_knee=%s ===\n",
+              summary.pass_to_1b ? "PASS_TO_1B" : "NO_PASS_TO_1B",
+              summary.knee_n,
+              summary.single_thread_keepup_n,
+              summary.multiplier,
+              summary.binding_slo.c_str(),
+              summary.binding_resource.c_str(),
+              summary.correctness_at_knee ? "PASS" : "FAIL");
+  return summary;
+}
+
 static void emit_run_manifest(const DensityArgs& args,
                               const std::string& stamp,
                               const std::string& status,
@@ -2519,6 +3327,24 @@ int main(int argc, char** argv) {
     verify_session_bundle_meta(manifest_bundle, false);
     int rows_total = static_cast<int>(scalar_i64(attr_tensor(manifest_bundle, "num_utts")));
     int requested_rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;
+    if (args.mode == "density-sweep") {
+      std::printf("=== DENSITY 1a START: dir=%s stamp=%s n_values=",
+                  args.dir.c_str(), stamp.c_str());
+      for (size_t i = 0; i < args.n_values.size(); ++i) {
+        std::printf("%s%d", i == 0 ? "" : ",", args.n_values[i]);
+      }
+      std::printf(" rows_total=%d density_rows=%d sessions_per_worker=%d cadence=%.3fms stream_mode=%s "
+                  "mutex=%s warmup=%s ===\n",
+                  rows_total,
+                  args.density_rows,
+                  args.density_sessions_per_worker,
+                  args.density_chunk_period_ms,
+                  args.stream_mode.c_str(),
+                  args.mutex_serialize_run ? "true" : "false",
+                  args.density_warmup ? "true" : "false");
+      auto summary = run_density_sweep(args, device, stamp, rows_total);
+      return summary.pass_to_1b ? 0 : 1;
+    }
     std::printf("=== DENSITY STEP0 START: dir=%s stamp=%s n_values=",
                 args.dir.c_str(), stamp.c_str());
     for (size_t i = 0; i < args.n_values.size(); ++i) {
