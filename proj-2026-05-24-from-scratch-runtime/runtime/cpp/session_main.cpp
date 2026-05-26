@@ -4,6 +4,8 @@
 // (first chunk TorchScript, steady chunks AOTIModelPackageLoader), then forks
 // the session state for the AOTI finalize bucket selected by (drop_extra, T).
 // The emitted cumulative tokens must exactly equal finalize_ref gold tokens.
+// The ordered interim/final/suppressed event stream is checked at the same
+// WORD/TEXT level as finalize_ref._continuous_append_only_delta.
 #include <torch/script.h>
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
 
@@ -43,6 +45,24 @@ static constexpr const char* MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6
 
 enum class SessionMode { STREAMING, PENDING_FINALIZE, FINALIZED };
 
+static constexpr int64_t EVENT_INTERIM = 0;
+static constexpr int64_t EVENT_FINAL = 1;
+static constexpr int64_t EVENT_SUPPRESSED = 2;
+
+struct EmittedEvent {
+  int64_t kind = -1;
+  std::vector<int64_t> tokens;
+  std::vector<int64_t> collector_tokens;
+  std::string text;
+  std::string collector_text;
+};
+
+struct Tokenizer {
+  std::vector<std::string> pieces;
+
+  std::string ids_to_text(const std::vector<int64_t>& ids) const;
+};
+
 struct SessionState {
   torch::Tensor clc;
   torch::Tensor clt;
@@ -53,6 +73,10 @@ struct SessionState {
   torch::Tensor ring;
   int64_t emitted = 0;
   std::vector<int64_t> hyp;
+  std::vector<int64_t> last_interim_tokens;
+  std::vector<int64_t> continuous_emitted_tokens;
+  std::string last_interim_text;
+  std::string continuous_emitted_text;
   SessionMode mode = SessionMode::STREAMING;
 };
 
@@ -156,6 +180,356 @@ static std::string vec_to_string(const std::vector<int64_t>& values) {
   return oss.str();
 }
 
+static std::string escaped_text(const std::string& text) {
+  std::ostringstream oss;
+  oss << '"';
+  for (unsigned char ch : text) {
+    if (ch == '\\') {
+      oss << "\\\\";
+    } else if (ch == '"') {
+      oss << "\\\"";
+    } else if (ch == '\n') {
+      oss << "\\n";
+    } else if (ch == '\r') {
+      oss << "\\r";
+    } else if (ch == '\t') {
+      oss << "\\t";
+    } else if (ch < 0x20 || ch == 0x7f) {
+      oss << "\\x" << std::hex << std::setw(2) << std::setfill('0')
+          << static_cast<int>(ch) << std::dec << std::setfill(' ');
+    } else {
+      oss << static_cast<char>(ch);
+    }
+  }
+  oss << '"';
+  return oss.str();
+}
+
+static const char* event_kind_name(int64_t kind) {
+  if (kind == EVENT_INTERIM) return "interim";
+  if (kind == EVENT_FINAL) return "final";
+  if (kind == EVENT_SUPPRESSED) return "suppressed";
+  return "unknown";
+}
+
+static std::vector<int64_t> append_only_delta_tokens(const std::vector<int64_t>& final_tokens,
+                                                     const std::vector<int64_t>& emitted_tokens) {
+  // Token-id port of finalize_ref._continuous_append_only_delta:
+  // common-prefix append, deletion/correction suppression, then suffix/prefix overlap trim.
+  size_t common = 0;
+  size_t pair_count = std::min(emitted_tokens.size(), final_tokens.size());
+  while (common < pair_count && emitted_tokens[common] == final_tokens[common]) {
+    ++common;
+  }
+
+  std::vector<int64_t> delta_tokens;
+  if (common == emitted_tokens.size()) {
+    delta_tokens.assign(final_tokens.begin() + static_cast<std::ptrdiff_t>(common),
+                        final_tokens.end());
+  } else if (final_tokens.size() <= emitted_tokens.size()) {
+    delta_tokens.clear();
+  } else {
+    delta_tokens.assign(final_tokens.begin() + static_cast<std::ptrdiff_t>(emitted_tokens.size()),
+                        final_tokens.end());
+    size_t max_overlap = std::min(emitted_tokens.size(), delta_tokens.size());
+    for (size_t overlap = max_overlap; overlap > 0; --overlap) {
+      bool matches = true;
+      size_t emitted_start = emitted_tokens.size() - overlap;
+      for (size_t i = 0; i < overlap; ++i) {
+        if (emitted_tokens[emitted_start + i] != delta_tokens[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        delta_tokens.erase(delta_tokens.begin(),
+                           delta_tokens.begin() + static_cast<std::ptrdiff_t>(overlap));
+        break;
+      }
+    }
+  }
+  return delta_tokens;
+}
+
+static std::vector<std::string> split_words(const std::string& text) {
+  std::istringstream iss(text);
+  std::vector<std::string> words;
+  std::string word;
+  while (iss >> word) words.push_back(word);
+  return words;
+}
+
+static std::string join_words(const std::vector<std::string>& words) {
+  std::ostringstream oss;
+  for (size_t i = 0; i < words.size(); ++i) {
+    if (i > 0) oss << ' ';
+    oss << words[i];
+  }
+  return oss.str();
+}
+
+static std::string append_only_delta_text(const std::string& final_text,
+                                          const std::string& emitted_text) {
+  auto final_words = split_words(final_text);
+  auto emitted_words = split_words(emitted_text);
+
+  size_t common = 0;
+  size_t pair_count = std::min(emitted_words.size(), final_words.size());
+  while (common < pair_count && emitted_words[common] == final_words[common]) {
+    ++common;
+  }
+
+  std::vector<std::string> delta_words;
+  if (common == emitted_words.size()) {
+    delta_words.assign(final_words.begin() + static_cast<std::ptrdiff_t>(common),
+                       final_words.end());
+  } else if (final_words.size() <= emitted_words.size()) {
+    delta_words.clear();
+  } else {
+    delta_words.assign(final_words.begin() + static_cast<std::ptrdiff_t>(emitted_words.size()),
+                       final_words.end());
+    size_t max_overlap = std::min(emitted_words.size(), delta_words.size());
+    for (size_t overlap = max_overlap; overlap > 0; --overlap) {
+      bool matches = true;
+      size_t emitted_start = emitted_words.size() - overlap;
+      for (size_t i = 0; i < overlap; ++i) {
+        if (emitted_words[emitted_start + i] != delta_words[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        delta_words.erase(delta_words.begin(),
+                          delta_words.begin() + static_cast<std::ptrdiff_t>(overlap));
+        break;
+      }
+    }
+  }
+  return join_words(delta_words);
+}
+
+static std::string append_delta_to_collector(const std::string& collector,
+                                             const std::string& delta) {
+  if (delta.empty()) return collector;
+  if (collector.empty()) return delta;
+  return collector + " " + delta;
+}
+
+static void replace_all(std::string& text, const std::string& needle, const std::string& repl) {
+  if (needle.empty()) return;
+  size_t pos = 0;
+  while ((pos = text.find(needle, pos)) != std::string::npos) {
+    text.replace(pos, needle.size(), repl);
+    pos += repl.size();
+  }
+}
+
+std::string Tokenizer::ids_to_text(const std::vector<int64_t>& ids) const {
+  if (ids.empty()) return "";
+  std::string text;
+  bool strip_dummy_prefix = false;
+  static const std::string marker = "\xE2\x96\x81";
+  static const std::string unk_surface = " \xE2\x81\x87 ";
+
+  for (size_t i = 0; i < ids.size(); ++i) {
+    int64_t id = ids[i];
+    if (id < 0 || id >= static_cast<int64_t>(pieces.size())) {
+      throw std::runtime_error("token id out of tokenizer piece range: " + std::to_string(id));
+    }
+    const std::string& piece = pieces[static_cast<size_t>(id)];
+    if (i == 0 && piece.rfind(marker, 0) == 0) strip_dummy_prefix = true;
+    if (piece == "<unk>") {
+      text += unk_surface;
+    } else {
+      text += piece;
+    }
+  }
+  replace_all(text, marker, " ");
+  if (strip_dummy_prefix && !text.empty() && text[0] == ' ') {
+    text.erase(text.begin());
+  }
+  return text;
+}
+
+static std::vector<std::vector<int64_t>> unpack_i64_lists(torch::Tensor flat_tensor,
+                                                          torch::Tensor offsets_tensor,
+                                                          const char* label,
+                                                          int utt) {
+  auto flat = tensor_to_vec(flat_tensor);
+  auto offsets = tensor_to_vec(offsets_tensor);
+  if (offsets.empty()) {
+    throw std::runtime_error(std::string(label) + " offsets empty for utt" + std::to_string(utt));
+  }
+  if (offsets.front() != 0 || offsets.back() != static_cast<int64_t>(flat.size())) {
+    throw std::runtime_error(std::string(label) + " offsets do not cover flat payload for utt" + std::to_string(utt));
+  }
+  std::vector<std::vector<int64_t>> out;
+  out.reserve(offsets.size() - 1);
+  for (size_t i = 0; i + 1 < offsets.size(); ++i) {
+    int64_t start = offsets[i];
+    int64_t end = offsets[i + 1];
+    if (start < 0 || end < start || end > static_cast<int64_t>(flat.size())) {
+      throw std::runtime_error(std::string(label) + " invalid offsets for utt" + std::to_string(utt));
+    }
+    out.emplace_back(flat.begin() + start, flat.begin() + end);
+  }
+  return out;
+}
+
+static std::vector<uint8_t> tensor_to_u8_vec(torch::Tensor tensor) {
+  auto flat = tensor.to(torch::kCPU).to(torch::kUInt8).contiguous().view({-1});
+  std::vector<uint8_t> out;
+  out.reserve(flat.numel());
+  for (int64_t i = 0; i < flat.numel(); ++i) {
+    out.push_back(flat[i].item<uint8_t>());
+  }
+  return out;
+}
+
+static std::vector<std::string> unpack_utf8_strings(torch::Tensor flat_tensor,
+                                                    torch::Tensor offsets_tensor,
+                                                    const char* label,
+                                                    int utt) {
+  auto flat = tensor_to_u8_vec(flat_tensor);
+  auto offsets = tensor_to_vec(offsets_tensor);
+  if (offsets.empty()) {
+    throw std::runtime_error(std::string(label) + " offsets empty for utt" + std::to_string(utt));
+  }
+  if (offsets.front() != 0 || offsets.back() != static_cast<int64_t>(flat.size())) {
+    throw std::runtime_error(std::string(label) + " offsets do not cover flat payload for utt" + std::to_string(utt));
+  }
+  std::vector<std::string> out;
+  out.reserve(offsets.size() - 1);
+  for (size_t i = 0; i + 1 < offsets.size(); ++i) {
+    int64_t start = offsets[i];
+    int64_t end = offsets[i + 1];
+    if (start < 0 || end < start || end > static_cast<int64_t>(flat.size())) {
+      throw std::runtime_error(std::string(label) + " invalid offsets for utt" + std::to_string(utt));
+    }
+    out.emplace_back(reinterpret_cast<const char*>(flat.data() + start),
+                     static_cast<size_t>(end - start));
+  }
+  return out;
+}
+
+static Tokenizer tokenizer_from_bundle(torch::jit::Module& bundle) {
+  Tokenizer tokenizer;
+  tokenizer.pieces = unpack_utf8_strings(
+      attr_tensor(bundle, "token_piece_bytes"),
+      attr_tensor(bundle, "token_piece_offsets"),
+      "token_piece",
+      -1);
+  if (tokenizer.pieces.empty()) throw std::runtime_error("tokenizer piece table is empty");
+  return tokenizer;
+}
+
+static void verify_tokenizer_selftest(torch::jit::Module& bundle, const Tokenizer& tokenizer) {
+  auto sequences = unpack_i64_lists(
+      attr_tensor(bundle, "detok_selftest_tokens"),
+      attr_tensor(bundle, "detok_selftest_token_offsets"),
+      "detok_selftest_tokens",
+      -1);
+  auto texts = unpack_utf8_strings(
+      attr_tensor(bundle, "detok_selftest_text_bytes"),
+      attr_tensor(bundle, "detok_selftest_text_offsets"),
+      "detok_selftest_text",
+      -1);
+  if (sequences.size() != texts.size()) {
+    throw std::runtime_error("detok selftest sequence/text count mismatch");
+  }
+  for (size_t i = 0; i < sequences.size(); ++i) {
+    std::string got = tokenizer.ids_to_text(sequences[i]);
+    if (got != texts[i]) {
+      std::ostringstream oss;
+      oss << "detok selftest failed at sequence " << i
+          << " tokens=" << vec_to_string(sequences[i])
+          << " got=" << escaped_text(got)
+          << " gold=" << escaped_text(texts[i]);
+      throw std::runtime_error(oss.str());
+    }
+  }
+  std::printf("tokenizer detok selftest PASS: pieces=%zu sequences=%zu\n",
+              tokenizer.pieces.size(), sequences.size());
+}
+
+static std::vector<EmittedEvent> gold_events_from_bundle(torch::jit::Module& bundle, int utt) {
+  auto kinds = tensor_to_vec(utt_tensor(bundle, utt, "event_kinds"));
+  auto tokens = unpack_i64_lists(
+      utt_tensor(bundle, utt, "event_tokens"),
+      utt_tensor(bundle, utt, "event_token_offsets"),
+      "event_tokens",
+      utt);
+  auto collectors = unpack_i64_lists(
+      utt_tensor(bundle, utt, "event_collector_tokens"),
+      utt_tensor(bundle, utt, "event_collector_token_offsets"),
+      "event_collector_tokens",
+      utt);
+  auto texts = unpack_utf8_strings(
+      utt_tensor(bundle, utt, "event_text_bytes"),
+      utt_tensor(bundle, utt, "event_text_offsets"),
+      "event_text",
+      utt);
+  auto collector_texts = unpack_utf8_strings(
+      utt_tensor(bundle, utt, "event_collector_text_bytes"),
+      utt_tensor(bundle, utt, "event_collector_text_offsets"),
+      "event_collector_text",
+      utt);
+  if (tokens.size() != kinds.size() || collectors.size() != kinds.size() ||
+      texts.size() != kinds.size() || collector_texts.size() != kinds.size()) {
+    throw std::runtime_error("event payload count mismatch for utt" + std::to_string(utt));
+  }
+  std::vector<EmittedEvent> events;
+  events.reserve(kinds.size());
+  for (size_t i = 0; i < kinds.size(); ++i) {
+    events.push_back({kinds[i], tokens[i], collectors[i], texts[i], collector_texts[i]});
+  }
+  return events;
+}
+
+static void emit_event(std::vector<EmittedEvent>& events,
+                       int64_t kind,
+                       const std::vector<int64_t>& tokens,
+                       const std::vector<int64_t>& collector_tokens,
+                       const std::string& text,
+                       const std::string& collector_text) {
+  events.push_back({kind, tokens, collector_tokens, text, collector_text});
+}
+
+static bool equal_events(const std::vector<EmittedEvent>& got,
+                         const std::vector<EmittedEvent>& gold,
+                         int utt) {
+  bool ok = got.size() == gold.size();
+  if (!ok) {
+    std::printf("    utt%d event count mismatch: got=%zu gold=%zu\n",
+                utt, got.size(), gold.size());
+  }
+  size_t n = std::min(got.size(), gold.size());
+  for (size_t i = 0; i < n; ++i) {
+    bool event_ok = got[i].kind == gold[i].kind &&
+                    got[i].text == gold[i].text &&
+                    got[i].collector_text == gold[i].collector_text;
+    if (!event_ok) {
+      std::printf("    utt%d event[%zu] mismatch: got_kind=%s gold_kind=%s\n",
+                  utt, i, event_kind_name(got[i].kind), event_kind_name(gold[i].kind));
+      if (got[i].text != gold[i].text) {
+        std::printf("      got text :%s\n", escaped_text(got[i].text).c_str());
+        std::printf("      gold text:%s\n", escaped_text(gold[i].text).c_str());
+      }
+      if (got[i].collector_text != gold[i].collector_text) {
+        std::printf("      got collector text :%s\n", escaped_text(got[i].collector_text).c_str());
+        std::printf("      gold collector text:%s\n", escaped_text(gold[i].collector_text).c_str());
+      }
+      std::printf("      got tokens :%s\n", vec_to_string(got[i].tokens).c_str());
+      std::printf("      gold tokens:%s\n", vec_to_string(gold[i].tokens).c_str());
+      std::printf("      got collector tokens :%s\n", vec_to_string(got[i].collector_tokens).c_str());
+      std::printf("      gold collector tokens:%s\n", vec_to_string(gold[i].collector_tokens).c_str());
+      ok = false;
+      break;
+    }
+  }
+  return ok;
+}
+
 static bool equal_tokens(const std::vector<int64_t>& got,
                          const std::vector<int64_t>& gold,
                          const char* label,
@@ -214,6 +588,10 @@ static SessionState clone_session(const SessionState& state) {
   out.ring = state.ring.defined() ? state.ring.clone() : torch::Tensor();
   out.emitted = state.emitted;
   out.hyp = state.hyp;
+  out.last_interim_tokens = state.last_interim_tokens;
+  out.continuous_emitted_tokens = state.continuous_emitted_tokens;
+  out.last_interim_text = state.last_interim_text;
+  out.continuous_emitted_text = state.continuous_emitted_text;
   out.mode = state.mode;
   return out;
 }
@@ -264,6 +642,10 @@ static void reset_session(SessionState& state, torch::jit::Module& bundle, torch
   state.ring = torch::Tensor();
   state.emitted = 0;
   state.hyp.clear();
+  state.last_interim_tokens.clear();
+  state.continuous_emitted_tokens.clear();
+  state.last_interim_text.clear();
+  state.continuous_emitted_text.clear();
   state.mode = SessionMode::STREAMING;
 }
 
@@ -820,7 +1202,9 @@ static void run_steady_chunk(SessionState& state,
                              AOTIModelPackageLoader& enc_steady,
                              torch::jit::Module& joint,
                              torch::jit::Module& predict,
-                             torch::Device device) {
+                             torch::Device device,
+                             const Tokenizer& tokenizer,
+                             std::vector<EmittedEvent>& events) {
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("steady chunk outside STREAMING");
 
   auto new_mel = utt_chunk_tensor(bundle, utt, chunk_index, "new_mel").to(device).contiguous();
@@ -854,6 +1238,17 @@ static void run_steady_chunk(SessionState& state,
   auto cum = state.ring.defined() ? torch::cat({state.ring, new_mel}, 2) : new_mel;
   state.ring = cum.slice(2, std::max<int64_t>(0, cum.size(2) - PRE), cum.size(2)).contiguous();
   state.emitted += new_mel.size(2);
+  std::string current_text = tokenizer.ids_to_text(state.hyp);
+  if (current_text != state.last_interim_text) {
+    emit_event(events,
+               EVENT_INTERIM,
+               state.hyp,
+               state.continuous_emitted_tokens,
+               current_text,
+               state.continuous_emitted_text);
+    state.last_interim_tokens = state.hyp;
+    state.last_interim_text = current_text;
+  }
 }
 
 struct FinalizeOutcome {
@@ -868,7 +1263,9 @@ static FinalizeOutcome run_finalize(SessionState& parent,
                                     std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
                                     torch::jit::Module& joint,
                                     torch::jit::Module& predict,
-                                    torch::Device device) {
+                                    torch::Device device,
+                                    const Tokenizer& tokenizer,
+                                    std::vector<EmittedEvent>& events) {
   if (parent.mode != SessionMode::PENDING_FINALIZE) throw std::runtime_error("finalize outside PENDING_FINALIZE");
   auto snapshot = snapshot_asr(parent);
   parent.mode = SessionMode::FINALIZED;
@@ -912,9 +1309,69 @@ static FinalizeOutcome run_finalize(SessionState& parent,
   FinalizeOutcome outcome;
   outcome.emitted_tokens = fork.hyp.size();
   outcome.token_ok = equal_tokens(fork.hyp, gold, "final cumulative", utt);
+  std::string final_text = tokenizer.ids_to_text(fork.hyp);
+  std::string delta_text = append_only_delta_text(final_text, parent.continuous_emitted_text);
+  auto delta_tokens = append_only_delta_tokens(fork.hyp, parent.continuous_emitted_tokens);
+  if (delta_text.empty()) {
+    emit_event(events,
+               EVENT_SUPPRESSED,
+               {},
+               parent.continuous_emitted_tokens,
+               "",
+               parent.continuous_emitted_text);
+  } else {
+    auto collector_tokens = parent.continuous_emitted_tokens;
+    collector_tokens.insert(collector_tokens.end(), delta_tokens.begin(), delta_tokens.end());
+    std::string collector_text = append_delta_to_collector(parent.continuous_emitted_text, delta_text);
+    emit_event(events,
+               EVENT_FINAL,
+               delta_tokens,
+               collector_tokens,
+               delta_text,
+               collector_text);
+    parent.continuous_emitted_tokens = std::move(collector_tokens);
+    parent.continuous_emitted_text = std::move(collector_text);
+  }
   outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot);
   parent.mode = SessionMode::STREAMING;
   return outcome;
+}
+
+static bool run_synthetic_word_delta_tests() {
+  struct Case {
+    const char* name;
+    std::string emitted;
+    std::string final_text;
+    std::string expected_delta;
+    std::string expected_collector;
+    int64_t expected_kind;
+  };
+  std::vector<Case> cases = {
+      {"New->Newark", "I live in New", "I live in Newark", "", "I live in New", EVENT_SUPPRESSED},
+      {"play->playing", "we play", "we playing", "", "we play", EVENT_SUPPRESSED},
+      {"duplicate final", "hello world", "hello world", "", "hello world", EVENT_SUPPRESSED},
+      {"shorter final", "hello world today", "hello world", "", "hello world today", EVENT_SUPPRESSED},
+      {"clean append", "hello world", "hello world today", "today", "hello world today", EVENT_FINAL},
+      {"overlap trim", "alpha beta", "alpha gamma beta delta", "delta", "alpha beta delta", EVENT_FINAL},
+  };
+
+  bool all = true;
+  for (const auto& c : cases) {
+    std::string delta = append_only_delta_text(c.final_text, c.emitted);
+    std::string collector = append_delta_to_collector(c.emitted, delta);
+    int64_t kind = delta.empty() ? EVENT_SUPPRESSED : EVENT_FINAL;
+    bool ok = delta == c.expected_delta &&
+              collector == c.expected_collector &&
+              kind == c.expected_kind;
+    std::printf("SYNTHETIC %-16s %s delta=%s collector=%s\n",
+                c.name,
+                ok ? "PASS" : "FAIL",
+                escaped_text(delta).c_str(),
+                escaped_text(collector).c_str());
+    all = ok && all;
+  }
+  std::printf("=== SYNTHETIC word-delta %s ===\n", all ? "PASS" : "FAIL");
+  return all;
 }
 
 static void verify_session_bundle_meta(torch::jit::Module& bundle) {
@@ -938,13 +1395,25 @@ static void verify_session_bundle_meta(torch::jit::Module& bundle) {
 }
 
 int main(int argc, char** argv) {
-  std::string dir = argc > 1 ? argv[1] : "../artifacts";
+  std::string dir = "../artifacts";
+  bool check_events = true;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--tokens-only" || arg == "--skip-events") {
+      check_events = false;
+    } else {
+      dir = arg;
+    }
+  }
   try {
     torch::NoGradGuard ng;
     auto device = torch::Device(torch::kCUDA);
 
     auto bundle = torch::jit::load(dir + "/session_bundle.ts");
     verify_session_bundle_meta(bundle);
+    auto tokenizer = tokenizer_from_bundle(bundle);
+    verify_tokenizer_selftest(bundle, tokenizer);
+    bool synthetic_ok = run_synthetic_word_delta_tests();
     int64_t rows = scalar_i64(attr_tensor(bundle, "num_utts"));
 
     auto enc_first = torch::jit::load(dir + "/enc_first.ts");
@@ -959,10 +1428,12 @@ int main(int argc, char** argv) {
     predict.eval();
     auto finalize_loaders = load_finalize_bucket_loaders(dir, device);
 
-    std::printf("=== SESSION single-stream replay: %ld utterances ===\n", (long)rows);
+    std::printf("=== SESSION single-stream replay: %ld utterances (events=%s) ===\n",
+                (long)rows, check_events ? "check" : "skip");
     SessionState session;
     int steady_pass = 0;
     int final_pass = 0;
+    int event_pass = 0;
     int fork_pass = 0;
 
     for (int utt = 0; utt < rows; ++utt) {
@@ -971,11 +1442,14 @@ int main(int argc, char** argv) {
       int64_t num_steady = scalar_i64(utt_tensor(bundle, utt, "num_steady"));
       int64_t final_drop = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
       int64_t final_T = scalar_i64(utt_tensor(bundle, utt, "final_T"));
+      std::vector<EmittedEvent> gold_events;
+      if (check_events) gold_events = gold_events_from_bundle(bundle, utt);
+      std::vector<EmittedEvent> events;
 
       bool row_ok = true;
       try {
         for (int chunk = 0; chunk < num_steady; ++chunk) {
-          run_steady_chunk(session, bundle, utt, chunk, enc_first, enc_steady, joint, predict, device);
+          run_steady_chunk(session, bundle, utt, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
         }
       } catch (const std::exception& e) {
         std::printf("  utt%d sample=%ld steady threw: %s\n", utt, (long)sample_index, e.what());
@@ -989,31 +1463,60 @@ int main(int argc, char** argv) {
       session.mode = SessionMode::PENDING_FINALIZE;
       FinalizeOutcome finalize;
       try {
-        finalize = run_finalize(session, bundle, utt, finalize_loaders, joint, predict, device);
+        finalize = run_finalize(session, bundle, utt, finalize_loaders, joint, predict, device, tokenizer, events);
       } catch (const std::exception& e) {
         std::printf("  utt%d sample=%ld finalize threw: %s\n", utt, (long)sample_index, e.what());
         finalize.token_ok = false;
         finalize.fork_ok = false;
       }
 
+      bool events_ok = true;
+      if (check_events) {
+        events_ok = row_ok && finalize.token_ok && equal_events(events, gold_events, utt);
+      }
       if (finalize.token_ok) ++final_pass;
+      if (check_events && events_ok) ++event_pass;
       if (finalize.fork_ok) ++fork_pass;
       auto gold = tensor_to_vec(utt_tensor(bundle, utt, "gold_tokens"));
-      std::printf("  utt%d sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
-                  "steady=%s final=%s FORK_ASSERT=%s tokens=%zu/%zu\n",
-                  utt, (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
-                  steady_ok ? "PASS" : "FAIL",
-                  finalize.token_ok ? "PASS" : "FAIL",
-                  finalize.fork_ok ? "PASS" : "FAIL",
-                  finalize.emitted_tokens, gold.size());
+      if (check_events) {
+        std::printf("  utt%d sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
+                    "steady=%s final=%s events=%s FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
+                    utt, (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
+                    steady_ok ? "PASS" : "FAIL",
+                    finalize.token_ok ? "PASS" : "FAIL",
+                    events_ok ? "PASS" : "FAIL",
+                    finalize.fork_ok ? "PASS" : "FAIL",
+                    finalize.emitted_tokens, gold.size(),
+                    events.size(), gold_events.size());
+      } else {
+        std::printf("  utt%d sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
+                    "steady=%s final=%s events=SKIP FORK_ASSERT=%s tokens=%zu/%zu\n",
+                    utt, (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
+                    steady_ok ? "PASS" : "FAIL",
+                    finalize.token_ok ? "PASS" : "FAIL",
+                    finalize.fork_ok ? "PASS" : "FAIL",
+                    finalize.emitted_tokens, gold.size());
+      }
     }
 
-    bool all = steady_pass == rows && final_pass == rows && fork_pass == rows;
-    std::printf("=== SESSION %s: steady=%d/%ld final_token_exact=%d/%ld FORK_ASSERT=%d/%ld ===\n",
-                all ? "PASS" : "FAIL",
-                steady_pass, (long)rows,
-                final_pass, (long)rows,
-                fork_pass, (long)rows);
+    bool all = synthetic_ok && steady_pass == rows && final_pass == rows && fork_pass == rows &&
+               (!check_events || event_pass == rows);
+    if (check_events) {
+      std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=%d/%ld FORK_ASSERT=%d/%ld ===\n",
+                  all ? "PASS" : "FAIL",
+                  synthetic_ok ? "PASS" : "FAIL",
+                  steady_pass, (long)rows,
+                  final_pass, (long)rows,
+                  event_pass, (long)rows,
+                  fork_pass, (long)rows);
+    } else {
+      std::printf("=== SESSION %s: synthetic=%s steady=%d/%ld final_token_exact=%d/%ld event_text_exact=SKIP FORK_ASSERT=%d/%ld ===\n",
+                  all ? "PASS" : "FAIL",
+                  synthetic_ok ? "PASS" : "FAIL",
+                  steady_pass, (long)rows,
+                  final_pass, (long)rows,
+                  fork_pass, (long)rows);
+    }
     return all ? 0 : 1;
   } catch (const std::exception& e) {
     std::printf("SESSION setup failed: %s\n", e.what());
