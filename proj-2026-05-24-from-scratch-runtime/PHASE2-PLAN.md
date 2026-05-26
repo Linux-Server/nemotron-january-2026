@@ -237,11 +237,14 @@ independent re-run.
   5090 knee = MEMORY** (N=8 OOM at 30.5/32GiB; the finalize buckets' per-runner activation × N), NOT
   compute/contention. ⟹ N=4 is a **memory-capped 5090 FLOOR, not the density verdict** — the **L40S (46GB) is the
   gate** and the transferable finding is the *binding resource*, not the N=4.
-- **Autotune-ON breaks T1** (`reviews/codex-autotune-drift-verify.md`): cache_t 10.27 = **precision-policy
-  divergence from eager's TF32-reduced path** (==the earlier `fp32_highest` knob-matrix drift; convs went
-  ALLOW_TF32=True), NOT pure reduction-order. The **precision-matched T1-gated ladder** (R1a…,
-  `reviews/codex-autotune-params-strategy.md`) is the path IF pursued — but autotune speeds COMPUTE, so it is
-  **moot while the binding resource is MEMORY**; its value is **contingent on the L40S being contention-bound**.
+- **Autotune-ON (max_autotune+coordinate_descent) T1-FAILED CATASTROPHICALLY (MEASURED):** steady-only full-1000
+  shadow vs eager = **995/1000 token-divergent, WER 3.68%→82.77% (+79pp)**, first divergence at chunk 2 (`cache_t`
+  diff already 22.8; drift plateaus at a catastrophic mean ~30). Confirms the diagnosis: cache_t 10.27 =
+  **precision-policy divergence from eager's TF32-reduced path** (==the earlier `fp32_highest` knob-matrix drift;
+  convs went ALLOW_TF32=True), NOT pure reduction-order. ⟹ **aggressive autotune SHELVED.** The **precision-matched
+  rung R1a** (`reviews/codex-autotune-params-strategy.md`, match eager's TF32 policy) is UNTESTED and only worth
+  trying IF the L40S is contention-bound (W4) AND it passes T1 first — but autotune speeds COMPUTE, so it is **moot
+  while the binding resource is MEMORY**. **Net: autotune is OFF the critical path** (contingent Tier-2 at best).
 - **Finalize is ~half sync+glue, not compute** (phase-split telemetry): `enc_len_sync` **3.67–6.47ms** (a blocking
   D2H `.item()` on the encoder output length — likely **host-eliminable**, the length is geometry-deterministic)
   + `glue` **3.77–10.94ms** (event/text/FORK_ASSERT) vs `aoti_run_cuda` 6.59–12.49ms. No `pin_memory`/`non_blocking`
