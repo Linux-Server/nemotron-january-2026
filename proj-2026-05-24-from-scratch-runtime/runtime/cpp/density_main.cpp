@@ -46,6 +46,7 @@ struct DensityArgs {
   int correctness_n = 4;
   int correctness_rows = -1;
   int finalize_n = 4;
+  std::string finalize_mode = "both";
   std::string stream_mode = "explicit";
   bool mutex_serialize_run = false;
   bool smoke = false;
@@ -107,6 +108,8 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       args.correctness_rows = std::stoi(need_value("--correctness-rows"));
     } else if (arg == "--finalize-n") {
       args.finalize_n = std::stoi(need_value("--finalize-n"));
+    } else if (arg == "--finalize-mode") {
+      args.finalize_mode = need_value("--finalize-mode");
     } else if (arg == "--stream-mode") {
       args.stream_mode = need_value("--stream-mode");
     } else if (arg == "--mutex-serialize-run") {
@@ -153,6 +156,9 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   if (args.finalize_n <= 0) throw std::runtime_error("--finalize-n must be positive");
   if (args.stream_mode != "explicit" && args.stream_mode != "default") {
     throw std::runtime_error("--stream-mode must be explicit or default");
+  }
+  if (args.finalize_mode != "both" && args.finalize_mode != "same" && args.finalize_mode != "mixed") {
+    throw std::runtime_error("--finalize-mode must be both, same, or mixed");
   }
   return args;
 }
@@ -265,6 +271,16 @@ struct MemorySampler {
   std::atomic<bool> stop{false};
   std::thread thread;
   std::atomic<size_t> peak{0};
+
+  ~MemorySampler() {
+    stop.store(true);
+    if (thread.joinable()) {
+      try {
+        thread.join();
+      } catch (const std::exception&) {
+      }
+    }
+  }
 
   void start() {
     peak.store(gpu_used_bytes());
@@ -652,11 +668,232 @@ static void run_steady_chunk_density(SessionState& state,
   }
 }
 
+using FinalizeBucketKey = std::pair<int64_t, int64_t>;
+
+struct FinalizeLoaderMemoryRecord {
+  int64_t drop = 0;
+  int64_t T = 0;
+  int num_runners = 0;
+  size_t used_before = 0;
+  size_t used_after = 0;
+  size_t delta = 0;
+  size_t cumulative_delta = 0;
+};
+
+class FinalizeBucketLoaderPool {
+ public:
+  FinalizeBucketLoaderPool(const std::string& dir,
+                           torch::Device device,
+                           int num_runners,
+                           std::string policy)
+      : dir_(dir),
+        device_(device),
+        num_runners_(num_runners),
+        policy_(std::move(policy)) {
+    if (num_runners_ <= 0) throw std::runtime_error("finalize bucket num_runners must be positive");
+    buckets_dir_ = dir_ + "/stripped_finalize_buckets";
+    if (!directory_exists(buckets_dir_)) buckets_dir_ = dir_ + "/finalize_buckets";
+    shared_weights_ = dir_ + "/finalize_shared_weights.ts";
+    std::string shared_weights_pt = dir_ + "/finalize_shared_weights.pt";
+    if (!directory_exists(buckets_dir_)) throw std::runtime_error("finalize buckets directory missing: " + buckets_dir_);
+    if (!file_exists(shared_weights_)) throw std::runtime_error("finalize shared weights missing: " + shared_weights_);
+
+    bucket_paths_ = discover_finalize_buckets(buckets_dir_);
+    if (bucket_paths_.empty()) throw std::runtime_error("no finalize bucket packages found in " + buckets_dir_);
+    std::string manifest_path = buckets_dir_ + "/manifest.json";
+    if (!file_exists(manifest_path)) {
+      throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
+    }
+    auto manifest = load_bucket_manifest(manifest_path);
+    verify_bucket_manifest(manifest, bucket_paths_, buckets_dir_, shared_weights_pt);
+    std::printf("density finalize manifest verified: %zu buckets, weights_sha256=%s num_runners=%d policy=%s\n",
+                manifest.buckets.size(), manifest.contract.weights_sha256.c_str(), num_runners_,
+                policy_.c_str());
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+    shared_used_before_ = gpu_used_bytes();
+    shared_constants_ = load_shared_constants(shared_weights_, device_);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    shared_used_after_ = gpu_used_bytes();
+    shared_delta_ = shared_used_after_ >= shared_used_before_ ? shared_used_after_ - shared_used_before_ : 0;
+    std::printf("density loaded finalize shared constants: %zu entries shared_delta=%.3f GiB policy=%s\n",
+                shared_constants_.size(),
+                static_cast<double>(shared_delta_) / (1024.0 * 1024.0 * 1024.0),
+                policy_.c_str());
+  }
+
+  AOTIModelPackageLoader& get(int64_t drop, int64_t T) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto key = std::make_pair(drop, T);
+    auto existing = loaders_.find(key);
+    if (existing != loaders_.end()) return *existing->second;
+    auto loaded = load_bucket_locked(key);
+    return *loaded->second;
+  }
+
+  void preload(const std::vector<FinalizeBucketKey>& keys) {
+    for (const auto& key : keys) {
+      (void)get(key.first, key.second);
+    }
+  }
+
+  void preload_all() {
+    std::vector<FinalizeBucketKey> keys;
+    keys.reserve(bucket_paths_.size());
+    for (const auto& kv : bucket_paths_) keys.push_back(kv.first);
+    preload(keys);
+  }
+
+  int num_runners() const {
+    return num_runners_;
+  }
+
+  size_t total_bucket_count() const {
+    return bucket_paths_.size();
+  }
+
+  size_t loaded_bucket_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return loaders_.size();
+  }
+
+  size_t shared_delta() const {
+    return shared_delta_;
+  }
+
+  size_t total_loader_delta() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return total_loader_delta_;
+  }
+
+  size_t projected_all_buckets_same_runners_delta() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (records_.empty()) return 0;
+    return static_cast<size_t>((static_cast<long double>(total_loader_delta_) /
+                                static_cast<long double>(records_.size())) *
+                               static_cast<long double>(bucket_paths_.size()));
+  }
+
+  size_t projected_all_buckets_worker_runners_delta(int worker_runners) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (records_.empty() || num_runners_ <= 0) return 0;
+    long double mean = static_cast<long double>(total_loader_delta_) /
+                       static_cast<long double>(records_.size());
+    long double runner_ratio = static_cast<long double>(worker_runners) /
+                               static_cast<long double>(num_runners_);
+    return static_cast<size_t>(mean * static_cast<long double>(bucket_paths_.size()) * runner_ratio);
+  }
+
+  std::string memory_json(int worker_runners) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t projected_same = 0;
+    size_t projected_worker = 0;
+    if (!records_.empty()) {
+      long double mean = static_cast<long double>(total_loader_delta_) /
+                         static_cast<long double>(records_.size());
+      projected_same = static_cast<size_t>(mean * static_cast<long double>(bucket_paths_.size()));
+      if (num_runners_ > 0) {
+        long double runner_ratio = static_cast<long double>(worker_runners) /
+                                   static_cast<long double>(num_runners_);
+        projected_worker = static_cast<size_t>(mean * static_cast<long double>(bucket_paths_.size()) * runner_ratio);
+      }
+    }
+    std::ostringstream oss;
+    oss << "{\"policy\":\"" << policy_ << "\""
+        << ",\"num_runners_per_loaded_bucket\":" << num_runners_
+        << ",\"worker_runners_requested\":" << worker_runners
+        << ",\"total_manifest_buckets\":" << bucket_paths_.size()
+        << ",\"loaded_buckets\":" << loaders_.size()
+        << ",\"shared_constants_delta_bytes\":" << shared_delta_
+        << ",\"loader_delta_bytes\":" << total_loader_delta_
+        << ",\"projected_all_buckets_same_runner_cap_delta_bytes\":" << projected_same
+        << ",\"projected_old_eager_all_buckets_worker_runner_delta_bytes_linear_estimate\":" << projected_worker
+        << ",\"records\":[";
+    for (size_t i = 0; i < records_.size(); ++i) {
+      const auto& r = records_[i];
+      if (i > 0) oss << ",";
+      oss << "{\"drop\":" << r.drop
+          << ",\"T\":" << r.T
+          << ",\"num_runners\":" << r.num_runners
+          << ",\"used_before_bytes\":" << r.used_before
+          << ",\"used_after_bytes\":" << r.used_after
+          << ",\"delta_bytes\":" << r.delta
+          << ",\"cumulative_delta_bytes\":" << r.cumulative_delta
+          << "}";
+    }
+    oss << "]}";
+    return oss.str();
+  }
+
+ private:
+  std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>>::iterator load_bucket_locked(
+      const FinalizeBucketKey& key) {
+    auto path_it = bucket_paths_.find(key);
+    if (path_it == bucket_paths_.end()) {
+      throw std::runtime_error("density no finalize bucket for drop=" + std::to_string(key.first) +
+                               " T=" + std::to_string(key.second));
+    }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+    size_t before = gpu_used_bytes();
+    auto loader = std::make_unique<AOTIModelPackageLoader>(path_it->second, "model", false, num_runners_, -1);
+    auto bucket_constants = constants_for_bucket(shared_constants_, *loader, path_it->second);
+    loader->load_constants(bucket_constants.values, false, false, true);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    size_t after = gpu_used_bytes();
+    size_t delta = after >= before ? after - before : 0;
+    total_loader_delta_ += delta;
+    records_.push_back({
+        key.first,
+        key.second,
+        num_runners_,
+        before,
+        after,
+        delta,
+        total_loader_delta_,
+    });
+    std::printf("  density finalize bucket loaded drop=%ld T=%ld constants=%zu direct=%zu alias=%zu "
+                "num_runners=%d loader_delta=%.3f GiB cumulative_loader_delta=%.3f GiB policy=%s\n",
+                (long)key.first, (long)key.second, bucket_constants.values.size(),
+                bucket_constants.direct_matches, bucket_constants.alias_fallbacks, num_runners_,
+                static_cast<double>(delta) / (1024.0 * 1024.0 * 1024.0),
+                static_cast<double>(total_loader_delta_) / (1024.0 * 1024.0 * 1024.0),
+                policy_.c_str());
+    auto inserted = loaders_.emplace(key, std::move(loader));
+    return inserted.first;
+  }
+
+  std::string dir_;
+  torch::Device device_;
+  int num_runners_ = 1;
+  std::string policy_;
+  std::string buckets_dir_;
+  std::string shared_weights_;
+  std::map<FinalizeBucketKey, std::string> bucket_paths_;
+  std::unordered_map<std::string, at::Tensor> shared_constants_;
+  std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>> loaders_;
+  mutable std::mutex mutex_;
+  std::vector<FinalizeLoaderMemoryRecord> records_;
+  size_t shared_used_before_ = 0;
+  size_t shared_used_after_ = 0;
+  size_t shared_delta_ = 0;
+  size_t total_loader_delta_ = 0;
+};
+
+static int capped_general_finalize_runners(int workers_or_runners) {
+  return std::max(1, std::min(workers_or_runners, 2));
+}
+
+static std::vector<FinalizeBucketKey> unique_finalize_bucket_keys(const std::vector<FinalizeBucketKey>& keys) {
+  std::set<FinalizeBucketKey> seen(keys.begin(), keys.end());
+  return std::vector<FinalizeBucketKey>(seen.begin(), seen.end());
+}
+
 static FinalizeOutcome run_finalize_density(SessionState& parent,
                                             torch::jit::Module& bundle,
                                             const std::string& prefix,
                                             const std::string& label,
-                                            std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+                                            FinalizeBucketLoaderPool& finalize_loaders,
                                             torch::jit::Module& joint,
                                             torch::jit::Module& predict,
                                             torch::Device device,
@@ -698,11 +935,7 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     int64_t expected_drop = parent.emitted == 0 ? 0 : DROP;
     if (drop_extra != expected_drop) throw std::runtime_error("density finalize drop_extra does not match parent emitted state");
 
-    auto loader_it = finalize_loaders.find(std::make_pair(drop_extra, final_T));
-    if (loader_it == finalize_loaders.end()) {
-      throw std::runtime_error("density no finalize bucket for drop=" + std::to_string(drop_extra) +
-                               " T=" + std::to_string(final_T));
-    }
+    auto& finalize_loader = finalize_loaders.get(drop_extra, final_T);
 
     std::vector<at::Tensor> inputs = {
         final_chunk.contiguous(),
@@ -716,7 +949,7 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     CUDA_CHECK(cudaEventCreate(&ev_stop));
     CUDA_CHECK(cudaEventRecord(ev_start, stream.stream()));
     auto run_start = Clock::now();
-    auto out = run_aoti_loader(*loader_it->second, inputs, stream, explicit_stream, mutex_serialize_run);
+    auto out = run_aoti_loader(finalize_loader, inputs, stream, explicit_stream, mutex_serialize_run);
     runner_host_ms = elapsed_ms_since(run_start);
     CUDA_CHECK(cudaEventRecord(ev_stop, stream.stream()));
     if (out.size() < 2) throw std::runtime_error("density finalize AOTI bucket returned fewer than 2 outputs");
@@ -779,45 +1012,6 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
   return outcome;
 }
 
-static std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>
-load_finalize_bucket_loaders_density(const std::string& dir, torch::Device device, int num_runners) {
-  std::string buckets_dir = dir + "/stripped_finalize_buckets";
-  if (!directory_exists(buckets_dir)) buckets_dir = dir + "/finalize_buckets";
-  std::string shared_weights = dir + "/finalize_shared_weights.ts";
-  std::string shared_weights_pt = dir + "/finalize_shared_weights.pt";
-  if (!directory_exists(buckets_dir)) throw std::runtime_error("finalize buckets directory missing: " + buckets_dir);
-  if (!file_exists(shared_weights)) throw std::runtime_error("finalize shared weights missing: " + shared_weights);
-
-  auto bucket_paths = discover_finalize_buckets(buckets_dir);
-  if (bucket_paths.empty()) throw std::runtime_error("no finalize bucket packages found in " + buckets_dir);
-  std::string manifest_path = buckets_dir + "/manifest.json";
-  if (!file_exists(manifest_path)) {
-    throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
-  }
-  auto manifest = load_bucket_manifest(manifest_path);
-  verify_bucket_manifest(manifest, bucket_paths, buckets_dir, shared_weights_pt);
-  std::printf("density finalize manifest verified: %zu buckets, weights_sha256=%s num_runners=%d\n",
-              manifest.buckets.size(), manifest.contract.weights_sha256.c_str(), num_runners);
-
-  auto shared_constants = load_shared_constants(shared_weights, device);
-  std::printf("density loaded finalize shared constants: %zu entries\n", shared_constants.size());
-
-  std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>> loaders;
-  for (const auto& kv : bucket_paths) {
-    int64_t drop = kv.first.first;
-    int64_t T = kv.first.second;
-    const std::string& pkg = kv.second;
-    auto loader = std::make_unique<AOTIModelPackageLoader>(pkg, "model", false, num_runners, -1);
-    auto bucket_constants = constants_for_bucket(shared_constants, *loader, pkg);
-    loader->load_constants(bucket_constants.values, false, false, true);
-    std::printf("  density finalize bucket drop=%ld T=%ld constants=%zu direct=%zu alias=%zu num_runners=%d\n",
-                (long)drop, (long)T, bucket_constants.values.size(),
-                bucket_constants.direct_matches, bucket_constants.alias_fallbacks, num_runners);
-    loaders.emplace(kv.first, std::move(loader));
-  }
-  return loaders;
-}
-
 struct RowReplayResult {
   std::vector<int64_t> final_tokens;
   std::vector<EmittedEvent> events;
@@ -828,7 +1022,7 @@ struct RowReplayResult {
 static RowReplayResult replay_row_density(int utt,
                                           WorkerContext& ctx,
                                           AOTIModelPackageLoader& enc_steady,
-                                          std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+                                          FinalizeBucketLoaderPool& finalize_loaders,
                                           torch::Device device,
                                           const Tokenizer& tokenizer,
                                           bool explicit_stream,
@@ -929,7 +1123,8 @@ static std::vector<RowReplayResult> build_serial_reference(const DensityArgs& ar
   auto tokenizer = tokenizer_from_bundle(ctx->bundle);
   verify_tokenizer_selftest(ctx->bundle, tokenizer);
   AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
-  auto finalize_loaders = load_finalize_bucket_loaders_density(args.dir, device, 1);
+  FinalizeBucketLoaderPool finalize_loaders(args.dir, device, 1, "serial_reference_eager_one_runner");
+  finalize_loaders.preload_all();
   std::vector<RowReplayResult> refs;
   refs.reserve(rows);
   for (int utt = 0; utt < rows; ++utt) {
@@ -982,7 +1177,12 @@ static CorrectnessResult run_correctness_gate_mode(const DensityArgs& args,
   MemorySampler mem;
   mem.start();
   AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, num_runners, -1);
-  auto finalize_loaders = load_finalize_bucket_loaders_density(args.dir, device, num_runners);
+  int finalize_num_runners = capped_general_finalize_runners(num_runners);
+  FinalizeBucketLoaderPool finalize_loaders(args.dir,
+                                            device,
+                                            finalize_num_runners,
+                                            "0b_general_finalize_eager_capped_runner_pool");
+  finalize_loaders.preload_all();
   std::vector<std::unique_ptr<WorkerContext>> contexts;
   contexts.reserve(workers);
   std::vector<c10::cuda::CUDAStream> streams;
@@ -1082,6 +1282,7 @@ static CorrectnessResult run_correctness_gate_mode(const DensityArgs& args,
        << ",\"item_wait_pct_of_steady_gpu\":" << stats_json(item_pct)
        << ",\"finalize_wait\":" << stats_json(summarize(result.timings.finalize_runner_wait_ms))
        << ",\"finalize_gpu\":" << stats_json(summarize(result.timings.finalize_gpu_ms))
+       << ",\"finalize_loader_memory\":" << finalize_loaders.memory_json(num_runners)
        << ",\"unique_streams\":" << result.unique_streams
        << ",\"stream_handles\":[";
   for (size_t i = 0; i < result.stream_handles.size(); ++i) {
@@ -1956,6 +2157,13 @@ struct FinalizeCase {
   int64_t T = -1;
 };
 
+static std::vector<FinalizeBucketKey> unique_finalize_bucket_keys_from_cases(const std::vector<FinalizeCase>& cases) {
+  std::vector<FinalizeBucketKey> keys;
+  keys.reserve(cases.size());
+  for (const auto& item : cases) keys.emplace_back(item.drop, item.T);
+  return unique_finalize_bucket_keys(keys);
+}
+
 static std::vector<FinalizeCase> discover_finalize_cases(torch::jit::Module& bundle, int rows) {
   std::vector<FinalizeCase> cases;
   cases.reserve(static_cast<size_t>(rows));
@@ -2008,6 +2216,8 @@ struct FinalizeGateResult {
   bool stream_uniqueness_ok = false;
   int workers = 0;
   int num_runners = 0;
+  int steady_num_runners = 0;
+  int finalize_num_runners = 0;
   int unique_streams = 0;
   int mismatches = 0;
   double wall_ms = 0.0;
@@ -2059,11 +2269,21 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
                                                 const std::vector<RowReplayResult>& reference) {
   FinalizeGateResult result;
   result.workers = static_cast<int>(cases.size());
-  result.num_runners = args.num_runners > 0 ? args.num_runners : result.workers;
+  result.steady_num_runners = capped_general_finalize_runners(args.num_runners > 0 ? args.num_runners : result.workers);
+  bool hot_same_bucket = mode == "same_bucket";
+  result.finalize_num_runners = hot_same_bucket ? result.workers : capped_general_finalize_runners(result.workers);
+  result.num_runners = result.finalize_num_runners;
   MemorySampler mem;
   mem.start();
-  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, result.num_runners, -1);
-  auto finalize_loaders = load_finalize_bucket_loaders_density(args.dir, device, result.num_runners);
+  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, result.steady_num_runners, -1);
+  FinalizeBucketLoaderPool finalize_loaders(
+      args.dir,
+      device,
+      result.finalize_num_runners,
+      hot_same_bucket ? "0c_hot_same_bucket_one_bucket_full_worker_runners"
+                      : "0c_mixed_bucket_selected_buckets_capped_runner_pool");
+  auto needed_buckets = unique_finalize_bucket_keys_from_cases(cases);
+  finalize_loaders.preload(needed_buckets);
   std::vector<std::unique_ptr<WorkerContext>> contexts;
   contexts.reserve(static_cast<size_t>(result.workers));
   std::vector<c10::cuda::CUDAStream> streams;
@@ -2163,6 +2383,8 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
   std::ostringstream json;
   json << "{\"check\":\"0c_finalize_concurrency_" << mode << "\""
        << ",\"num_runners\":" << result.num_runners
+       << ",\"steady_num_runners\":" << result.steady_num_runners
+       << ",\"finalize_num_runners_per_loaded_bucket\":" << result.finalize_num_runners
        << ",\"workers\":" << result.workers
        << ",\"stream_mode\":\"" << stream_mode_label(true, args.mutex_serialize_run) << "\""
        << ",\"topology\":\"shared_finalize_bucket_runner_pool_" << mode << "\""
@@ -2178,6 +2400,7 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
        << ",\"finalize_gpu\":" << stats_json(summarize(result.timings.finalize_gpu_ms))
        << ",\"finalize_total\":" << stats_json(finalize_total)
        << ",\"finalize_runner_wait_pct_of_total_p95\":" << wait_pct
+       << ",\"finalize_loader_memory\":" << finalize_loaders.memory_json(result.workers)
        << ",\"peak_gpu_mem_bytes\":" << result.peak_mem
        << "}";
   emit_telemetry(args.dir,
@@ -2186,17 +2409,23 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
                  stream_mode_label(true, args.mutex_serialize_run),
                  "shared_finalize_bucket_runner_pool_" + mode,
                  json.str());
-  std::printf("=== DENSITY 0c %s %s: workers=%d num_runners=%d unique_streams=%d mismatches=%d "
-              "finalize_wait_p95=%.3fms total_p95=%.3fms wait_pct=%.1f%% ===\n",
+  std::printf("=== DENSITY 0c %s %s: workers=%d steady_num_runners=%d finalize_num_runners=%d "
+              "loaded_buckets=%zu/%zu loader_delta=%.3f GiB unique_streams=%d mismatches=%d "
+              "finalize_wait_p95=%.3fms total_p95=%.3fms wait_pct=%.1f%% peak_mem=%.3f GiB ===\n",
               mode.c_str(),
               result.ok ? "PASS" : "FAIL",
               result.workers,
-              result.num_runners,
+              result.steady_num_runners,
+              result.finalize_num_runners,
+              finalize_loaders.loaded_bucket_count(),
+              finalize_loaders.total_bucket_count(),
+              static_cast<double>(finalize_loaders.total_loader_delta()) / (1024.0 * 1024.0 * 1024.0),
               result.unique_streams,
               result.mismatches,
               finalize_wait.p95,
               finalize_total.p95,
-              wait_pct);
+              wait_pct,
+              static_cast<double>(result.peak_mem) / (1024.0 * 1024.0 * 1024.0));
   return result;
 }
 
@@ -2209,12 +2438,20 @@ static bool run_finalize_gate(const DensityArgs& args,
   int rows_total = static_cast<int>(scalar_i64(attr_tensor(bundle, "num_utts")));
   int rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;
   auto all_cases = discover_finalize_cases(bundle, rows);
-  auto same = pick_same_bucket_finalize_cases(all_cases, args.finalize_n);
-  auto mixed = pick_mixed_finalize_cases(all_cases, args.finalize_n);
-  auto same_result = run_finalize_gate_one(args, device, stamp, "same_bucket", same, correctness.reference);
-  cleanup_cuda_cache();
-  auto mixed_result = run_finalize_gate_one(args, device, stamp, "mixed_bucket", mixed, correctness.reference);
-  return same_result.ok && mixed_result.ok;
+  bool ok = true;
+  if (args.finalize_mode == "both" || args.finalize_mode == "mixed") {
+    auto mixed = pick_mixed_finalize_cases(all_cases, args.finalize_n);
+    auto mixed_result = run_finalize_gate_one(args, device, stamp, "mixed_bucket", mixed, correctness.reference);
+    ok = ok && mixed_result.ok;
+    cleanup_cuda_cache();
+  }
+  if (args.finalize_mode == "both" || args.finalize_mode == "same") {
+    auto same = pick_same_bucket_finalize_cases(all_cases, args.finalize_n);
+    auto same_result = run_finalize_gate_one(args, device, stamp, "same_bucket", same, correctness.reference);
+    ok = ok && same_result.ok;
+    cleanup_cuda_cache();
+  }
+  return ok;
 }
 
 static void emit_run_manifest(const DensityArgs& args,
@@ -2251,6 +2488,7 @@ static void emit_run_manifest(const DensityArgs& args,
       << ",\"correctness_rows\":" << correctness_rows
       << ",\"rows_total\":" << rows_total
       << ",\"finalize_n\":" << args.finalize_n
+      << ",\"finalize_mode\":\"" << args.finalize_mode << "\""
       << ",\"skip_correctness\":" << json_bool(args.skip_correctness)
       << ",\"skip_steady\":" << json_bool(args.skip_steady)
       << ",\"skip_finalize\":" << json_bool(args.skip_finalize)
@@ -2286,11 +2524,12 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < args.n_values.size(); ++i) {
       std::printf("%s%d", i == 0 ? "" : ",", args.n_values[i]);
     }
-    std::printf(" target_n=%d correctness_n=%d finalize_n=%d rows=%d/%d stream_mode=%s "
+    std::printf(" target_n=%d correctness_n=%d finalize_n=%d finalize_mode=%s rows=%d/%d stream_mode=%s "
                 "workers_override=%d num_runners_override=%d mutex=%s smoke=%s partial=%s ===\n",
                 args.target_n,
                 args.correctness_n,
                 args.finalize_n,
+                args.finalize_mode.c_str(),
                 requested_rows,
                 rows_total,
                 args.stream_mode.c_str(),
@@ -2348,6 +2587,7 @@ int main(int argc, char** argv) {
                               !args.partial &&
                               args.workers == 0 &&
                               args.num_runners == 0 &&
+                              args.finalize_mode == "both" &&
                               args.stream_mode == "explicit" &&
                               !args.mutex_serialize_run &&
                               args.default_stream_control &&

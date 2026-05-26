@@ -1,0 +1,284 @@
+[2026-05-26T16:05:59.994Z] Starting Codex Task.
+[2026-05-26T16:06:02.377Z] Starting Codex task thread.
+[2026-05-26T16:06:03.074Z] Thread ready (019e6509-3621-7703-b6cf-790506d89eaa).
+[2026-05-26T16:06:03.089Z] Turn started (019e6509-3650-77a0-a83a-9b9e4fa8a81e).
+[2026-05-26T16:06:19.920Z] Assistant message captured: I’ll read the Step 0 plan/review and the density harness first, then patch only the runtime e...
+
+[2026-05-26T16:06:19.920Z] Assistant message
+I’ll read the Step 0 plan/review and the density harness first, then patch only the runtime entry point unless the build proves a CMake tweak is required. After that I’ll build in the specified container and run the memory/0c/attribution checks with real logs.
+[2026-05-26T16:06:19.962Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/reviews/phase2-step0build...
+[2026-05-26T16:06:19.974Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/reviews/phase2-step0build... (exit 0)
+[2026-05-26T16:06:19.974Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/PHASE2-PLAN.md"
+[2026-05-26T16:06:19.974Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/PHASE2-PLAN.md" (exit 0)
+[2026-05-26T16:06:19.974Z] Running command: /bin/bash -lc 'pwd && git status --short'
+[2026-05-26T16:06:19.974Z] Command completed: /bin/bash -lc 'pwd && git status --short' (exit 0)
+[2026-05-26T16:06:19.974Z] Running command: /bin/bash -lc 'rg -n "finalize|bucket|load_finalize|runner|0c|sentinel|nsys|cudaEvent|workers...
+[2026-05-26T16:06:19.974Z] Command failed: /bin/bash -lc 'rg -n "finalize|bucket|load_finalize|runner|0c|sentinel|nsys|cudaEvent|workers... (exit 2)
+[2026-05-26T16:06:30.689Z] Assistant message captured: The repo root has a large set of untracked artifacts already present; I’ll leave those alone....
+
+[2026-05-26T16:06:30.689Z] Assistant message
+The repo root has a large set of untracked artifacts already present; I’ll leave those alone. The density harness lives under the project directory, so I’m switching reads to `proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp`.
+[2026-05-26T16:06:30.722Z] Running command: /bin/bash -lc 'rg -n "finalize|bucket|load_finalize|runner|0c|sentinel|nsys|cudaEvent|workers...
+[2026-05-26T16:06:30.722Z] Command completed: /bin/bash -lc 'rg -n "finalize|bucket|load_finalize|runner|0c|sentinel|nsys|cudaEvent|workers... (exit 0)
+[2026-05-26T16:06:30.725Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main....
+[2026-05-26T16:06:30.726Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.... (exit 0)
+[2026-05-26T16:06:30.738Z] Running command: /bin/bash -lc "sed -n '260,620p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai...
+[2026-05-26T16:06:30.738Z] Command completed: /bin/bash -lc "sed -n '260,620p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai... (exit 0)
+[2026-05-26T16:06:30.738Z] Running command: /bin/bash -lc 'git status --short -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density...
+[2026-05-26T16:06:30.738Z] Command completed: /bin/bash -lc 'git status --short -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density... (exit 0)
+[2026-05-26T16:06:38.727Z] Running command: /bin/bash -lc "sed -n '620,880p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai...
+[2026-05-26T16:06:38.727Z] Running command: /bin/bash -lc "sed -n '880,1135p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma...
+[2026-05-26T16:06:38.727Z] Command completed: /bin/bash -lc "sed -n '620,880p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai... (exit 0)
+[2026-05-26T16:06:38.727Z] Command completed: /bin/bash -lc "sed -n '880,1135p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma... (exit 0)
+[2026-05-26T16:06:38.744Z] Running command: /bin/bash -lc "sed -n '2245,2395p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:06:38.744Z] Running command: /bin/bash -lc "sed -n '1930,2245p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:06:38.744Z] Command completed: /bin/bash -lc "sed -n '2245,2395p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:06:38.744Z] Command completed: /bin/bash -lc "sed -n '1930,2245p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:06:49.117Z] Assistant message captured: The current 0c code does confirm the hypothesized pattern: both same-bucket and mixed-bucket ...
+
+[2026-05-26T16:06:49.117Z] Assistant message
+The current 0c code does confirm the hypothesized pattern: both same-bucket and mixed-bucket call `load_finalize_bucket_loaders_density(..., result.num_runners)`, so an 8-worker mixed run eagerly builds every bucket with eight runners each. I’m going to replace that with a bucket-pool object that can load only the buckets a gate needs, with a per-mode runner cap and explicit memory accounting.
+[2026-05-26T16:06:49.152Z] Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/PLAN_RULES.md"
+[2026-05-26T16:06:49.152Z] Running command: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt"
+[2026-05-26T16:06:49.152Z] Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/PLAN_RULES.md" (exit 0)
+[2026-05-26T16:06:49.152Z] Command completed: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt" (exit 0)
+[2026-05-26T16:06:49.165Z] Running command: /bin/bash -lc 'find proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs -max...
+[2026-05-26T16:06:49.165Z] Running command: /bin/bash -lc 'rg -n "struct Finalize|class Finalize|FinalizeOutcome|discover_finalize_bucket...
+[2026-05-26T16:06:49.165Z] Command completed: /bin/bash -lc 'find proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs -max... (exit 0)
+[2026-05-26T16:06:49.165Z] Command failed: /bin/bash -lc 'rg -n "struct Finalize|class Finalize|FinalizeOutcome|discover_finalize_bucket... (exit 2)
+[2026-05-26T16:07:33.663Z] Running command: /bin/bash -lc "sed -n '1470,1535p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_m...
+[2026-05-26T16:07:33.663Z] Command completed: /bin/bash -lc "sed -n '1470,1535p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_m... (exit 0)
+[2026-05-26T16:07:33.665Z] Running command: /bin/bash -lc "sed -n '1540,1588p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_m...
+[2026-05-26T16:07:33.665Z] Command completed: /bin/bash -lc "sed -n '1540,1588p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_m... (exit 0)
+[2026-05-26T16:07:33.669Z] Running command: /bin/bash -lc "sed -n '1328,1428p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_m...
+[2026-05-26T16:07:33.670Z] Command completed: /bin/bash -lc "sed -n '1328,1428p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_m... (exit 0)
+[2026-05-26T16:07:33.694Z] Running command: /bin/bash -lc "docker ps --format '{{.Image}} {{.Names}} {{.Status}}'"
+[2026-05-26T16:07:33.694Z] Command completed: /bin/bash -lc "docker ps --format '{{.Image}} {{.Names}} {{.Status}}'" (exit 0)
+[2026-05-26T16:08:29.313Z] Assistant message captured: I’m about to edit `density_main.cpp` to introduce a finalize bucket pool with per-mode runner...
+
+[2026-05-26T16:08:29.313Z] Assistant message
+I’m about to edit `density_main.cpp` to introduce a finalize bucket pool with per-mode runner policy and memory records. The key behavioral change is: same-bucket stress preloads one hot bucket with `workers` runners; mixed-bucket preloads only the buckets selected for that run with `min(workers, 2)` runners.
+[2026-05-26T16:09:32.439Z] Applying 1 file change(s).
+[2026-05-26T16:09:32.453Z] File changes completed.
+[2026-05-26T16:09:36.509Z] Running command: /bin/bash -lc 'rg -n "load_finalize_bucket_loaders_density|std::map<std::pair<int64_t, int64_...
+[2026-05-26T16:09:36.519Z] Command completed: /bin/bash -lc 'rg -n "load_finalize_bucket_loaders_density|std::map<std::pair<int64_t, int64_... (exit 0)
+[2026-05-26T16:09:41.673Z] Running command: /bin/bash -lc "sed -n '980,1225p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma...
+[2026-05-26T16:09:41.673Z] Command completed: /bin/bash -lc "sed -n '980,1225p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma... (exit 0)
+[2026-05-26T16:09:41.677Z] Running command: /bin/bash -lc "sed -n '2205,2325p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:09:41.677Z] Command completed: /bin/bash -lc "sed -n '2205,2325p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:09:56.174Z] Applying 1 file change(s).
+[2026-05-26T16:09:56.186Z] File changes completed.
+[2026-05-26T16:10:19.251Z] Applying 1 file change(s).
+[2026-05-26T16:10:19.252Z] File changes completed.
+[2026-05-26T16:10:26.557Z] Running command: /bin/bash -lc 'rg -n "load_finalize_bucket_loaders_density|std::map<std::pair<int64_t, int64_...
+[2026-05-26T16:10:26.570Z] Command completed: /bin/bash -lc 'rg -n "load_finalize_bucket_loaders_density|std::map<std::pair<int64_t, int64_... (exit 0)
+[2026-05-26T16:10:26.570Z] Running command: /bin/bash -lc "sed -n '2145,2335p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:10:26.570Z] Command completed: /bin/bash -lc "sed -n '2145,2335p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:10:26.570Z] Running command: /bin/bash -lc "sed -n '640,1015p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma...
+[2026-05-26T16:10:26.570Z] Command completed: /bin/bash -lc "sed -n '640,1015p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma... (exit 0)
+[2026-05-26T16:10:41.006Z] Assistant message captured: The edit is in place. I’m checking it with a container build now; if the compiler turns up ty...
+
+[2026-05-26T16:10:41.006Z] Assistant message
+The edit is in place. I’m checking it with a container build now; if the compiler turns up type fallout from replacing the old map with the pool, I’ll keep the fixes confined to this file.
+[2026-05-26T16:10:41.059Z] Running command: /bin/bash -lc 'git diff -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp'
+[2026-05-26T16:10:41.060Z] Command completed: /bin/bash -lc 'git diff -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp' (exit 0)
+[2026-05-26T16:10:41.066Z] Running command: /bin/bash -lc 'nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader'
+[2026-05-26T16:10:41.066Z] Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader' (exit 0)
+[2026-05-26T16:10:41.070Z] Running command: /bin/bash -lc "docker image inspect nemotron-aoti:cu128 --format '{{.Id}} {{.Size}}'"
+[2026-05-26T16:10:41.070Z] Command completed: /bin/bash -lc "docker image inspect nemotron-aoti:cu128 --format '{{.Id}} {{.Size}}'" (exit 0)
+[2026-05-26T16:10:48.625Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:11:02.545Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:11:16.585Z] Running command: /bin/bash -lc "sed -n '1285,1395p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:11:16.596Z] Command completed: /bin/bash -lc "sed -n '1285,1395p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:11:22.849Z] Running command: /bin/bash -lc "sed -n '1395,1495p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:11:22.849Z] Command completed: /bin/bash -lc "sed -n '1395,1495p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:11:36.891Z] Assistant message captured: The clean container build passed. Next I’m running the 0c gate with the full 200-row referenc...
+
+[2026-05-26T16:11:36.891Z] Assistant message
+The clean container build passed. Next I’m running the 0c gate with the full 200-row reference corpus and 8 finalize workers; I’ll keep steady skipped in this run so the measurement targets the fixed finalize path, but correctness/reference generation still covers all 200 rows.
+[2026-05-26T16:11:36.941Z] Running command: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits'
+[2026-05-26T16:11:36.941Z] Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits' (exit 0)
+[2026-05-26T16:11:37.053Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:11:37.471Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:11:46.931Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:11:57.690Z] Assistant message captured: The 8-worker 0c run is underway. The harness buffers a lot of output in Docker, so I’m pollin...
+
+[2026-05-26T16:11:57.690Z] Assistant message
+The 8-worker 0c run is underway. The harness buffers a lot of output in Docker, so I’m polling the process and will pull the telemetry files afterward for the actual numbers.
+[2026-05-26T16:13:08.618Z] Assistant message captured: The loader records are already showing why the old eager topology was wasteful: all 32 bucket...
+
+[2026-05-26T16:13:08.618Z] Assistant message
+The loader records are already showing why the old eager topology was wasteful: all 32 bucket packages are being constructed during serial/reference setup, but the shared constants are one 2.309 GiB allocation and the per-bucket constructor delta is below `cudaMemGetInfo` granularity at load time. The meaningful budget also needs peak memory during the first real bucket runs, which the 0c gate’s peak sampler is capturing.
+[2026-05-26T16:14:57.229Z] Assistant message captured: The run is in the 200-row concurrent correctness phase now. That is expected to be slower tha...
+
+[2026-05-26T16:14:57.229Z] Assistant message
+The run is in the 200-row concurrent correctness phase now. That is expected to be slower than the actual 8-worker finalize burst because it replays full steady+finalize rows twice to keep the oracle honest.
+[2026-05-26T16:14:58.608Z] Running command: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits'
+[2026-05-26T16:14:58.608Z] Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits' (exit 0)
+[2026-05-26T16:18:15.168Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:18:30.706Z] Assistant message captured: The 8-worker run did not reach 0c because the process aborted immediately after the default-s...
+
+[2026-05-26T16:18:30.706Z] Assistant message
+The 8-worker run did not reach 0c because the process aborted immediately after the default-stream 0b control while steady was skipped. The useful part still completed 200-row explicit correctness with 0 mismatches and a 14.5 GB peak, but I need to isolate this abort before trusting the full 0c run.
+[2026-05-26T16:18:30.740Z] Running command: /bin/bash -lc "find proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs/2026...
+[2026-05-26T16:18:30.740Z] Command completed: /bin/bash -lc "find proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs/2026... (exit 0)
+[2026-05-26T16:18:30.747Z] Running command: /bin/bash -lc 'tail -n 5 proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs...
+[2026-05-26T16:18:30.747Z] Command completed: /bin/bash -lc 'tail -n 5 proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs... (exit 0)
+[2026-05-26T16:18:30.759Z] Running command: /bin/bash -lc 'git diff --stat -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma...
+[2026-05-26T16:18:30.759Z] Command completed: /bin/bash -lc 'git diff --stat -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma... (exit 0)
+[2026-05-26T16:18:30.784Z] Running command: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits'
+[2026-05-26T16:18:30.784Z] Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits' (exit 0)
+[2026-05-26T16:18:55.127Z] Assistant message captured: I found a harness robustness issue exposed by the run: if an exception happens during a memor...
+
+[2026-05-26T16:18:55.128Z] Assistant message
+I found a harness robustness issue exposed by the run: if an exception happens during a memory-sampled loader setup, `MemorySampler` can reach `std::thread` destruction before joining and abort instead of reporting the real error. I’m making that sampler destructor non-throwing and joined, then I’ll rerun the 0c path with a lean 200-row reference setup so it reaches the finalize gate.
+[2026-05-26T16:18:57.615Z] Applying 1 file change(s).
+[2026-05-26T16:18:57.625Z] File changes completed.
+[2026-05-26T16:19:05.222Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:19:18.993Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:19:22.069Z] Assistant message captured: The rebuild passed. I’m rerunning 8-worker 0c now with `stream-mode=default` only for the pre...
+
+[2026-05-26T16:19:22.069Z] Assistant message
+The rebuild passed. I’m rerunning 8-worker 0c now with `stream-mode=default` only for the preliminary 200-row reference replay; the actual same-bucket and mixed-bucket finalize gates still use explicit per-worker streams.
+[2026-05-26T16:19:25.434Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:22:12.385Z] Assistant message captured: This rerun is still in the single-worker 200-row reference/correctness replay. Once it reache...
+
+[2026-05-26T16:22:12.385Z] Assistant message
+This rerun is still in the single-worker 200-row reference/correctness replay. Once it reaches 0c, the new policy should show one loaded bucket for same-bucket and eight selected buckets with two runners each for mixed.
+[2026-05-26T16:23:30.168Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:24:16.178Z] Assistant message captured: The fixed same-bucket stress passed at 8 workers, but then the mixed run in the same process ...
+
+[2026-05-26T16:24:16.178Z] Assistant message
+The fixed same-bucket stress passed at 8 workers, but then the mixed run in the same process hit OOM while loading the next worker context. The stack shows this is residual process memory after the hot-bucket burst, not the mixed bucket cap itself. I’m tightening 0c prep memory and adding a `--finalize-mode` switch so same and mixed can be verified in fresh processes when AOTI runner memory is sticky.
+[2026-05-26T16:24:20.196Z] Applying 1 file change(s).
+[2026-05-26T16:24:20.210Z] File changes completed.
+[2026-05-26T16:24:26.100Z] Applying 1 file change(s).
+[2026-05-26T16:24:26.101Z] File changes completed.
+[2026-05-26T16:24:35.379Z] Applying 1 file change(s).
+[2026-05-26T16:24:35.380Z] File changes completed.
+[2026-05-26T16:24:40.607Z] Applying 1 file change(s).
+[2026-05-26T16:24:40.607Z] File changes completed.
+[2026-05-26T16:24:49.899Z] Applying 1 file change(s).
+[2026-05-26T16:24:49.900Z] File changes completed.
+[2026-05-26T16:24:58.284Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:25:11.865Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:25:17.247Z] Assistant message captured: The build is clean after adding `--finalize-mode`. I’m running the 8-worker mixed-bucket gate...
+
+[2026-05-26T16:25:17.247Z] Assistant message
+The build is clean after adding `--finalize-mode`. I’m running the 8-worker mixed-bucket gate in a fresh process now; this is the blocker case from the original OOM.
+[2026-05-26T16:25:20.348Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:28:54.483Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:28:57.968Z] Assistant message captured: The fresh 8-worker mixed-bucket run passed: 0 mismatches, p95 finalize wait 0 ms, peak 30.792...
+
+[2026-05-26T16:28:57.968Z] Assistant message
+The fresh 8-worker mixed-bucket run passed: 0 mismatches, p95 finalize wait 0 ms, peak 30.792 GiB. I’m running the fresh 8-worker hot same-bucket stress next with the same 200-row reference corpus.
+[2026-05-26T16:29:01.421Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:32:35.880Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:32:46.678Z] Assistant message captured: Both fresh 8-worker 0c modes pass. The 8-worker peaks are already about 30.79 GiB on a 31.32 ...
+
+[2026-05-26T16:32:46.678Z] Assistant message
+Both fresh 8-worker 0c modes pass. The 8-worker peaks are already about 30.79 GiB on a 31.32 GiB card, so higher worker counts have very little headroom; I’m doing one 10-worker mixed-bucket trial to make the “higher” boundary empirical rather than guessed.
+[2026-05-26T16:32:50.163Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:36:22.331Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:36:36.127Z] Assistant message captured: The 10-worker mixed trial failed with OOM while loading worker context after the 10 capped bu...
+
+[2026-05-26T16:36:36.127Z] Assistant message
+The 10-worker mixed trial failed with OOM while loading worker context after the 10 capped bucket loaders; that gives the higher-count boundary on this 5090. Since `nsys` is not installed in the container, I’m running the CUDA-event steady attribution sweep at N=1/4/16 to separate host-dispatch lock behavior from bandwidth/SM contention.
+[2026-05-26T16:36:39.386Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:38:05.592Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:38:34.540Z] Running command: /bin/bash -lc "jq -c '{stamp:\"20260526T162901Z\", check, workers, mismatches, pass, finalize...
+[2026-05-26T16:38:34.551Z] Running command: /bin/bash -lc "jq -c '{stamp:\"20260526T162520Z\", check, workers, mismatches, pass, finalize...
+[2026-05-26T16:38:34.551Z] Command completed: /bin/bash -lc "jq -c '{stamp:\"20260526T162520Z\", check, workers, mismatches, pass, finalize... (exit 0)
+[2026-05-26T16:38:34.551Z] Command completed: /bin/bash -lc "jq -c '{stamp:\"20260526T162901Z\", check, workers, mismatches, pass, finalize... (exit 0)
+[2026-05-26T16:38:34.554Z] Running command: /bin/bash -lc 'git diff --check -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+[2026-05-26T16:38:34.554Z] Running command: /bin/bash -lc 'for n in 1 4 16; do jq -c --arg n "$n" '"'{n:"'$n, workers, num_runners, throu...
+[2026-05-26T16:38:34.566Z] Command completed: /bin/bash -lc 'git diff --check -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+[2026-05-26T16:38:34.576Z] Command completed: /bin/bash -lc 'for n in 1 4 16; do jq -c --arg n "$n" '"'{n:"'$n, workers, num_runners, throu... (exit 0)
+[2026-05-26T16:38:57.588Z] Assistant message captured: The telemetry confirms the 0c fix and the higher-count boundary. I’m doing the PLAN_RULES reg...
+
+[2026-05-26T16:38:57.588Z] Assistant message
+The telemetry confirms the 0c fix and the higher-count boundary. I’m doing the PLAN_RULES regression check now: build `session_main` in the same clean container build directory and replay the N=200 session gate, without touching `session_main.cpp`.
+[2026-05-26T16:39:01.701Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:41:54.427Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:42:07.775Z] Running command: /bin/bash -lc "git diff -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp ...
+[2026-05-26T16:42:07.788Z] Command completed: /bin/bash -lc "git diff -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp ... (exit 0)
+[2026-05-26T16:42:07.788Z] Running command: /bin/bash -lc "find proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs/2026...
+[2026-05-26T16:42:07.788Z] Command completed: /bin/bash -lc "find proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel/logs/2026... (exit 0)
+[2026-05-26T16:42:07.788Z] Running command: /bin/bash -lc 'git diff --stat -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma...
+[2026-05-26T16:42:07.788Z] Command completed: /bin/bash -lc 'git diff --stat -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_ma... (exit 0)
+[2026-05-26T16:42:07.908Z] Running command: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -...
+[2026-05-26T16:42:08.228Z] Command completed: /bin/bash -lc "docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -... (exit 0)
+[2026-05-26T16:42:18.835Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed...
+[2026-05-26T16:42:18.835Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed... (exit 0)
+[2026-05-26T16:42:18.839Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed...
+[2026-05-26T16:42:18.839Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed... (exit 0)
+[2026-05-26T16:42:18.845Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed...
+[2026-05-26T16:42:18.845Z] Running command: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed...
+[2026-05-26T16:42:18.845Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed... (exit 0)
+[2026-05-26T16:42:18.845Z] Command completed: /bin/bash -lc "nl -ba proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp | sed... (exit 0)
+[2026-05-26T16:42:41.133Z] Assistant message captured: Implemented in [density_main.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-fr...
+
+[2026-05-26T16:42:41.133Z] Assistant message
+Implemented in [density_main.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:49).
+
+**0c Fix**
+Root cause confirmed: the old path eagerly built every finalize bucket with worker-sized runner pools. I replaced that with a finalize bucket pool that preloads only needed buckets and logs the memory policy. Mixed-bucket now caps per-bucket finalize runners to `min(workers, 2)`. Same-bucket stress uses one hot bucket with `workers` runners. Added `--finalize-mode same|mixed|both` because AOTI runner memory is sticky enough that running hot-stress then mixed in one process can pollute the second mode.
+
+**0c Full-Scale**
+All runs used 200-row references.
+
+- 8-worker mixed: PASS, 0 mismatches, wait p95 `0 ms`, total p95 `1012.08 ms`, peak `30.792 GiB`, 8/32 buckets loaded, 2 runners/bucket.
+- 8-worker same: PASS, 0 mismatches, wait p95 `0 ms`, total p95 `1013.32 ms`, peak `30.792 GiB`, 1/32 bucket loaded, 8 runners.
+- 10-worker mixed: OOM while loading worker context after 10 capped bucket loaders. So 8 is the practical 5090 ceiling for this harness shape.
+
+Shared finalize constants were `~2.287 GiB`; per-bucket preload delta measured `0`, so the big memory is first-run/activation/workspace residency, captured by peak memory.
+
+**Nsight / Attribution**
+`nsys` is not installed in `nemotron-aoti:cu128`.
+
+Fallback CUDA-event attribution:
+- N=1: `142.2/s`, steady p50 `5.28 ms`
+- N=4: `240.0/s`, steady p50 `13.63 ms`
+- N=16: `244.3/s`, steady p50 `28.54 ms`
+- Sentinel: PASS, stream B completed while stream A encoder was active.
+
+Conclusion: kernels do overlap on non-default streams, but per-call GPU/event duration inflates materially with concurrency. The plateau is therefore GPU contention dominated, not a pure host-dispatch/AOTI-lock serialization. Launch/lock overhead may still contribute, but it is not the primary explanation.
+
+**Verification**
+- Clean container build: PASS.
+- `session_main artifacts_n200_mel`: PASS, token/event divergences `0/200`.
+- 0c: PASS at 8 workers for same and mixed.
+- Step 0: 0c is now PASS; with prior 0a/0b PASS evidence plus this fallback attribution, Step 0 is effectively closed. Blocker: no actual Nsight trace because `nsys` is absent.
+[2026-05-26T16:42:41.163Z] Turn completed.
+
+[2026-05-26T16:42:41.206Z] Final output
+Implemented in [density_main.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:49).
+
+**0c Fix**
+Root cause confirmed: the old path eagerly built every finalize bucket with worker-sized runner pools. I replaced that with a finalize bucket pool that preloads only needed buckets and logs the memory policy. Mixed-bucket now caps per-bucket finalize runners to `min(workers, 2)`. Same-bucket stress uses one hot bucket with `workers` runners. Added `--finalize-mode same|mixed|both` because AOTI runner memory is sticky enough that running hot-stress then mixed in one process can pollute the second mode.
+
+**0c Full-Scale**
+All runs used 200-row references.
+
+- 8-worker mixed: PASS, 0 mismatches, wait p95 `0 ms`, total p95 `1012.08 ms`, peak `30.792 GiB`, 8/32 buckets loaded, 2 runners/bucket.
+- 8-worker same: PASS, 0 mismatches, wait p95 `0 ms`, total p95 `1013.32 ms`, peak `30.792 GiB`, 1/32 bucket loaded, 8 runners.
+- 10-worker mixed: OOM while loading worker context after 10 capped bucket loaders. So 8 is the practical 5090 ceiling for this harness shape.
+
+Shared finalize constants were `~2.287 GiB`; per-bucket preload delta measured `0`, so the big memory is first-run/activation/workspace residency, captured by peak memory.
+
+**Nsight / Attribution**
+`nsys` is not installed in `nemotron-aoti:cu128`.
+
+Fallback CUDA-event attribution:
+- N=1: `142.2/s`, steady p50 `5.28 ms`
+- N=4: `240.0/s`, steady p50 `13.63 ms`
+- N=16: `244.3/s`, steady p50 `28.54 ms`
+- Sentinel: PASS, stream B completed while stream A encoder was active.
+
+Conclusion: kernels do overlap on non-default streams, but per-call GPU/event duration inflates materially with concurrency. The plateau is therefore GPU contention dominated, not a pure host-dispatch/AOTI-lock serialization. Launch/lock overhead may still contribute, but it is not the primary explanation.
+
+**Verification**
+- Clean container build: PASS.
+- `session_main artifacts_n200_mel`: PASS, token/event divergences `0/200`.
+- 0c: PASS at 8 workers for same and mixed.
+- Step 0: 0c is now PASS; with prior 0a/0b PASS evidence plus this fallback attribution, Step 0 is effectively closed. Blocker: no actual Nsight trace because `nsys` is absent.

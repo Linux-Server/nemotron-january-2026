@@ -67,8 +67,11 @@ default-stream, `num_runners=1`. Log `num_runners`/stream-mode/topology in every
 
 ## Steps (the pre-registered GO/STOP tree)
 
-- [~] **Step 0 — cheap native kill-gates (5090, ~hours, BEFORE any EC2 spend).** Each is a potential early STOP
-  (corroborated — see Rules). PAIRED REVIEW.
+- [x] **Step 0 — cheap native kill-gates (5090, ~hours, BEFORE any EC2 spend).** DONE — conjunct-2 binary = YES
+  (paired-reviewed, commits d77bede + this). 0a/0b/0c all PASS; overlap real + correctness-safe + ONE weight copy;
+  the ~1.7× encoder-only plateau is **GPU CONTENTION (encoder saturates the 5090 ~N=4), NOT the execution lock**
+  (kernel p50 inflates 5.28→13.63→28.54ms with N=1/4/16 while throughput flattens — a lock would leave duration
+  flat). Each is a potential early STOP (corroborated — see Rules). PAIRED REVIEW.
   - **0a steady AOTI pool overlap:** one loader `num_runners=N`, per-worker streams, real `run(inputs,stream)`,
     **per-worker distinct input/cache tensors** (not a shared tensor set). PASS = ≥1.15× throughput @N=2 and
     ≥1.30× @N=4 vs N=1 same-harness, **steady-output concurrent==serial vs a serial oracle (0 mismatch — 0a needs
@@ -165,7 +168,7 @@ independent re-run.
 ## Progress
 | Step | Status | Commit | Notes |
 |---|---|---|---|
-| 0 cheap kill-gates (5090) | in-progress (harness sound; gates partial) | | density_main.cpp built + paired-reviewed + gate-soundness fixes. **conjunct-2 binary = YES:** overlap real (sentinel: stream B runs while A mid-encoder; not the GIL), correctness-safe (0a serial-oracle 0 mismatch; 0b identity 0/200), ONE weight copy (loader-delta 2.309GiB flat across N=1→16). 0a PASS ~1.7× (encoder-ONLY, lock-bounded; controls: single-runner≡N=1, mutex −22%, default −30%), 0b PASS. **0c PARTIAL** (4-worker same/mixed 0 mismatch; 8-worker mixed OOM ~33GB on 32GB 5090). Nsight pending (sentinel substitutes). Density magnitude = Step 1a. |
+| 0 cheap kill-gates (5090) | done | | density_main.cpp, paired-reviewed + gate-soundness fixes. **conjunct-2 binary = YES.** 0a PASS (~1.7× encoder-only; serial-oracle 0 mismatch; loader-delta 2.309GiB flat N=1→16 = ONE weight copy; controls: single-runner≡N=1, mutex −22%, default −30%). 0b PASS (identity 0/200; scalar-locality sentinel: `.item()` doesn't drain unrelated streams). 0c PASS (8-worker same+mixed 0 mismatch after finalize-pool fix: cap min(workers,2)/bucket + preload-needed + hot=workers; 10-worker OOM → finalize memory-tight ~30.8/31.3GiB on 5090, L40S has headroom). **ATTRIBUTION: the plateau is GPU CONTENTION (encoder saturates 5090 ~N=4), NOT the execution lock** (kernel p50 5.28→13.63→28.54ms with N). nsys absent → kernel-duration-vs-N substitutes. Density magnitude (full session w/ host-bound decode) = Step 1a. |
 | 1a 5090 spend-control | todo | | PASS ≥2.00×; not a project GO |
 | 1b L40S ceiling gate | todo | | PASS ≥max(34, 1.80·S_py); paired; the density ceiling |
 | 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design) |

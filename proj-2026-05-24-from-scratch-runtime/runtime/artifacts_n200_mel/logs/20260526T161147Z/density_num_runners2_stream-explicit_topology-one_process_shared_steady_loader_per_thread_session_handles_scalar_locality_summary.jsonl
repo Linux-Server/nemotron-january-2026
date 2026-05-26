@@ -1,0 +1,1 @@
+{"check":"0b_scalar_locality_summary","num_runners":2,"workers":2,"stream_mode":"explicit","identity_pass":true,"stream_uniqueness_pass":true,"default_stream_penalty":0.334455,"default_stream_control_pass":true,"sentinel_probe_pass":true,"scalar_locality_pass":true,"item_wait_pct_gate":"telemetry_only_no_threshold","pass":true}
