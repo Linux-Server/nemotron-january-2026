@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <ctime>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <sys/resource.h>
@@ -545,6 +546,8 @@ struct TimingBuckets {
   std::vector<double> scalar_sync_wait_ms;
   std::vector<double> scalar_sync_pct_of_gpu;
   std::vector<double> steady_gpu_ms;
+  std::vector<double> enc_first_lock_wait_ms;
+  std::vector<double> enc_first_total_ms;
   std::vector<double> finalize_runner_wait_ms;
   std::vector<double> finalize_gpu_ms;
   std::vector<double> finalize_total_ms;
@@ -566,6 +569,8 @@ struct TimingBuckets {
     add(scalar_sync_wait_ms, other.scalar_sync_wait_ms);
     add(scalar_sync_pct_of_gpu, other.scalar_sync_pct_of_gpu);
     add(steady_gpu_ms, other.steady_gpu_ms);
+    add(enc_first_lock_wait_ms, other.enc_first_lock_wait_ms);
+    add(enc_first_total_ms, other.enc_first_total_ms);
     add(finalize_runner_wait_ms, other.finalize_runner_wait_ms);
     add(finalize_gpu_ms, other.finalize_gpu_ms);
     add(finalize_total_ms, other.finalize_total_ms);
@@ -592,16 +597,60 @@ static std::string finalize_phase_stats_json(const TimingBuckets& timings) {
   return oss.str();
 }
 
+static torch::jit::Module load_module_on_device(const std::string& path, torch::Device device) {
+  auto module = torch::jit::load(path);
+  module.to(device);
+  module.eval();
+  return module;
+}
+
+struct SharedEncFirst {
+  torch::jit::Module module;
+  std::mutex mutex;
+  size_t used_before_bytes = 0;
+  size_t used_after_bytes = 0;
+  size_t delta_bytes = 0;
+  std::string policy;
+
+  SharedEncFirst(torch::jit::Module module_in,
+                 size_t used_before,
+                 size_t used_after,
+                 size_t delta,
+                 std::string policy_in)
+      : module(std::move(module_in)),
+        used_before_bytes(used_before),
+        used_after_bytes(used_after),
+        delta_bytes(delta),
+        policy(std::move(policy_in)) {}
+};
+
+static std::shared_ptr<SharedEncFirst> load_shared_enc_first(const std::string& dir,
+                                                             torch::Device device,
+                                                             const std::string& policy) {
+  CUDA_CHECK(cudaDeviceSynchronize());
+  size_t before = gpu_used_bytes();
+  auto module = load_module_on_device(dir + "/enc_first.ts", device);
+  CUDA_CHECK(cudaDeviceSynchronize());
+  size_t after = gpu_used_bytes();
+  size_t delta = after >= before ? after - before : 0;
+  std::printf("density loaded enc_first.ts policy=%s delta=%.3f GiB used_before=%.3f GiB used_after=%.3f GiB\n",
+              policy.c_str(),
+              static_cast<double>(delta) / (1024.0 * 1024.0 * 1024.0),
+              static_cast<double>(before) / (1024.0 * 1024.0 * 1024.0),
+              static_cast<double>(after) / (1024.0 * 1024.0 * 1024.0));
+  return std::make_shared<SharedEncFirst>(std::move(module), before, after, delta, policy);
+}
+
 struct WorkerContext {
   torch::jit::Module bundle;
-  torch::jit::Module enc_first;
+  std::shared_ptr<SharedEncFirst> enc_first;
   torch::jit::Module joint;
   torch::jit::Module predict;
   std::unique_ptr<torch::jit::Module> preproc;
   c10::cuda::CUDAStream stream;
 
   WorkerContext(torch::jit::Module bundle_in,
-                torch::jit::Module enc_first_in,
+                std::shared_ptr<SharedEncFirst> enc_first_in,
                 torch::jit::Module joint_in,
                 torch::jit::Module predict_in,
                 std::unique_ptr<torch::jit::Module> preproc_in,
@@ -614,19 +663,15 @@ struct WorkerContext {
         stream(stream_in) {}
 };
 
-static torch::jit::Module load_module_on_device(const std::string& path, torch::Device device) {
-  auto module = torch::jit::load(path);
-  module.to(device);
-  module.eval();
-  return module;
-}
-
 static std::unique_ptr<WorkerContext> make_worker_context(const std::string& dir,
                                                           torch::Device device,
-                                                          c10::cuda::CUDAStream stream) {
+                                                          c10::cuda::CUDAStream stream,
+                                                          std::shared_ptr<SharedEncFirst> enc_first = nullptr) {
   auto bundle = torch::jit::load(dir + "/session_bundle.ts");
   verify_session_bundle_meta(bundle, false);
-  auto enc_first = load_module_on_device(dir + "/enc_first.ts", device);
+  if (!enc_first) {
+    enc_first = load_shared_enc_first(dir, device, "per_worker_context_own_enc_first");
+  }
   auto joint = load_module_on_device(dir + "/joint_step.ts", device);
   auto predict = load_module_on_device(dir + "/predict_step.ts", device);
   std::unique_ptr<torch::jit::Module> preproc;
@@ -803,11 +848,21 @@ static double apply_encoder_outputs_density(SessionState& state,
   return item_wait_ms;
 }
 
+static std::vector<at::Tensor> run_first_encoder_locked_density(SharedEncFirst& enc_first,
+                                                                const torch::Tensor& chunk,
+                                                                SessionState& state,
+                                                                double* lock_wait_ms) {
+  auto wait_start = Clock::now();
+  std::unique_lock<std::mutex> lock(enc_first.mutex);
+  if (lock_wait_ms != nullptr) *lock_wait_ms += elapsed_ms_since(wait_start);
+  return run_first_encoder(enc_first.module, chunk, state);
+}
+
 static void run_steady_chunk_density(SessionState& state,
                                      torch::jit::Module& bundle,
                                      const std::string& prefix,
                                      int chunk_index,
-                                     torch::jit::Module& enc_first,
+                                     SharedEncFirst& enc_first,
                                      AOTIModelPackageLoader& enc_steady,
                                      torch::jit::Module& joint,
                                      torch::jit::Module& predict,
@@ -846,7 +901,13 @@ static void run_steady_chunk_density(SessionState& state,
   if (expected_first) {
     if (drop_extra != 0 || chunk_T != new_mel.size(2)) throw std::runtime_error("density first steady geometry mismatch");
     chunk = new_mel;
-    out = run_first_encoder(enc_first, chunk, state);
+    double lock_wait_ms = 0.0;
+    auto enc_first_start = Clock::now();
+    out = run_first_encoder_locked_density(enc_first, chunk, state, &lock_wait_ms);
+    if (timings != nullptr) {
+      timings->enc_first_lock_wait_ms.push_back(lock_wait_ms);
+      timings->enc_first_total_ms.push_back(elapsed_ms_since(enc_first_start));
+    }
   } else {
     if (!state.ring.defined()) throw std::runtime_error("density steady continuation missing mel ring");
     if (drop_extra != DROP || chunk_T != state.ring.size(2) + new_mel.size(2)) {
@@ -1302,7 +1363,7 @@ static RowReplayResult replay_row_density(int utt,
                                ctx.bundle,
                                prefix,
                                chunk,
-                               ctx.enc_first,
+                               *ctx.enc_first,
                                enc_steady,
                                ctx.joint,
                                ctx.predict,
@@ -2505,7 +2566,7 @@ static void prepare_finalize_parent(const FinalizeCase& fc,
                              ctx.bundle,
                              prefix,
                              chunk,
-                             ctx.enc_first,
+                             *ctx.enc_first,
                              enc_steady,
                              ctx.joint,
                              ctx.predict,
@@ -2745,6 +2806,10 @@ struct DensitySweepRunResult {
   double throughput_sessions_per_s = 0.0;
   size_t used_before_bytes = 0;
   size_t used_after_loaders_bytes = 0;
+  size_t used_after_worker_contexts_bytes = 0;
+  size_t shared_enc_first_delta_bytes = 0;
+  size_t worker_context_delta_bytes = 0;
+  size_t worker_context_delta_per_worker_bytes = 0;
   size_t used_after_run_bytes = 0;
   size_t peak_mem_bytes = 0;
   size_t total_mem_bytes = 0;
@@ -2892,7 +2957,7 @@ static void warm_steady_encoder_once_density(int utt,
                              ctx.bundle,
                              prefix,
                              chunk,
-                             ctx.enc_first,
+                             *ctx.enc_first,
                              enc_steady,
                              ctx.joint,
                              ctx.predict,
@@ -2994,6 +3059,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   finalize_loaders.preload(needed_buckets);
   CUDA_CHECK(cudaDeviceSynchronize());
   result.used_after_loaders_bytes = gpu_used_bytes();
+  auto shared_enc_first = load_shared_enc_first(args.dir, device, "1a_density_sweep_shared_locked_enc_first");
+  result.shared_enc_first_delta_bytes = shared_enc_first->delta_bytes;
 
   std::vector<std::unique_ptr<WorkerContext>> contexts;
   contexts.reserve(static_cast<size_t>(result.workers));
@@ -3006,8 +3073,18 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
     uintptr_t handle = stream_handle_value(stream);
     stream_ids.insert(handle);
     result.stream_handles.push_back(handle);
-    contexts.push_back(make_worker_context(args.dir, device, stream));
+    contexts.push_back(make_worker_context(args.dir, device, stream, shared_enc_first));
   }
+  CUDA_CHECK(cudaDeviceSynchronize());
+  result.used_after_worker_contexts_bytes = gpu_used_bytes();
+  size_t context_base = result.used_after_loaders_bytes + result.shared_enc_first_delta_bytes;
+  result.worker_context_delta_bytes = result.used_after_worker_contexts_bytes >= context_base
+                                          ? result.used_after_worker_contexts_bytes - context_base
+                                          : 0;
+  result.worker_context_delta_per_worker_bytes = result.workers > 0
+                                                     ? result.worker_context_delta_bytes /
+                                                           static_cast<size_t>(result.workers)
+                                                     : 0;
   result.unique_streams = static_cast<int>(stream_ids.size());
   result.stream_uniqueness_ok = !result.explicit_stream || result.unique_streams == result.workers;
   auto tokenizer = tokenizer_from_bundle(contexts[0]->bundle);
@@ -3112,7 +3189,7 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                      contexts[worker]->bundle,
                                      prefix,
                                      chunk,
-                                     contexts[worker]->enc_first,
+                                     *contexts[worker]->enc_first,
                                      enc_steady,
                                      contexts[worker]->joint,
                                      contexts[worker]->predict,
@@ -3233,7 +3310,7 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"finalize_num_runners_per_loaded_bucket\":" << result.finalize_num_runners
        << ",\"cuda_module_loading\":" << json_quote(cuda_module_loading ? cuda_module_loading : "")
        << ",\"stream_mode\":\"" << stream_mode_label(result.explicit_stream, args.mutex_serialize_run) << "\""
-       << ",\"topology\":\"shared_steady_loader_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
+       << ",\"topology\":\"shared_steady_loader_shared_locked_enc_first_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
        << ",\"cadence_ms\":" << args.density_chunk_period_ms
        << ",\"rows_total\":" << rows_total
        << ",\"requested_sessions\":" << result.requested_sessions
@@ -3267,6 +3344,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"steady_gpu\":" << stats_json(steady_gpu)
        << ",\"item_wait\":" << stats_json(summarize(result.timings.scalar_sync_wait_ms))
        << ",\"item_wait_pct_of_steady_gpu\":" << stats_json(summarize(result.timings.scalar_sync_pct_of_gpu))
+       << ",\"enc_first_lock_wait\":" << stats_json(summarize(result.timings.enc_first_lock_wait_ms))
+       << ",\"enc_first_total\":" << stats_json(summarize(result.timings.enc_first_total_ms))
        << ",\"finalize_wait\":" << stats_json(finalize_wait)
        << ",\"finalize_gpu\":" << stats_json(summarize(result.timings.finalize_gpu_ms))
        << ",\"finalize_total\":" << stats_json(finalize_total)
@@ -3279,18 +3358,27 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"total_gpu_mem_bytes\":" << result.total_mem_bytes
        << ",\"used_before_bytes\":" << result.used_before_bytes
        << ",\"used_after_loaders_bytes\":" << result.used_after_loaders_bytes
+       << ",\"used_after_worker_contexts_bytes\":" << result.used_after_worker_contexts_bytes
+       << ",\"shared_enc_first\":{\"enabled\":true,\"lock\":\"mutex\""
+       << ",\"delta_bytes\":" << result.shared_enc_first_delta_bytes
+       << ",\"used_before_bytes\":" << shared_enc_first->used_before_bytes
+       << ",\"used_after_bytes\":" << shared_enc_first->used_after_bytes
+       << ",\"policy\":\"" << shared_enc_first->policy << "\"}"
+       << ",\"worker_context_delta_bytes\":" << result.worker_context_delta_bytes
+       << ",\"worker_context_delta_per_worker_bytes\":" << result.worker_context_delta_per_worker_bytes
        << ",\"used_after_run_bytes\":" << result.used_after_run_bytes
        << "}";
   emit_telemetry(args.dir,
                  stamp,
                  result.num_runners,
                  stream_mode_label(result.explicit_stream, args.mutex_serialize_run),
-                 "1a_full_session_density_sweep",
+                 "1a_full_session_density_sweep_shared_locked_enc_first",
                  json.str());
 
   std::printf("=== DENSITY 1a ROW N=%d %s: throughput_rt=%.3f streams sessions/s=%.3f "
               "ttfs_p50/p95/p99=%.3f/%.3f/%.3fms spread=%.3fms lag_p50/p95=%.3f/%.3fms "
-              "steady_gpu_p50/p95=%.3f/%.3fms finalize_total_p50/p95=%.3f/%.3fms "
+              "steady_gpu_p50/p95=%.3f/%.3fms enc_first_lock_p95=%.3fms "
+              "finalize_total_p50/p95=%.3f/%.3fms "
               "finalize_aoti_p50/p95=%.3f/%.3fms finalize_wait_p95=%.3fms finalize_p95_valid=%s "
               "cpu_cores=%.2f/%d gpu_util_mean=%.1f%% peak_mem=%.3fGiB mismatches=%d errors=%d ===\n",
               result.n,
@@ -3305,6 +3393,7 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
               lag.p95,
               steady_gpu.p50,
               steady_gpu.p95,
+              summarize(result.timings.enc_first_lock_wait_ms).p95,
               finalize_total.p50,
               finalize_total.p95,
               finalize_aoti.p50,
@@ -3536,9 +3625,13 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
               << ",\"ttfs\":" << stats_json(summarize(run.ttfs_ms))
               << ",\"lag\":" << stats_json(summarize(run.lag_ms))
               << ",\"steady_gpu\":" << stats_json(summarize(run.timings.steady_gpu_ms))
+              << ",\"enc_first_lock_wait\":" << stats_json(summarize(run.timings.enc_first_lock_wait_ms))
+              << ",\"enc_first_total\":" << stats_json(summarize(run.timings.enc_first_total_ms))
               << ",\"finalize_total\":" << stats_json(summarize(run.timings.finalize_total_ms))
               << ",\"finalize_phases\":" << finalize_phase_stats_json(run.timings)
               << ",\"peak_gpu_mem_bytes\":" << run.peak_mem_bytes
+              << ",\"shared_enc_first_delta_bytes\":" << run.shared_enc_first_delta_bytes
+              << ",\"worker_context_delta_per_worker_bytes\":" << run.worker_context_delta_per_worker_bytes
               << ",\"mismatches\":" << run.mismatches
               << ",\"errors\":" << run.errors
               << ",\"oom\":" << json_bool(run.oom)
@@ -3550,7 +3643,7 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
   json << "{\"check\":\"1a_density_sweep_summary\""
        << ",\"num_runners\":0"
        << ",\"stream_mode\":\"" << stream_mode_label(args.stream_mode == "explicit", args.mutex_serialize_run) << "\""
-       << ",\"topology\":\"shared_steady_loader_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
+       << ",\"topology\":\"shared_steady_loader_shared_locked_enc_first_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
        << ",\"ttfs_budget\":{\"p95_ms\":175,\"p99_ms\":250}"
        << ",\"keepup_budget\":{\"lag_p95_ms\":500}"
        << ",\"density_warmup\":" << json_bool(args.density_warmup)
@@ -3572,7 +3665,7 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
                  stamp,
                  0,
                  stream_mode_label(args.stream_mode == "explicit", args.mutex_serialize_run),
-                 "1a_full_session_density_sweep_summary",
+                 "1a_full_session_density_sweep_shared_locked_enc_first_summary",
                  json.str());
   emit_density_sweep_manifest(args, stamp, summary, rows_total);
   std::printf("=== DENSITY 1a SUMMARY %s: knee_N=%d single_thread_keepup_N=%d multiplier=%.3fx "
