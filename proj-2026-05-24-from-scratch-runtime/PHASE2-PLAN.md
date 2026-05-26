@@ -228,11 +228,59 @@ independent re-run.
 - **Honesty (Phase-1 lesson):** real decode (no mock), SLO-robust not keep-up, attribute the knee to a resource,
   report the spread; don't overclaim. If a step's bar isn't met, mark the residual; correct any prior over-claim.
 
+## Live findings & lever inventory (2026-05-26 — Step-1a in progress)
+- **Warm 5090 floor (commit e5f2753):** SLO-robust knee = **N=4** (TTFS p95 14ms ≪ 175ms budget, lag_p95
+  negative, 0 mismatch), finalize **warm ~8ms** (Python-class). The earlier **234ms@N=1 was a per-bucket
+  COLD-START artifact** (CUDA-12 lazy module load, ~225ms first-launch, universal to every AOTI loader; the steady
+  encoder shows the same max spike amortized over chunks) + a 6-sample p95=max — **FIXED by per-bucket warmup +
+  ≥20 samples** (`density_main` `CUDA_MODULE_LOADING=EAGER` + per-worker bucket warm). **BINDING RESOURCE at the
+  5090 knee = MEMORY** (N=8 OOM at 30.5/32GiB; the finalize buckets' per-runner activation × N), NOT
+  compute/contention. ⟹ N=4 is a **memory-capped 5090 FLOOR, not the density verdict** — the **L40S (46GB) is the
+  gate** and the transferable finding is the *binding resource*, not the N=4.
+- **Autotune-ON breaks T1** (`reviews/codex-autotune-drift-verify.md`): cache_t 10.27 = **precision-policy
+  divergence from eager's TF32-reduced path** (==the earlier `fp32_highest` knob-matrix drift; convs went
+  ALLOW_TF32=True), NOT pure reduction-order. The **precision-matched T1-gated ladder** (R1a…,
+  `reviews/codex-autotune-params-strategy.md`) is the path IF pursued — but autotune speeds COMPUTE, so it is
+  **moot while the binding resource is MEMORY**; its value is **contingent on the L40S being contention-bound**.
+- **Finalize is ~half sync+glue, not compute** (phase-split telemetry): `enc_len_sync` **3.67–6.47ms** (a blocking
+  D2H `.item()` on the encoder output length — likely **host-eliminable**, the length is geometry-deterministic)
+  + `glue` **3.77–10.94ms** (event/text/FORK_ASSERT) vs `aoti_run_cuda` 6.59–12.49ms. No `pin_memory`/`non_blocking`
+  in the copies — but volumes are tiny (mel ~8KB, scalars) so it's the **sync stall, not bandwidth.**
+
+### Lever inventory — TIERED by the binding resource
+- **Tier 1 — finalize MEMORY reduction** (the current 5090 binding resource; likely lifts L40S density too):
+  fewer finalize runners/bucket, shared/streamed finalize activation, **padded-bucket consolidation** (one bucket
+  serves a T-range → fewer loaded buckets → less activation), lazy-load only hot buckets. This is what pushes the
+  knee past N=4→8.
+- **Tier 2 — GATE-DEPENDENT** (pending the L40S sweep's binding-resource attribution): L40S memory-bound → Tier 1;
+  **contention-bound → the autotune ladder** (R1a precision-matched, T1-gated); host-bound → Tier 3.
+- **Tier 3 — sync / host-ceiling / tail levers** (first-order ONLY once memory is relaxed + the binding shifts to
+  host): eliminate the `enc_len` D2H `.item()` (compute host-side; ~4–6ms/chunk + a sync point); trim the finalize
+  glue (async/cheaper FORK_ASSERT+text); pinned+`non_blocking` copies (minor — tiny volumes); **cross-stream
+  transfer/compute batching** (a Step-2/3 *scheduler* change). *Double-edge:* the `.item()` idle is the multi-thread
+  fill window → eliminating syncs cuts per-thread latency but also fill-opportunity; net density effect must be
+  MEASURED (the phase-split telemetry does).
+- **NOT levers (ruled out this session):** a finalize CUDA graph for the "234ms" (it was cold-start; warm=8ms);
+  autotune for the memory wall; aggressive `max_autotune`+`coordinate_descent` (breaks T1).
+
+### Scoped next work (priority / dependency)
+- **W0 (in flight):** T1 check on autotune-on steady — completes the autotune-viability question.
+- **W1 (Tier-1, UNBLOCKED, high-value, PAIRED):** finalize-memory reduction — root-cause the per-runner activation
+  cost + implement the reduction (runner cap / shared activation / padded buckets / lazy-load) → push the 5090
+  knee past N=4. Decision-critical for density; helps both boxes.
+- **W2 (Tier-3, UNBLOCKED, cheap):** eliminate the `enc_len` D2H `.item()` (verify geometry-deterministic →
+  host-compute). Finalize+steady latency/tail win.
+- **W3 (THE GATE, pending S3 upload→g6e):** the L40S apples-to-apples density sweep → the streams/box number + the
+  binding-resource attribution → decides Tier-2 (which lever is first-order on the gate box).
+- **W4 (Tier-2, contingent on W3 = contention-bound):** autotune ladder R1a (precision-matched, T1-gated) per the
+  strategy doc.
+- **W5 (Tier-3, lower):** glue trim; pinned/`non_blocking` copies; cross-stream transfer/compute batching (Step-2/3).
+
 ## Progress
 | Step | Status | Commit | Notes |
 |---|---|---|---|
 | 0 cheap kill-gates (5090) | done | d77bede, 92b8a9f | density_main.cpp, paired-reviewed + gate-soundness fixes. **conjunct-2 binary = YES.** 0a PASS (~1.7× encoder-only; serial-oracle 0 mismatch; loader-delta 2.309GiB flat N=1→16 = ONE weight copy; controls: single-runner≡N=1, mutex −22%, default −30%). 0b PASS (identity 0/200; scalar-locality sentinel: `.item()` doesn't drain unrelated streams). 0c PASS (8-worker same+mixed 0 mismatch after finalize-pool fix: cap min(workers,2)/bucket + preload-needed + hot=workers; 10-worker OOM → finalize memory-tight ~30.8/31.3GiB on 5090, L40S has headroom). **ATTRIBUTION: the plateau is GPU CONTENTION (encoder saturates 5090 ~N=4), NOT the execution lock** (kernel p50 5.28→13.63→28.54ms with N). nsys absent → kernel-duration-vs-N substitutes. Density magnitude (full session w/ host-bound decode) = Step 1a. |
-| 1a 5090 spend-control | todo | | PASS ≥2.00×; not a project GO |
+| 1a 5090 spend-control | in-progress | e5f2753 | **Warm autotune-OFF floor: knee N=4 SLO-robust (TTFS p95 14ms; 0 mismatch), finalize warm ~8ms; MEMORY-bound (N=8 OOM)** — 234ms was cold-start (fixed by warmup). autotune-ON breaks T1 (precision-policy drift; ladder ready, contingent on L40S contention-bound). N=4 is a memory-capped 5090 FLOOR, not the verdict — L40S is the gate. See Live findings + lever inventory. PASS bar ≥2.00× still pending the real density multiplier. |
 | 1b L40S ceiling gate | todo | | PASS ≥max(34, 1.80·S_py); paired; the density ceiling |
 | 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design) |
 | 3 multi-session + real WS | todo | | WS-tail microbench + stale-gen gate; closes 1.4b interim-cadence |
