@@ -71,11 +71,27 @@ GPU-contention bottleneck that caps density**. No OOM concern (AOT). Rules:
 - **One artifact dir per (arch × autotune) variant; NEVER clobber a validated baseline.** `enc_steady_aoti.pt2`
   (autotune-off sm_120) is used by `session_main` + the Step-0 harness → autotune-on writes a SEPARATE path
   (`artifacts_at_sm120/`, `artifacts_sm89/`), SHAs preserved.
-- **Autotune-on is CONTINGENT.** T1 token/event + WER-neutral re-validation binds to the **EXACT package SHA**
-  benchmarked; a T1 FAIL = a **correctness STOP/recompile, NOT a perf caveat** (autotune adds drift > the current
-  1/1000 near-tie flips — re-run the E.2-style shadow). If the autotune **compile** fails (Triton/driver/toolchain/
-  timeout) → **compile-blocked**; the off artifact is a **diagnostic floor only, NEVER silently substituted as the
-  headline**.
+- **Autotune-on is CONTINGENT — and a T1-gated LADDER, not a binary shelve.** T1 token/event + WER-neutral
+  re-validation binds to the **EXACT package SHA** benchmarked; **a T1 FAIL retreats one rung down the ladder, it
+  does NOT silently ship**. *Mechanism (MEASURED 2026-05-26, verified+CORRECTED by
+  `reviews/codex-autotune-drift-verify.md`):* autotune diverged the **precision/accumulation policy + kernel
+  choices** away from eager's TF32-reduced path — **NOT purely reduction-order (first framing overstated).** Smoking
+  gun: autotune-on `cache_t` max_abs **10.27 == the earlier knob-matrix result for forcing `fp32_highest`/
+  `emulate_precision_casts`** (`knob_matrix.log`, `0.2b-aoti-findings.md:109-128`) → eager uses TF32-reduced
+  accumulation, autotune-OFF matches it (1.66e-2), autotune-ON diverged (matmul/bmm kept ALLOW_TF32=False but
+  **convs went ALLOW_TF32=True**). Amplified by `cache_t` dynamic range (abs.mean 0.39 / max 54, confirmed for the
+  fixture; corpus-representativeness unproven) + recurrence — but MEASURED autotune-OFF long-stream drift
+  **PLATEAUED not compounded** (drift-probe 0/830 flips, shadow 1/1000), so "flips tokens over a stream" was
+  overstated; autotune-ON 10.27 is unmeasured (T1 check settles it). **Ladder
+  (cheapest→surgical, each rung T1-gated):** (1) **match eager's TF32/precision policy** in the autotune compile
+  (the 10.27==fp32-precise clue says precision-policy divergence is the prime suspect — pin TF32 on/off + matmul
+  precision to eager's, incl. the conv ALLOW_TF32) + `max_autotune` WITHOUT `coordinate_descent_tuning`; (2)
+  **exclude the `cache_t`-producing recurrent GEMMs** from autotune (keep them eager-default → minimal recurrent
+  drift, tune the rest); (3) numeric-aware: autotune → T1-filter candidates → keep the fastest T1-passing config. Drop to autotune-OFF (the validated floor) only if no rung passes T1. The in-flight T1 check
+  (rung 0 = max+coord) quantifies the drift→token-flip gap to target the ladder; the warm floor re-sweep shows how
+  much density autotune even needs to add (if off-warmed ≈ the gate, the marginal GEMM-autotune speed may not be
+  worth the drift battle). If the autotune **compile** fails (Triton/driver/toolchain/timeout) → **compile-blocked**;
+  the off artifact is a **diagnostic floor only, NEVER silently substituted as the headline**.
 - **Reproducible off→on claim:** repeated-run stability (CV ≤10%) for BOTH headline + floor before reporting the
   win; **pin/cache the autotune configs**; log warm/cold Inductor cache. Autotune compile is heavier than the
   default (billable g6e hours for 32 buckets) → **smoke the autotune path on the DL AMI with one small bucket
