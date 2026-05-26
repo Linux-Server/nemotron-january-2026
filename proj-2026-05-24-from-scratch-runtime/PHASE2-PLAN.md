@@ -279,10 +279,11 @@ independent re-run.
 ### Scoped next work (priority / dependency)
 - **W0 DONE:** autotune-on T1-FAILED (995/1000); finalize-234ms = cold-start (warmup-fixed); W1 root-caused the
   memory wall to `enc_first` dup (all paired).
-- **W1 = `enc_first` DEDUP (Tier-1, CRITICAL PATH, the L40S prerequisite).** Implement **Fix-2** (share one
-  enc_first ref + lock, ~10 lines) → re-run 1a **fresh-process-per-N** → confirm the knee jumps from N=4 (est.
-  ~40-45) + correctness holds (concurrent==serial with the shared+locked enc_first). Then **Fix-1** (fold into the
-  shared steady AOTI loader) for production. ~10× est. density upside; confirmable ~5min.
+- **W1 = `enc_first` DEDUP — Fix-2 DONE ✅ (commit 99fbba3): 5090 knee N=4 → ≥N=32 SLO-robust, memory wall gone,
+  thesis validated.** **W1b (next, CRITICAL PATH + clean-L40S prerequisite):** **Fix-1** (fold first-chunk into the
+  shared steady AOTI runner pool = **LOCK-FREE** via num_runners — removes the new enc_first-lock bottleneck (p95
+  245ms@N=32) + closes the first-chunk-TorchScript residual) **+ the unique-streams(>32) harness fix** (getStreamFromPool
+  caps at 32) → re-sweep → the TRUE 5090 knee (est ~40-45+). Both are prerequisites for a clean L40S sweep too.
 - **W2 (Tier-3, UNBLOCKED, cheap):** eliminate the `enc_len` D2H `.item()` (verify geometry-deterministic →
   host-compute). Finalize+steady latency/tail win.
 - **W3 (THE GATE, GATED ON W1 + the S3 upload→g6e):** the L40S apples-to-apples density sweep. **Must run AFTER the
@@ -296,7 +297,7 @@ independent re-run.
 | Step | Status | Commit | Notes |
 |---|---|---|---|
 | 0 cheap kill-gates (5090) | done | d77bede, 92b8a9f | density_main.cpp, paired-reviewed + gate-soundness fixes. **conjunct-2 binary = YES.** 0a PASS (~1.7× encoder-only; serial-oracle 0 mismatch; loader-delta 2.309GiB flat N=1→16 = ONE weight copy; controls: single-runner≡N=1, mutex −22%, default −30%). 0b PASS (identity 0/200; scalar-locality sentinel: `.item()` doesn't drain unrelated streams). 0c PASS (8-worker same+mixed 0 mismatch after finalize-pool fix: cap min(workers,2)/bucket + preload-needed + hot=workers; 10-worker OOM → finalize memory-tight ~30.8/31.3GiB on 5090, L40S has headroom). **ATTRIBUTION: the plateau is GPU CONTENTION (encoder saturates 5090 ~N=4), NOT the execution lock** (kernel p50 5.28→13.63→28.54ms with N). nsys absent → kernel-duration-vs-N substitutes. Density magnitude (full session w/ host-bound decode) = Step 1a. |
-| 1a 5090 spend-control | in-progress | e5f2753 | **Warm autotune-OFF floor: knee N=4 SLO-robust (TTFS p95 14ms; 0 mismatch), finalize warm ~8ms; MEMORY-bound (N=8 OOM)** — 234ms was cold-start (fixed by warmup). autotune-ON breaks T1 (precision-policy drift; ladder ready, contingent on L40S contention-bound). N=4 is a memory-capped 5090 FLOOR, not the verdict — L40S is the gate. See Live findings + lever inventory. PASS bar ≥2.00× still pending the real density multiplier. |
+| 1a 5090 spend-control | in-progress | e5f2753, 99fbba3 | **enc_first dedup → 5090 knee N=4 → ≥N=32 SLO-robust (TTFS p95 65.9ms ≪ 175; lag_p95 neg; mem 18/32GiB so NOT memory-bound; 0 mismatch every N).** True knee ≥32 (harness stream-pool cap at 32, NOT the SLO — large headroom; est ~40-45+). Per-stream 2.51→0.20 GiB. **DENSITY THESIS VALIDATED (≥32/box single-proc vs Python ~16-20/L40S).** 234ms=cold-start (fixed); autotune-ON T1-FAILED (995/1000, shelved). **New binding = GPU contention + the enc_first LOCK (p95→245ms@N=32)** → Fix-1 (AOTI fold, lock-free) + unique-streams(>32) → true knee. PASS bar ≥2.00× cleared in spirit; awaits the clean true-knee + L40S. |
 | 1b L40S ceiling gate | todo | | PASS ≥max(34, 1.80·S_py); paired; the density ceiling |
 | 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design) |
 | 3 multi-session + real WS | todo | | WS-tail microbench + stale-gen gate; closes 1.4b interim-cadence |
