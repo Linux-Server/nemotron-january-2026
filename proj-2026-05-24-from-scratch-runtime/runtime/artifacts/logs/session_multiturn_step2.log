@@ -1,0 +1,330 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+BUILD OK
+### MULTITURN ###
+tokenizer detok selftest PASS: pieces=1024 sequences=1432
+SYNTHETIC New->Newark      PASS delta="" collector="I live in New"
+SYNTHETIC play->playing    PASS delta="" collector="we play"
+SYNTHETIC duplicate final  PASS delta="" collector="hello world"
+SYNTHETIC shorter final    PASS delta="" collector="hello world today"
+SYNTHETIC clean append     PASS delta="today" collector="hello world today"
+SYNTHETIC overlap trim     PASS delta="delta" collector="alpha beta delta"
+=== SYNTHETIC word-delta PASS ===
+finalize manifest verified: 32 buckets, weights_sha256=5690023b45bd9ca36a65344a2eac3ca3a77e6c6ebe868faf6c3d47f81f9b2c27
+loaded finalize shared constants: 637 entries
+  finalize bucket drop=0 T=34 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=35 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=36 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=37 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=38 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=39 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=40 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=41 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=42 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=43 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=44 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=45 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=46 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=47 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=48 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=49 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=43 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=44 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=45 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=46 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=47 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=48 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=49 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=50 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=51 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=52 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=53 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=54 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=55 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=56 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=57 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=58 constants=637 direct=637 alias=0
+=== SESSION multi-turn replay: 8 streams (events=check) ===
+  stream0.turn0 sample=0 steady_chunks=21 final(drop=2,T=49) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=20/20 events=10/10
+  stream0.turn1 sample=1 steady_chunks=20 final(drop=2,T=49) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=29/29 events=10/10
+  stream0.true_boundary final(drop=2,T=49) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=29/29 events=1/1
+  stream1.turn0 sample=2 steady_chunks=80 final(drop=2,T=45) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=74/74 events=38/38
+  stream1.turn1 sample=3 steady_chunks=100 final(drop=2,T=45) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=153/153 events=43/43
+  stream1.true_boundary final(drop=2,T=45) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=153/153 events=1/1
+  stream2.turn0 sample=4 steady_chunks=65 final(drop=2,T=58) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=47/47 events=26/26
+  stream2.turn1 sample=5 steady_chunks=15 final(drop=2,T=46) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=51/51 events=4/4
+  stream2.true_boundary final(drop=2,T=46) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=51/51 events=1/1
+  stream3.turn0 sample=6 steady_chunks=45 final(drop=2,T=57) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=25/25 events=15/15
+  stream3.turn1 sample=7 steady_chunks=75 final(drop=2,T=55) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=87/87 events=38/38
+  stream3.true_boundary final(drop=2,T=55) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=87/87 events=1/1
+  stream4.turn0 sample=8 steady_chunks=55 final(drop=2,T=46) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=55/55 events=29/29
+  stream4.turn1 sample=9 steady_chunks=67 final(drop=2,T=48) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=121/121 events=37/37
+  stream4.true_boundary final(drop=2,T=48) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=121/121 events=1/1
+  stream5.turn0 sample=10 steady_chunks=26 final(drop=2,T=48) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=18/18 events=11/11
+  stream5.turn1 sample=11 steady_chunks=64 final(drop=2,T=51) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=84/84 events=33/33
+  stream5.true_boundary final(drop=2,T=51) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=84/84 events=1/1
+  stream6.turn0 sample=12 steady_chunks=51 final(drop=2,T=57) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=35/35 events=20/20
+  stream6.turn1 sample=13 steady_chunks=77 final(drop=2,T=55) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=103/103 events=38/38
+  stream6.true_boundary final(drop=2,T=55) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=103/103 events=1/1
+  stream7.turn0 sample=14 steady_chunks=65 final(drop=2,T=47) steady=PASS final=PASS events=PASS collector_before=EMPTY retained=PASS FORK_ASSERT=PASS tokens=51/51 events=28/28
+  stream7.turn1 sample=15 steady_chunks=58 final(drop=2,T=45) steady=PASS final=PASS events=PASS collector_before=NONEMPTY retained=PASS FORK_ASSERT=PASS tokens=115/115 events=31/31
+  stream7.true_boundary final(drop=2,T=45) final=PASS events=PASS collector_before=NONEMPTY cold_reset=PASS FORK_ASSERT=PASS tokens=115/115 events=1/1
+=== SESSION MULTITURN PASS: synthetic=PASS steady=16/16 final_token_exact=16/16 event_text_exact=16/16 retained_state=16/16 FORK_ASSERT=16/16 true_boundary_final=8/8 true_boundary_event=8/8 cold_reset=8/8 turnB_nonempty_delta=8/8 nonempty_suppressed=8/8 ===
+### SINGLE N=200 (no-regression) ###
+tokenizer detok selftest PASS: pieces=1024 sequences=6158
+SYNTHETIC New->Newark      PASS delta="" collector="I live in New"
+SYNTHETIC play->playing    PASS delta="" collector="we play"
+SYNTHETIC duplicate final  PASS delta="" collector="hello world"
+SYNTHETIC shorter final    PASS delta="" collector="hello world today"
+SYNTHETIC clean append     PASS delta="today" collector="hello world today"
+SYNTHETIC overlap trim     PASS delta="delta" collector="alpha beta delta"
+=== SYNTHETIC word-delta PASS ===
+finalize manifest verified: 32 buckets, weights_sha256=5690023b45bd9ca36a65344a2eac3ca3a77e6c6ebe868faf6c3d47f81f9b2c27
+loaded finalize shared constants: 637 entries
+  finalize bucket drop=0 T=34 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=35 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=36 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=37 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=38 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=39 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=40 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=41 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=42 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=43 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=44 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=45 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=46 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=47 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=48 constants=637 direct=637 alias=0
+  finalize bucket drop=0 T=49 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=43 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=44 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=45 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=46 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=47 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=48 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=49 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=50 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=51 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=52 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=53 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=54 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=55 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=56 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=57 constants=637 direct=637 alias=0
+  finalize bucket drop=2 T=58 constants=637 direct=637 alias=0
+=== SESSION single-stream replay: 200 utterances (events=check) ===
+  utt0 sample=0 steady_chunks=21 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=20/20 events=10/10
+  utt1 sample=1 steady_chunks=19 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=8/8
+  utt2 sample=2 steady_chunks=80 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=74/74 events=38/38
+  utt3 sample=3 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=78/78 events=39/39
+  utt4 sample=4 steady_chunks=65 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=47/47 events=26/26
+  utt5 sample=5 steady_chunks=14 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=4/4 events=3/3
+  utt6 sample=6 steady_chunks=45 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=25/25 events=15/15
+  utt7 sample=7 steady_chunks=74 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=59/59 events=35/35
+  utt8 sample=8 steady_chunks=55 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=55/55 events=29/29
+  utt9 sample=9 steady_chunks=67 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=66/66 events=36/36
+  utt10 sample=10 steady_chunks=26 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=18/18 events=11/11
+  utt11 sample=11 steady_chunks=64 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=36/36
+  utt12 sample=12 steady_chunks=51 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=35/35 events=20/20
+  utt13 sample=13 steady_chunks=76 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=66/66 events=39/39
+  utt14 sample=14 steady_chunks=65 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=51/51 events=28/28
+  utt15 sample=15 steady_chunks=57 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=31/31
+  utt16 sample=16 steady_chunks=88 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=74/74 events=44/44
+  utt17 sample=17 steady_chunks=25 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=30/30 events=17/17
+  utt18 sample=18 steady_chunks=74 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=38/38
+  utt19 sample=19 steady_chunks=99 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=75/75 events=45/45
+  utt20 sample=20 steady_chunks=95 final(drop=2,T=51) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=70/70 events=41/41
+  utt21 sample=21 steady_chunks=23 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=19/19 events=11/11
+  utt22 sample=22 steady_chunks=20 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=24/24 events=11/11
+  utt23 sample=23 steady_chunks=27 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=24/24 events=14/14
+  utt24 sample=24 steady_chunks=80 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=32/32
+  utt25 sample=25 steady_chunks=46 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=27/27 events=17/17
+  utt26 sample=26 steady_chunks=64 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=32/32
+  utt27 sample=27 steady_chunks=43 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=37/37 events=22/22
+  utt28 sample=28 steady_chunks=73 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=35/35
+  utt29 sample=29 steady_chunks=83 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=73/73 events=41/41
+  utt30 sample=30 steady_chunks=28 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=22/22 events=12/12
+  utt31 sample=31 steady_chunks=78 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=55/55 events=33/33
+  utt32 sample=32 steady_chunks=85 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=36/36
+  utt33 sample=33 steady_chunks=94 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=59/59 events=33/33
+  utt34 sample=34 steady_chunks=81 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=76/76 events=39/39
+  utt35 sample=35 steady_chunks=86 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=57/57 events=35/35
+  utt36 sample=36 steady_chunks=60 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=56/56 events=28/28
+  utt37 sample=37 steady_chunks=85 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=70/70 events=41/41
+  utt38 sample=38 steady_chunks=62 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=32/32
+  utt39 sample=39 steady_chunks=84 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=37/37
+  utt40 sample=40 steady_chunks=24 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=26/26 events=12/12
+  utt41 sample=41 steady_chunks=27 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=16/16 events=11/11
+  utt42 sample=42 steady_chunks=89 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=73/73 events=41/41
+  utt43 sample=43 steady_chunks=60 final(drop=2,T=51) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=45/45 events=24/24
+  utt44 sample=44 steady_chunks=10 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=3/3 events=1/1
+  utt45 sample=45 steady_chunks=22 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=25/25 events=12/12
+  utt46 sample=46 steady_chunks=77 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=35/35
+  utt47 sample=47 steady_chunks=21 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=7/7
+  utt48 sample=48 steady_chunks=64 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=52/52 events=31/31
+  utt49 sample=49 steady_chunks=90 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=72/72 events=40/40
+  utt50 sample=50 steady_chunks=22 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=17/17 events=11/11
+  utt51 sample=51 steady_chunks=73 final(drop=2,T=51) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=56/56 events=33/33
+  utt52 sample=52 steady_chunks=85 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=58/58 events=33/33
+  utt53 sample=53 steady_chunks=76 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=35/35
+  utt54 sample=54 steady_chunks=73 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=60/60 events=34/34
+  utt55 sample=55 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=37/37
+  utt56 sample=56 steady_chunks=72 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=71/71 events=39/39
+  utt57 sample=57 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=36/36
+  utt58 sample=58 steady_chunks=17 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=15/15 events=8/8
+  utt59 sample=59 steady_chunks=47 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=28/28 events=18/18
+  utt60 sample=60 steady_chunks=74 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=70/70 events=37/37
+  utt61 sample=61 steady_chunks=72 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=35/35
+  utt62 sample=62 steady_chunks=91 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=69/69 events=36/36
+  utt63 sample=63 steady_chunks=65 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=60/60 events=34/34
+  utt64 sample=64 steady_chunks=36 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=26/26 events=15/15
+  utt65 sample=65 steady_chunks=26 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=24/24 events=13/13
+  utt66 sample=66 steady_chunks=82 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=33/33
+  utt67 sample=67 steady_chunks=64 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=59/59 events=31/31
+  utt68 sample=68 steady_chunks=87 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=38/38
+  utt69 sample=69 steady_chunks=59 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=53/53 events=31/31
+  utt70 sample=70 steady_chunks=68 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=33/33
+  utt71 sample=71 steady_chunks=80 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=38/38
+  utt72 sample=72 steady_chunks=19 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=23/23 events=12/12
+  utt73 sample=73 steady_chunks=76 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=53/53 events=33/33
+  utt74 sample=74 steady_chunks=68 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=65/65 events=33/33
+  utt75 sample=75 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=69/69 events=39/39
+  utt76 sample=76 steady_chunks=25 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=21/21 events=13/13
+  utt77 sample=77 steady_chunks=72 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=24/24 events=19/19
+  utt78 sample=78 steady_chunks=72 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=69/69 events=35/35
+  utt79 sample=79 steady_chunks=79 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=37/37
+  utt80 sample=80 steady_chunks=20 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=15/15 events=7/7
+  utt81 sample=81 steady_chunks=6 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=6/6 events=2/2
+  utt82 sample=82 steady_chunks=76 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=34/34
+  utt83 sample=83 steady_chunks=79 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=77/77 events=41/41
+  utt84 sample=84 steady_chunks=36 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=23/23 events=10/10
+  utt85 sample=85 steady_chunks=51 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=36/36 events=16/16
+  utt86 sample=86 steady_chunks=24 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=5/5
+  utt87 sample=87 steady_chunks=56 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=54/54 events=31/31
+  utt88 sample=88 steady_chunks=68 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=36/36
+  utt89 sample=89 steady_chunks=83 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=85/85 events=43/43
+  utt90 sample=90 steady_chunks=93 final(drop=2,T=51) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=56/56 events=32/32
+  utt91 sample=91 steady_chunks=30 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=45/45 events=21/21
+  utt92 sample=92 steady_chunks=36 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=18/18 events=12/12
+  utt93 sample=93 steady_chunks=72 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=61/61 events=34/34
+  utt94 sample=94 steady_chunks=26 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=19/19 events=12/12
+  utt95 sample=95 steady_chunks=92 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=37/37
+  utt96 sample=96 steady_chunks=78 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=53/53 events=33/33
+  utt97 sample=97 steady_chunks=44 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=20/20 events=13/13
+  utt98 sample=98 steady_chunks=93 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=73/73 events=41/41
+  utt99 sample=99 steady_chunks=26 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=16/16 events=12/12
+  utt100 sample=100 steady_chunks=58 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=52/52 events=26/26
+  utt101 sample=101 steady_chunks=74 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=58/58 events=36/36
+  utt102 sample=102 steady_chunks=66 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=52/52 events=32/32
+  utt103 sample=103 steady_chunks=83 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=66/66 events=35/35
+  utt104 sample=104 steady_chunks=50 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=57/57 events=29/29
+  utt105 sample=105 steady_chunks=89 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=72/72 events=36/36
+  utt106 sample=106 steady_chunks=18 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=8/8
+  utt107 sample=107 steady_chunks=71 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=65/65 events=38/38
+  utt108 sample=108 steady_chunks=78 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=78/78 events=42/42
+  utt109 sample=109 steady_chunks=76 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=57/57 events=32/32
+  utt110 sample=110 steady_chunks=31 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=24/24 events=11/11
+  utt111 sample=111 steady_chunks=86 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=76/76 events=43/43
+  utt112 sample=112 steady_chunks=57 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=55/55 events=31/31
+  utt113 sample=113 steady_chunks=63 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=51/51 events=29/29
+  utt114 sample=114 steady_chunks=81 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=75/75 events=40/40
+  utt115 sample=115 steady_chunks=76 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=61/61 events=36/36
+  utt116 sample=116 steady_chunks=48 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=49/49 events=26/26
+  utt117 sample=117 steady_chunks=99 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=74/74 events=46/46
+  utt118 sample=118 steady_chunks=47 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=47/47 events=25/25
+  utt119 sample=119 steady_chunks=20 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=31/31 events=13/13
+  utt120 sample=120 steady_chunks=84 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=40/40
+  utt121 sample=121 steady_chunks=22 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=7/7 events=4/4
+  utt122 sample=122 steady_chunks=21 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=39/39 events=15/15
+  utt123 sample=123 steady_chunks=89 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=58/58 events=36/36
+  utt124 sample=124 steady_chunks=71 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=56/56 events=32/32
+  utt125 sample=125 steady_chunks=82 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=59/59 events=31/31
+  utt126 sample=126 steady_chunks=21 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=19/19 events=10/10
+  utt127 sample=127 steady_chunks=32 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=31/31 events=17/17
+  utt128 sample=128 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=43/43
+  utt129 sample=129 steady_chunks=81 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=38/38
+  utt130 sample=130 steady_chunks=98 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=71/71 events=42/42
+  utt131 sample=131 steady_chunks=73 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=65/65 events=33/33
+  utt132 sample=132 steady_chunks=24 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=35/35 events=15/15
+  utt133 sample=133 steady_chunks=99 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=77/77 events=44/44
+  utt134 sample=134 steady_chunks=91 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=72/72 events=40/40
+  utt135 sample=135 steady_chunks=46 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=36/36 events=20/20
+  utt136 sample=136 steady_chunks=98 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=57/57 events=38/38
+  utt137 sample=137 steady_chunks=66 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=57/57 events=30/30
+  utt138 sample=138 steady_chunks=20 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=7/7
+  utt139 sample=139 steady_chunks=67 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=35/35
+  utt140 sample=140 steady_chunks=79 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=70/70 events=36/36
+  utt141 sample=141 steady_chunks=63 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=37/37
+  utt142 sample=142 steady_chunks=73 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=34/34
+  utt143 sample=143 steady_chunks=75 final(drop=2,T=45) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=83/83 events=40/40
+  utt144 sample=144 steady_chunks=19 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=10/10 events=4/4
+  utt145 sample=145 steady_chunks=16 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=10/10 events=8/8
+  utt146 sample=146 steady_chunks=20 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=13/13 events=7/7
+  utt147 sample=147 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=69/69 events=35/35
+  utt148 sample=148 steady_chunks=66 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=33/33
+  utt149 sample=149 steady_chunks=82 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=38/38
+  utt150 sample=150 steady_chunks=36 final(drop=2,T=51) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=37/37 events=21/21
+  utt151 sample=151 steady_chunks=92 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=70/70 events=34/34
+  utt152 sample=152 steady_chunks=67 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=69/69 events=37/37
+  utt153 sample=153 steady_chunks=74 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=65/65 events=34/34
+  utt154 sample=154 steady_chunks=78 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=32/32
+  utt155 sample=155 steady_chunks=67 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=61/61 events=33/33
+  utt156 sample=156 steady_chunks=34 final(drop=2,T=50) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=18/18 events=13/13
+  utt157 sample=157 steady_chunks=61 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=60/60 events=33/33
+  utt158 sample=158 steady_chunks=22 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=33/33 events=12/12
+  utt159 sample=159 steady_chunks=83 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=72/72 events=40/40
+  utt160 sample=160 steady_chunks=73 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=38/38
+  utt161 sample=161 steady_chunks=15 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=14/14 events=8/8
+  utt162 sample=162 steady_chunks=31 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=5/5
+  utt163 sample=163 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=60/60 events=35/35
+  utt164 sample=164 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=33/33
+  utt165 sample=165 steady_chunks=76 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=68/68 events=33/33
+  utt166 sample=166 steady_chunks=21 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=25/25 events=14/14
+  utt167 sample=167 steady_chunks=30 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=30/30 events=15/15
+  utt168 sample=168 steady_chunks=59 final(drop=2,T=57) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=34/34
+  utt169 sample=169 steady_chunks=68 final(drop=2,T=54) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=61/61 events=34/34
+  utt170 sample=170 steady_chunks=81 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=65/65 events=39/39
+  utt171 sample=171 steady_chunks=72 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=32/32
+  utt172 sample=172 steady_chunks=77 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=38/38
+  utt173 sample=173 steady_chunks=79 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=40/40
+  utt174 sample=174 steady_chunks=82 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=76/76 events=40/40
+  utt175 sample=175 steady_chunks=15 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=12/12 events=7/7
+  utt176 sample=176 steady_chunks=18 final(drop=2,T=48) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=8/8 events=4/4
+  utt177 sample=177 steady_chunks=90 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=74/74 events=42/42
+  utt178 sample=178 steady_chunks=66 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=34/34
+  utt179 sample=179 steady_chunks=18 final(drop=2,T=51) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=9/9 events=5/5
+  utt180 sample=180 steady_chunks=77 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=38/38
+  utt181 sample=181 steady_chunks=19 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=23/23 events=11/11
+  utt182 sample=182 steady_chunks=99 final(drop=2,T=58) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=70/70 events=42/42
+  utt183 sample=183 steady_chunks=28 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=15/15 events=10/10
+  utt184 sample=184 steady_chunks=66 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=38/38
+  utt185 sample=185 steady_chunks=88 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=72/72 events=33/33
+  utt186 sample=186 steady_chunks=90 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=62/62 events=38/38
+  utt187 sample=187 steady_chunks=79 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=64/64 events=36/36
+  utt188 sample=188 steady_chunks=93 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=34/34
+  utt189 sample=189 steady_chunks=81 final(drop=2,T=55) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=63/63 events=36/36
+  utt190 sample=190 steady_chunks=33 final(drop=2,T=44) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=24/24 events=14/14
+  utt191 sample=191 steady_chunks=30 final(drop=2,T=47) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=21/21 events=14/14
+  utt192 sample=192 steady_chunks=77 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=69/69 events=37/37
+  utt193 sample=193 steady_chunks=69 final(drop=2,T=52) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=33/33
+  utt194 sample=194 steady_chunks=44 final(drop=2,T=49) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=47/47 events=26/26
+  utt195 sample=195 steady_chunks=82 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=77/77 events=39/39
+  utt196 sample=196 steady_chunks=56 final(drop=2,T=53) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=50/50 events=28/28
+  utt197 sample=197 steady_chunks=27 final(drop=2,T=56) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=13/13 events=8/8
+  utt198 sample=198 steady_chunks=94 final(drop=2,T=43) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=67/67 events=41/41
+  utt199 sample=199 steady_chunks=29 final(drop=2,T=46) steady=PASS final=PASS events=PASS FORK_ASSERT=PASS tokens=11/11 events=7/7
+=== SESSION PASS: synthetic=PASS steady=200/200 final_token_exact=200/200 event_text_exact=200/200 FORK_ASSERT=200/200 ===

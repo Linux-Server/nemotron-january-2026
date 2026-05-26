@@ -44,6 +44,7 @@ static constexpr int ATT_CONTEXT_RIGHT = 1;
 static constexpr const char* MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6b";
 
 enum class SessionMode { STREAMING, PENDING_FINALIZE, FINALIZED };
+enum class FinalizeFinish { SPECULATIVE_KEEP, TRUE_BOUNDARY_COLD_RESET };
 
 static constexpr int64_t EVENT_INTERIM = 0;
 static constexpr int64_t EVENT_FINAL = 1;
@@ -150,6 +151,22 @@ static std::string utt_chunk_attr(int utt, int chunk, const char* name) {
   return "utt" + std::to_string(utt) + "_chunk" + std::to_string(chunk) + "_" + std::string(name);
 }
 
+static std::string prefix_attr(const std::string& prefix, const char* name) {
+  return prefix + "_" + std::string(name);
+}
+
+static std::string prefix_chunk_attr(const std::string& prefix, int chunk, const char* name) {
+  return prefix + "_chunk" + std::to_string(chunk) + "_" + std::string(name);
+}
+
+static std::string stream_turn_prefix(int stream, int turn) {
+  return "stream" + std::to_string(stream) + "_turn" + std::to_string(turn);
+}
+
+static std::string stream_end_prefix(int stream) {
+  return "stream" + std::to_string(stream) + "_end";
+}
+
 static torch::Tensor attr_tensor(torch::jit::Module& module, const std::string& name) {
   return module.attr(name).toTensor();
 }
@@ -160,6 +177,17 @@ static torch::Tensor utt_tensor(torch::jit::Module& bundle, int utt, const char*
 
 static torch::Tensor utt_chunk_tensor(torch::jit::Module& bundle, int utt, int chunk, const char* name) {
   return attr_tensor(bundle, utt_chunk_attr(utt, chunk, name));
+}
+
+static torch::Tensor prefix_tensor(torch::jit::Module& bundle, const std::string& prefix, const char* name) {
+  return attr_tensor(bundle, prefix_attr(prefix, name));
+}
+
+static torch::Tensor prefix_chunk_tensor(torch::jit::Module& bundle,
+                                         const std::string& prefix,
+                                         int chunk,
+                                         const char* name) {
+  return attr_tensor(bundle, prefix_chunk_attr(prefix, chunk, name));
 }
 
 static int64_t scalar_i64(torch::Tensor tensor) {
@@ -452,31 +480,33 @@ static void verify_tokenizer_selftest(torch::jit::Module& bundle, const Tokenize
               tokenizer.pieces.size(), sequences.size());
 }
 
-static std::vector<EmittedEvent> gold_events_from_bundle(torch::jit::Module& bundle, int utt) {
-  auto kinds = tensor_to_vec(utt_tensor(bundle, utt, "event_kinds"));
+static std::vector<EmittedEvent> gold_events_from_bundle(torch::jit::Module& bundle,
+                                                        const std::string& prefix,
+                                                        const std::string& label) {
+  auto kinds = tensor_to_vec(prefix_tensor(bundle, prefix, "event_kinds"));
   auto tokens = unpack_i64_lists(
-      utt_tensor(bundle, utt, "event_tokens"),
-      utt_tensor(bundle, utt, "event_token_offsets"),
+      prefix_tensor(bundle, prefix, "event_tokens"),
+      prefix_tensor(bundle, prefix, "event_token_offsets"),
       "event_tokens",
-      utt);
+      -1);
   auto collectors = unpack_i64_lists(
-      utt_tensor(bundle, utt, "event_collector_tokens"),
-      utt_tensor(bundle, utt, "event_collector_token_offsets"),
+      prefix_tensor(bundle, prefix, "event_collector_tokens"),
+      prefix_tensor(bundle, prefix, "event_collector_token_offsets"),
       "event_collector_tokens",
-      utt);
+      -1);
   auto texts = unpack_utf8_strings(
-      utt_tensor(bundle, utt, "event_text_bytes"),
-      utt_tensor(bundle, utt, "event_text_offsets"),
+      prefix_tensor(bundle, prefix, "event_text_bytes"),
+      prefix_tensor(bundle, prefix, "event_text_offsets"),
       "event_text",
-      utt);
+      -1);
   auto collector_texts = unpack_utf8_strings(
-      utt_tensor(bundle, utt, "event_collector_text_bytes"),
-      utt_tensor(bundle, utt, "event_collector_text_offsets"),
+      prefix_tensor(bundle, prefix, "event_collector_text_bytes"),
+      prefix_tensor(bundle, prefix, "event_collector_text_offsets"),
       "event_collector_text",
-      utt);
+      -1);
   if (tokens.size() != kinds.size() || collectors.size() != kinds.size() ||
       texts.size() != kinds.size() || collector_texts.size() != kinds.size()) {
-    throw std::runtime_error("event payload count mismatch for utt" + std::to_string(utt));
+    throw std::runtime_error("event payload count mismatch for " + label);
   }
   std::vector<EmittedEvent> events;
   events.reserve(kinds.size());
@@ -484,6 +514,11 @@ static std::vector<EmittedEvent> gold_events_from_bundle(torch::jit::Module& bun
     events.push_back({kinds[i], tokens[i], collectors[i], texts[i], collector_texts[i]});
   }
   return events;
+}
+
+static std::vector<EmittedEvent> gold_events_from_bundle(torch::jit::Module& bundle, int utt) {
+  std::string prefix = "utt" + std::to_string(utt);
+  return gold_events_from_bundle(bundle, prefix, "utt" + std::to_string(utt));
 }
 
 static void emit_event(std::vector<EmittedEvent>& events,
@@ -497,11 +532,11 @@ static void emit_event(std::vector<EmittedEvent>& events,
 
 static bool equal_events(const std::vector<EmittedEvent>& got,
                          const std::vector<EmittedEvent>& gold,
-                         int utt) {
+                         const std::string& label) {
   bool ok = got.size() == gold.size();
   if (!ok) {
-    std::printf("    utt%d event count mismatch: got=%zu gold=%zu\n",
-                utt, got.size(), gold.size());
+    std::printf("    %s event count mismatch: got=%zu gold=%zu\n",
+                label.c_str(), got.size(), gold.size());
   }
   size_t n = std::min(got.size(), gold.size());
   for (size_t i = 0; i < n; ++i) {
@@ -509,8 +544,8 @@ static bool equal_events(const std::vector<EmittedEvent>& got,
                     got[i].text == gold[i].text &&
                     got[i].collector_text == gold[i].collector_text;
     if (!event_ok) {
-      std::printf("    utt%d event[%zu] mismatch: got_kind=%s gold_kind=%s\n",
-                  utt, i, event_kind_name(got[i].kind), event_kind_name(gold[i].kind));
+      std::printf("    %s event[%zu] mismatch: got_kind=%s gold_kind=%s\n",
+                  label.c_str(), i, event_kind_name(got[i].kind), event_kind_name(gold[i].kind));
       if (got[i].text != gold[i].text) {
         std::printf("      got text :%s\n", escaped_text(got[i].text).c_str());
         std::printf("      gold text:%s\n", escaped_text(gold[i].text).c_str());
@@ -533,11 +568,11 @@ static bool equal_events(const std::vector<EmittedEvent>& got,
 static bool equal_tokens(const std::vector<int64_t>& got,
                          const std::vector<int64_t>& gold,
                          const char* label,
-                         int utt) {
+                         const std::string& row_label) {
   bool ok = got == gold;
   if (!ok) {
-    std::printf("    utt%d %s token mismatch: got_len=%zu gold_len=%zu\n",
-                utt, label, got.size(), gold.size());
+    std::printf("    %s %s token mismatch: got_len=%zu gold_len=%zu\n",
+                row_label.c_str(), label, got.size(), gold.size());
     std::printf("      got :%s\n", vec_to_string(got).c_str());
     std::printf("      gold:%s\n", vec_to_string(gold).c_str());
     size_t n = std::min(got.size(), gold.size());
@@ -647,6 +682,14 @@ static void reset_session(SessionState& state, torch::jit::Module& bundle, torch
   state.last_interim_text.clear();
   state.continuous_emitted_text.clear();
   state.mode = SessionMode::STREAMING;
+}
+
+static void finish_speculative_finalize(SessionState& state) {
+  state.mode = SessionMode::STREAMING;
+}
+
+static void cold_reset_after_finalize(SessionState& state, torch::jit::Module& bundle, torch::Device device) {
+  reset_session(state, bundle, device);
 }
 
 static uint32_t rotr(uint32_t x, uint32_t n) {
@@ -1196,7 +1239,7 @@ static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader
 
 static void run_steady_chunk(SessionState& state,
                              torch::jit::Module& bundle,
-                             int utt,
+                             const std::string& prefix,
                              int chunk_index,
                              torch::jit::Module& enc_first,
                              AOTIModelPackageLoader& enc_steady,
@@ -1207,11 +1250,11 @@ static void run_steady_chunk(SessionState& state,
                              std::vector<EmittedEvent>& events) {
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("steady chunk outside STREAMING");
 
-  auto new_mel = utt_chunk_tensor(bundle, utt, chunk_index, "new_mel").to(device).contiguous();
-  int64_t is_first = scalar_i64(utt_chunk_tensor(bundle, utt, chunk_index, "is_first"));
-  int64_t drop_extra = scalar_i64(utt_chunk_tensor(bundle, utt, chunk_index, "drop_extra"));
-  int64_t chunk_T = scalar_i64(utt_chunk_tensor(bundle, utt, chunk_index, "chunk_T"));
-  int64_t emitted_before = scalar_i64(utt_chunk_tensor(bundle, utt, chunk_index, "emitted_before"));
+  auto new_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
+  int64_t is_first = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "is_first"));
+  int64_t drop_extra = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "drop_extra"));
+  int64_t chunk_T = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "chunk_T"));
+  int64_t emitted_before = scalar_i64(prefix_chunk_tensor(bundle, prefix, chunk_index, "emitted_before"));
 
   bool expected_first = state.emitted == 0;
   if ((is_first != 0) != expected_first) throw std::runtime_error("steady first/continuation flag mismatch");
@@ -1259,24 +1302,33 @@ struct FinalizeOutcome {
 
 static FinalizeOutcome run_finalize(SessionState& parent,
                                     torch::jit::Module& bundle,
-                                    int utt,
+                                    const std::string& prefix,
+                                    const std::string& label,
                                     std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
                                     torch::jit::Module& joint,
                                     torch::jit::Module& predict,
                                     torch::Device device,
                                     const Tokenizer& tokenizer,
-                                    std::vector<EmittedEvent>& events) {
-  if (parent.mode != SessionMode::PENDING_FINALIZE) throw std::runtime_error("finalize outside PENDING_FINALIZE");
+                                    std::vector<EmittedEvent>& events,
+                                    FinalizeFinish finish) {
+  if (finish == FinalizeFinish::SPECULATIVE_KEEP && parent.mode != SessionMode::PENDING_FINALIZE) {
+    throw std::runtime_error("speculative finalize outside PENDING_FINALIZE");
+  }
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET &&
+      parent.mode != SessionMode::STREAMING &&
+      parent.mode != SessionMode::PENDING_FINALIZE) {
+    throw std::runtime_error("true-boundary finalize outside live state");
+  }
   auto snapshot = snapshot_asr(parent);
   parent.mode = SessionMode::FINALIZED;
   auto fork = clone_session(parent);
 
-  int64_t drop_extra = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
-  int64_t final_T = scalar_i64(utt_tensor(bundle, utt, "final_T"));
-  auto gold = tensor_to_vec(utt_tensor(bundle, utt, "gold_tokens"));
+  int64_t drop_extra = scalar_i64(prefix_tensor(bundle, prefix, "final_drop_extra"));
+  int64_t final_T = scalar_i64(prefix_tensor(bundle, prefix, "final_T"));
+  auto gold = tensor_to_vec(prefix_tensor(bundle, prefix, "gold_tokens"));
 
   if (final_T > 0) {
-    auto final_chunk = utt_tensor(bundle, utt, "final_chunk_mel").to(device).contiguous();
+    auto final_chunk = prefix_tensor(bundle, prefix, "final_chunk_mel").to(device).contiguous();
     if (final_chunk.size(2) != final_T) {
       throw std::runtime_error("final_chunk_mel T does not match bundle final_T");
     }
@@ -1308,7 +1360,7 @@ static FinalizeOutcome run_finalize(SessionState& parent,
 
   FinalizeOutcome outcome;
   outcome.emitted_tokens = fork.hyp.size();
-  outcome.token_ok = equal_tokens(fork.hyp, gold, "final cumulative", utt);
+  outcome.token_ok = equal_tokens(fork.hyp, gold, "final cumulative", label);
   std::string final_text = tokenizer.ids_to_text(fork.hyp);
   std::string delta_text = append_only_delta_text(final_text, parent.continuous_emitted_text);
   auto delta_tokens = append_only_delta_tokens(fork.hyp, parent.continuous_emitted_tokens);
@@ -1333,8 +1385,119 @@ static FinalizeOutcome run_finalize(SessionState& parent,
     parent.continuous_emitted_text = std::move(collector_text);
   }
   outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot);
-  parent.mode = SessionMode::STREAMING;
+  if (finish == FinalizeFinish::SPECULATIVE_KEEP) {
+    finish_speculative_finalize(parent);
+  } else {
+    cold_reset_after_finalize(parent, bundle, device);
+  }
   return outcome;
+}
+
+static bool equal_one_text_from_bundle(torch::jit::Module& bundle,
+                                       const std::string& prefix,
+                                       const char* name,
+                                       const std::string& actual,
+                                       const std::string& label) {
+  auto values = unpack_utf8_strings(
+      prefix_tensor(bundle, prefix, (std::string(name) + "_bytes").c_str()),
+      prefix_tensor(bundle, prefix, (std::string(name) + "_offsets").c_str()),
+      name,
+      -1);
+  if (values.size() != 1) throw std::runtime_error(label + " expected one UTF-8 string for " + name);
+  if (actual == values[0]) return true;
+  std::printf("    %s %s mismatch: got=%s gold=%s\n",
+              label.c_str(), name, escaped_text(actual).c_str(), escaped_text(values[0]).c_str());
+  return false;
+}
+
+static bool retained_state_matches(SessionState& state,
+                                   torch::jit::Module& bundle,
+                                   const std::string& prefix,
+                                   const std::string& label,
+                                   torch::Device device) {
+  bool ok = true;
+  ok = tensor_equal("retained.cache_last_channel", state.clc, prefix_tensor(bundle, prefix, "retained_clc").to(device)) && ok;
+  ok = tensor_equal("retained.cache_last_time", state.clt, prefix_tensor(bundle, prefix, "retained_clt").to(device)) && ok;
+  ok = tensor_equal("retained.cache_last_channel_len", state.clcl, prefix_tensor(bundle, prefix, "retained_clcl").to(device)) && ok;
+  ok = tensor_equal("retained.pred_out", state.g, prefix_tensor(bundle, prefix, "retained_g").to(device)) && ok;
+  ok = tensor_equal("retained.decoder_state.h", state.h, prefix_tensor(bundle, prefix, "retained_h").to(device)) && ok;
+  ok = tensor_equal("retained.decoder_state.c", state.c, prefix_tensor(bundle, prefix, "retained_c").to(device)) && ok;
+
+  bool ring_defined = scalar_i64(prefix_tensor(bundle, prefix, "retained_ring_defined")) != 0;
+  if (state.ring.defined() != ring_defined) {
+    std::printf("    %s retained.mel_frame_ring defined mismatch: got=%d gold=%d\n",
+                label.c_str(), (int)state.ring.defined(), (int)ring_defined);
+    ok = false;
+  } else if (ring_defined) {
+    ok = tensor_equal("retained.mel_frame_ring", state.ring, prefix_tensor(bundle, prefix, "retained_ring").to(device)) && ok;
+  }
+
+  int64_t emitted = scalar_i64(prefix_tensor(bundle, prefix, "retained_emitted"));
+  if (state.emitted != emitted) {
+    std::printf("    %s retained.emitted mismatch: got=%ld gold=%ld\n",
+                label.c_str(), (long)state.emitted, (long)emitted);
+    ok = false;
+  }
+  ok = equal_tokens(state.hyp,
+                    tensor_to_vec(prefix_tensor(bundle, prefix, "retained_hyp_tokens")),
+                    "retained hyp",
+                    label) && ok;
+  ok = equal_tokens(state.continuous_emitted_tokens,
+                    tensor_to_vec(prefix_tensor(bundle, prefix, "retained_collector_tokens")),
+                    "retained collector",
+                    label) && ok;
+  ok = equal_one_text_from_bundle(bundle,
+                                  prefix,
+                                  "retained_collector_text",
+                                  state.continuous_emitted_text,
+                                  label) && ok;
+  if (state.mode != SessionMode::STREAMING) {
+    std::printf("    %s retained mode mismatch: expected STREAMING\n", label.c_str());
+    ok = false;
+  }
+  return ok;
+}
+
+static bool cold_reset_state_matches(SessionState& state,
+                                     torch::jit::Module& bundle,
+                                     const std::string& prefix,
+                                     const std::string& label,
+                                     torch::Device device) {
+  bool ok = true;
+  ok = tensor_equal("cold_reset.cache_last_channel", state.clc, attr_tensor(bundle, "init_clc").to(device)) && ok;
+  ok = tensor_equal("cold_reset.cache_last_time", state.clt, attr_tensor(bundle, "init_clt").to(device)) && ok;
+  ok = tensor_equal("cold_reset.cache_last_channel_len", state.clcl, attr_tensor(bundle, "init_clcl").to(device)) && ok;
+  ok = tensor_equal("cold_reset.pred_out", state.g, attr_tensor(bundle, "init_g").to(device)) && ok;
+  ok = tensor_equal("cold_reset.decoder_state.h", state.h, attr_tensor(bundle, "init_h").to(device)) && ok;
+  ok = tensor_equal("cold_reset.decoder_state.c", state.c, attr_tensor(bundle, "init_c").to(device)) && ok;
+  if (state.ring.defined()) {
+    std::printf("    %s cold_reset.mel_frame_ring should be undefined\n", label.c_str());
+    ok = false;
+  }
+  int64_t emitted = scalar_i64(prefix_tensor(bundle, prefix, "post_reset_emitted"));
+  if (state.emitted != emitted) {
+    std::printf("    %s cold_reset.emitted mismatch: got=%ld gold=%ld\n",
+                label.c_str(), (long)state.emitted, (long)emitted);
+    ok = false;
+  }
+  ok = equal_tokens(state.hyp,
+                    tensor_to_vec(prefix_tensor(bundle, prefix, "post_reset_hyp_tokens")),
+                    "cold_reset hyp",
+                    label) && ok;
+  ok = equal_tokens(state.continuous_emitted_tokens,
+                    tensor_to_vec(prefix_tensor(bundle, prefix, "post_reset_collector_tokens")),
+                    "cold_reset collector",
+                    label) && ok;
+  ok = equal_one_text_from_bundle(bundle,
+                                  prefix,
+                                  "post_reset_collector_text",
+                                  state.continuous_emitted_text,
+                                  label) && ok;
+  if (state.mode != SessionMode::STREAMING) {
+    std::printf("    %s cold_reset mode mismatch: expected STREAMING\n", label.c_str());
+    ok = false;
+  }
+  return ok;
 }
 
 static bool run_synthetic_word_delta_tests() {
@@ -1374,12 +1537,15 @@ static bool run_synthetic_word_delta_tests() {
   return all;
 }
 
-static void verify_session_bundle_meta(torch::jit::Module& bundle) {
+static void verify_session_bundle_meta(torch::jit::Module& bundle, bool multiturn) {
   auto meta = attr_tensor(bundle, "meta").to(torch::kCPU).to(torch::kLong).contiguous();
   if (meta.numel() < 8) throw std::runtime_error("session bundle meta is too short");
   int64_t rows = meta[0].item<int64_t>();
-  int64_t num_utts = scalar_i64(attr_tensor(bundle, "num_utts"));
-  if (num_utts != rows) throw std::runtime_error("session bundle num_utts/meta mismatch");
+  int64_t count = scalar_i64(attr_tensor(bundle, multiturn ? "num_streams" : "num_utts"));
+  if (count != rows) {
+    throw std::runtime_error(std::string("session bundle count/meta mismatch for ") +
+                             (multiturn ? "num_streams" : "num_utts"));
+  }
   if (meta[1].item<int64_t>() != BLANK || meta[2].item<int64_t>() != MAX_SYMBOLS ||
       meta[3].item<int64_t>() != SHIFT || meta[4].item<int64_t>() != PRE ||
       meta[5].item<int64_t>() != DROP || meta[6].item<int64_t>() != FINAL_PADDING_FRAMES ||
@@ -1397,10 +1563,13 @@ static void verify_session_bundle_meta(torch::jit::Module& bundle) {
 int main(int argc, char** argv) {
   std::string dir = "../artifacts";
   bool check_events = true;
+  bool multiturn = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--tokens-only" || arg == "--skip-events") {
       check_events = false;
+    } else if (arg == "--multiturn") {
+      multiturn = true;
     } else {
       dir = arg;
     }
@@ -1409,12 +1578,12 @@ int main(int argc, char** argv) {
     torch::NoGradGuard ng;
     auto device = torch::Device(torch::kCUDA);
 
-    auto bundle = torch::jit::load(dir + "/session_bundle.ts");
-    verify_session_bundle_meta(bundle);
+    auto bundle = torch::jit::load(dir + (multiturn ? "/session_multiturn_bundle.ts" : "/session_bundle.ts"));
+    verify_session_bundle_meta(bundle, multiturn);
     auto tokenizer = tokenizer_from_bundle(bundle);
     verify_tokenizer_selftest(bundle, tokenizer);
     bool synthetic_ok = run_synthetic_word_delta_tests();
-    int64_t rows = scalar_i64(attr_tensor(bundle, "num_utts"));
+    int64_t rows = multiturn ? 0 : scalar_i64(attr_tensor(bundle, "num_utts"));
 
     auto enc_first = torch::jit::load(dir + "/enc_first.ts");
     enc_first.to(device);
@@ -1428,6 +1597,233 @@ int main(int argc, char** argv) {
     predict.eval();
     auto finalize_loaders = load_finalize_bucket_loaders(dir, device);
 
+    if (multiturn) {
+      int64_t streams = scalar_i64(attr_tensor(bundle, "num_streams"));
+      std::printf("=== SESSION multi-turn replay: %ld streams (events=%s) ===\n",
+                  (long)streams, check_events ? "check" : "skip");
+      SessionState session;
+      int total_turns = 0;
+      int steady_pass = 0;
+      int final_pass = 0;
+      int event_pass = 0;
+      int fork_pass = 0;
+      int retained_pass = 0;
+      int end_final_pass = 0;
+      int end_event_pass = 0;
+      int reset_pass = 0;
+      int turn_b_nonempty_delta = 0;
+      int nonempty_suppressed = 0;
+
+      for (int stream = 0; stream < streams; ++stream) {
+        reset_session(session, bundle, device);
+        int64_t num_turns = scalar_i64(attr_tensor(bundle, "stream" + std::to_string(stream) + "_num_turns"));
+        if (num_turns != 2) throw std::runtime_error("multi-turn stream does not have exactly 2 turns");
+
+        for (int turn = 0; turn < num_turns; ++turn) {
+          ++total_turns;
+          std::string prefix = stream_turn_prefix(stream, turn);
+          std::string label = "stream" + std::to_string(stream) + ".turn" + std::to_string(turn);
+          int64_t sample_index = scalar_i64(prefix_tensor(bundle, prefix, "sample_index"));
+          int64_t num_steady = scalar_i64(prefix_tensor(bundle, prefix, "num_steady"));
+          int64_t final_drop = scalar_i64(prefix_tensor(bundle, prefix, "final_drop_extra"));
+          int64_t final_T = scalar_i64(prefix_tensor(bundle, prefix, "final_T"));
+          std::vector<EmittedEvent> gold_events;
+          if (check_events) gold_events = gold_events_from_bundle(bundle, prefix, label);
+          std::vector<EmittedEvent> events;
+
+          bool row_ok = true;
+          try {
+            for (int chunk = 0; chunk < num_steady; ++chunk) {
+              run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+            }
+          } catch (const std::exception& e) {
+            std::printf("  %s sample=%ld steady threw: %s\n", label.c_str(), (long)sample_index, e.what());
+            row_ok = false;
+          }
+
+          auto steady_gold = tensor_to_vec(prefix_tensor(bundle, prefix, "steady_tokens"));
+          bool steady_ok = row_ok && equal_tokens(session.hyp, steady_gold, "steady cumulative", label);
+          if (steady_ok) ++steady_pass;
+
+          bool collector_before_ok = equal_one_text_from_bundle(bundle,
+                                                                prefix,
+                                                                "collector_before_text",
+                                                                session.continuous_emitted_text,
+                                                                label);
+          bool collector_before_nonempty = !session.continuous_emitted_text.empty();
+          session.mode = SessionMode::PENDING_FINALIZE;
+          FinalizeOutcome finalize;
+          try {
+            finalize = run_finalize(session,
+                                    bundle,
+                                    prefix,
+                                    label,
+                                    finalize_loaders,
+                                    joint,
+                                    predict,
+                                    device,
+                                    tokenizer,
+                                    events,
+                                    FinalizeFinish::SPECULATIVE_KEEP);
+          } catch (const std::exception& e) {
+            std::printf("  %s sample=%ld finalize threw: %s\n", label.c_str(), (long)sample_index, e.what());
+            finalize.token_ok = false;
+            finalize.fork_ok = false;
+          }
+
+          bool events_ok = true;
+          if (check_events) {
+            events_ok = row_ok && finalize.token_ok && equal_events(events, gold_events, label);
+          }
+          bool retained_ok = finalize.fork_ok && retained_state_matches(session, bundle, prefix, label, device);
+          if (finalize.token_ok) ++final_pass;
+          if (check_events && events_ok) ++event_pass;
+          if (finalize.fork_ok) ++fork_pass;
+          if (retained_ok) ++retained_pass;
+          if (turn == 1 && collector_before_nonempty && !events.empty() &&
+              events.back().kind == EVENT_FINAL && !events.back().text.empty()) {
+            ++turn_b_nonempty_delta;
+          }
+          auto gold = tensor_to_vec(prefix_tensor(bundle, prefix, "gold_tokens"));
+          if (check_events) {
+            std::printf("  %s sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
+                        "steady=%s final=%s events=%s collector_before=%s retained=%s "
+                        "FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
+                        label.c_str(), (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
+                        steady_ok ? "PASS" : "FAIL",
+                        finalize.token_ok ? "PASS" : "FAIL",
+                        events_ok ? "PASS" : "FAIL",
+                        collector_before_ok ? (collector_before_nonempty ? "NONEMPTY" : "EMPTY") : "FAIL",
+                        retained_ok ? "PASS" : "FAIL",
+                        finalize.fork_ok ? "PASS" : "FAIL",
+                        finalize.emitted_tokens, gold.size(),
+                        events.size(), gold_events.size());
+          } else {
+            std::printf("  %s sample=%ld steady_chunks=%ld final(drop=%ld,T=%ld) "
+                        "steady=%s final=%s events=SKIP collector_before=%s retained=%s "
+                        "FORK_ASSERT=%s tokens=%zu/%zu\n",
+                        label.c_str(), (long)sample_index, (long)num_steady, (long)final_drop, (long)final_T,
+                        steady_ok ? "PASS" : "FAIL",
+                        finalize.token_ok ? "PASS" : "FAIL",
+                        collector_before_ok ? (collector_before_nonempty ? "NONEMPTY" : "EMPTY") : "FAIL",
+                        retained_ok ? "PASS" : "FAIL",
+                        finalize.fork_ok ? "PASS" : "FAIL",
+                        finalize.emitted_tokens, gold.size());
+          }
+        }
+
+        std::string eprefix = stream_end_prefix(stream);
+        std::string elabel = "stream" + std::to_string(stream) + ".true_boundary";
+        int64_t end_drop = scalar_i64(prefix_tensor(bundle, eprefix, "final_drop_extra"));
+        int64_t end_T = scalar_i64(prefix_tensor(bundle, eprefix, "final_T"));
+        std::vector<EmittedEvent> gold_end_events;
+        if (check_events) gold_end_events = gold_events_from_bundle(bundle, eprefix, elabel);
+        std::vector<EmittedEvent> end_events;
+        bool end_collector_before_ok = equal_one_text_from_bundle(bundle,
+                                                                  eprefix,
+                                                                  "collector_before_text",
+                                                                  session.continuous_emitted_text,
+                                                                  elabel);
+        bool end_collector_before_nonempty = !session.continuous_emitted_text.empty();
+        FinalizeOutcome end_finalize;
+        try {
+          end_finalize = run_finalize(session,
+                                      bundle,
+                                      eprefix,
+                                      elabel,
+                                      finalize_loaders,
+                                      joint,
+                                      predict,
+                                      device,
+                                      tokenizer,
+                                      end_events,
+                                      FinalizeFinish::TRUE_BOUNDARY_COLD_RESET);
+        } catch (const std::exception& e) {
+          std::printf("  %s finalize threw: %s\n", elabel.c_str(), e.what());
+          end_finalize.token_ok = false;
+          end_finalize.fork_ok = false;
+        }
+        bool end_events_ok = true;
+        if (check_events) {
+          end_events_ok = end_finalize.token_ok && equal_events(end_events, gold_end_events, elabel);
+        }
+        bool reset_ok = end_finalize.fork_ok && cold_reset_state_matches(session, bundle, eprefix, elabel, device);
+        if (end_finalize.token_ok) ++end_final_pass;
+        if (check_events && end_events_ok) ++end_event_pass;
+        if (reset_ok) ++reset_pass;
+        if (end_collector_before_nonempty && !end_events.empty() && end_events.back().kind == EVENT_SUPPRESSED) {
+          ++nonempty_suppressed;
+        }
+        auto end_gold = tensor_to_vec(prefix_tensor(bundle, eprefix, "gold_tokens"));
+        if (check_events) {
+          std::printf("  %s final(drop=%ld,T=%ld) final=%s events=%s collector_before=%s "
+                      "cold_reset=%s FORK_ASSERT=%s tokens=%zu/%zu events=%zu/%zu\n",
+                      elabel.c_str(), (long)end_drop, (long)end_T,
+                      end_finalize.token_ok ? "PASS" : "FAIL",
+                      end_events_ok ? "PASS" : "FAIL",
+                      end_collector_before_ok ? (end_collector_before_nonempty ? "NONEMPTY" : "EMPTY") : "FAIL",
+                      reset_ok ? "PASS" : "FAIL",
+                      end_finalize.fork_ok ? "PASS" : "FAIL",
+                      end_finalize.emitted_tokens, end_gold.size(),
+                      end_events.size(), gold_end_events.size());
+        } else {
+          std::printf("  %s final(drop=%ld,T=%ld) final=%s events=SKIP collector_before=%s "
+                      "cold_reset=%s FORK_ASSERT=%s tokens=%zu/%zu\n",
+                      elabel.c_str(), (long)end_drop, (long)end_T,
+                      end_finalize.token_ok ? "PASS" : "FAIL",
+                      end_collector_before_ok ? (end_collector_before_nonempty ? "NONEMPTY" : "EMPTY") : "FAIL",
+                      reset_ok ? "PASS" : "FAIL",
+                      end_finalize.fork_ok ? "PASS" : "FAIL",
+                      end_finalize.emitted_tokens, end_gold.size());
+        }
+      }
+
+      bool all = synthetic_ok &&
+                 steady_pass == total_turns &&
+                 final_pass == total_turns &&
+                 fork_pass == total_turns &&
+                 retained_pass == total_turns &&
+                 end_final_pass == streams &&
+                 reset_pass == streams &&
+                 turn_b_nonempty_delta == streams &&
+                 nonempty_suppressed == streams &&
+                 (!check_events || (event_pass == total_turns && end_event_pass == streams));
+      if (check_events) {
+        std::printf("=== SESSION MULTITURN %s: synthetic=%s steady=%d/%d final_token_exact=%d/%d "
+                    "event_text_exact=%d/%d retained_state=%d/%d FORK_ASSERT=%d/%d "
+                    "true_boundary_final=%d/%ld true_boundary_event=%d/%ld cold_reset=%d/%ld "
+                    "turnB_nonempty_delta=%d/%ld nonempty_suppressed=%d/%ld ===\n",
+                    all ? "PASS" : "FAIL",
+                    synthetic_ok ? "PASS" : "FAIL",
+                    steady_pass, total_turns,
+                    final_pass, total_turns,
+                    event_pass, total_turns,
+                    retained_pass, total_turns,
+                    fork_pass, total_turns,
+                    end_final_pass, (long)streams,
+                    end_event_pass, (long)streams,
+                    reset_pass, (long)streams,
+                    turn_b_nonempty_delta, (long)streams,
+                    nonempty_suppressed, (long)streams);
+      } else {
+        std::printf("=== SESSION MULTITURN %s: synthetic=%s steady=%d/%d final_token_exact=%d/%d "
+                    "event_text_exact=SKIP retained_state=%d/%d FORK_ASSERT=%d/%d "
+                    "true_boundary_final=%d/%ld cold_reset=%d/%ld "
+                    "turnB_nonempty_delta=%d/%ld nonempty_suppressed=%d/%ld ===\n",
+                    all ? "PASS" : "FAIL",
+                    synthetic_ok ? "PASS" : "FAIL",
+                    steady_pass, total_turns,
+                    final_pass, total_turns,
+                    retained_pass, total_turns,
+                    fork_pass, total_turns,
+                    end_final_pass, (long)streams,
+                    reset_pass, (long)streams,
+                    turn_b_nonempty_delta, (long)streams,
+                    nonempty_suppressed, (long)streams);
+      }
+      return all ? 0 : 1;
+    }
+
     std::printf("=== SESSION single-stream replay: %ld utterances (events=%s) ===\n",
                 (long)rows, check_events ? "check" : "skip");
     SessionState session;
@@ -1438,6 +1834,8 @@ int main(int argc, char** argv) {
 
     for (int utt = 0; utt < rows; ++utt) {
       reset_session(session, bundle, device);
+      std::string prefix = "utt" + std::to_string(utt);
+      std::string label = "utt" + std::to_string(utt);
       int64_t sample_index = scalar_i64(utt_tensor(bundle, utt, "sample_index"));
       int64_t num_steady = scalar_i64(utt_tensor(bundle, utt, "num_steady"));
       int64_t final_drop = scalar_i64(utt_tensor(bundle, utt, "final_drop_extra"));
@@ -1449,7 +1847,7 @@ int main(int argc, char** argv) {
       bool row_ok = true;
       try {
         for (int chunk = 0; chunk < num_steady; ++chunk) {
-          run_steady_chunk(session, bundle, utt, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
+          run_steady_chunk(session, bundle, prefix, chunk, enc_first, enc_steady, joint, predict, device, tokenizer, events);
         }
       } catch (const std::exception& e) {
         std::printf("  utt%d sample=%ld steady threw: %s\n", utt, (long)sample_index, e.what());
@@ -1457,13 +1855,23 @@ int main(int argc, char** argv) {
       }
 
       auto steady_gold = tensor_to_vec(utt_tensor(bundle, utt, "steady_tokens"));
-      bool steady_ok = row_ok && equal_tokens(session.hyp, steady_gold, "steady cumulative", utt);
+      bool steady_ok = row_ok && equal_tokens(session.hyp, steady_gold, "steady cumulative", label);
       if (steady_ok) ++steady_pass;
 
       session.mode = SessionMode::PENDING_FINALIZE;
       FinalizeOutcome finalize;
       try {
-        finalize = run_finalize(session, bundle, utt, finalize_loaders, joint, predict, device, tokenizer, events);
+        finalize = run_finalize(session,
+                                bundle,
+                                prefix,
+                                label,
+                                finalize_loaders,
+                                joint,
+                                predict,
+                                device,
+                                tokenizer,
+                                events,
+                                FinalizeFinish::SPECULATIVE_KEEP);
       } catch (const std::exception& e) {
         std::printf("  utt%d sample=%ld finalize threw: %s\n", utt, (long)sample_index, e.what());
         finalize.token_ok = false;
@@ -1472,7 +1880,7 @@ int main(int argc, char** argv) {
 
       bool events_ok = true;
       if (check_events) {
-        events_ok = row_ok && finalize.token_ok && equal_events(events, gold_events, utt);
+        events_ok = row_ok && finalize.token_ok && equal_events(events, gold_events, label);
       }
       if (finalize.token_ok) ++final_pass;
       if (check_events && events_ok) ++event_pass;
