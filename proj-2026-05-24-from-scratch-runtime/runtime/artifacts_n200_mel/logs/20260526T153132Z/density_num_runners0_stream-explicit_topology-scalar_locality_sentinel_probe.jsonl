@@ -1,0 +1,1 @@
+{"check":"0b_scalar_locality_sentinel_probe","num_runners":0,"workers":2,"stream_mode":"explicit","topology":"explicit_stream_item_does_not_drain_unrelated_streams","pass":true,"stream_a":98436874827360,"stream_b":98436873370016,"b_pending_after_item":true,"item_wait_ms":0.05283,"sentinel_gpu_ms":100.586,"sentinel_sync_wall_ms":99.0593,"matmul_dim":4096,"matmul_iters":48}
