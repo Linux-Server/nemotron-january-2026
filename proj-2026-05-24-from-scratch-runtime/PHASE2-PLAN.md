@@ -58,6 +58,38 @@ in the Python finalize-graph win) → a lock-serialization finding is a topology
 - `Reject_bound` — intentional WS-1013 rejects ≤10% of offered; non-intentional errors ≤1% of admitted; report the
   no-shed curve too.
 
+## Compile & artifact policy (2026-05-26 — autotune is a Phase-2 perf lever)
+Phase 1 compiled AOTI with **autotune OFF** (default) because the goal was token-EXACTNESS, where autotune only
+adds numeric variation. **Phase 2 is a perf/density measurement, so autotune is ON** — it's the AOT-time cost we
+pay for faster runtime kernels, and it lands hardest on the **steady encoder, which Step 0 identified as the
+GPU-contention bottleneck that caps density**. No OOM concern (AOT). Rules:
+- **Two NATIVE artifact sets per target: `<arch>-autotune-ON` (HEADLINE) + `<arch>-autotune-OFF` (FLOOR), BOTH
+  compiled natively on the target GPU.** `max-autotune` benchmarks configs on the PRESENT GPU → cross-compile-
+  autotune is invalid. 5090 → sm_120 on+off (local); L40S/g6e → sm_89 on (+ a sm_89 off floor, or an explicit
+  waiver per Step 1b). Report the **off→on density win as the absolute SLO-robust streams/box Δ and %** (headline
+  vs floor, same everything) — NOT each artifact's multiplier over its own N=1.
+- **One artifact dir per (arch × autotune) variant; NEVER clobber a validated baseline.** `enc_steady_aoti.pt2`
+  (autotune-off sm_120) is used by `session_main` + the Step-0 harness → autotune-on writes a SEPARATE path
+  (`artifacts_at_sm120/`, `artifacts_sm89/`), SHAs preserved.
+- **Autotune-on is CONTINGENT.** T1 token/event + WER-neutral re-validation binds to the **EXACT package SHA**
+  benchmarked; a T1 FAIL = a **correctness STOP/recompile, NOT a perf caveat** (autotune adds drift > the current
+  1/1000 near-tie flips — re-run the E.2-style shadow). If the autotune **compile** fails (Triton/driver/toolchain/
+  timeout) → **compile-blocked**; the off artifact is a **diagnostic floor only, NEVER silently substituted as the
+  headline**.
+- **Reproducible off→on claim:** repeated-run stability (CV ≤10%) for BOTH headline + floor before reporting the
+  win; **pin/cache the autotune configs**; log warm/cold Inductor cache. Autotune compile is heavier than the
+  default (billable g6e hours for 32 buckets) → **smoke the autotune path on the DL AMI with one small bucket
+  first**; capture compile acceptance criteria (timeout/retry, log, torch/CUDA/driver/Triton/Inductor config +
+  cache state, package SHA256).
+- **Exported programs (EPs) are the reusable, arch-agnostic intermediate — PRESERVE durably (Q1 fix).** They were
+  gitignored throwaways (`runtime/.gitignore: artifacts/`) and got cleaned, forcing a full re-export. Back up to
+  **S3 with a MANIFEST** (object path, byte size, SHA256, generating commit/command, model+fixture hashes, the
+  32-bucket contract keys); the **one-command regen FAILS CLOSED** if the regenerated set differs from the
+  contract. The S3 copy doubles as the g6e compile source (75 GB upload = the L40S long pole — start it first).
+  **Decided (user + both reviewers): back up the 75 GB AS-IS now; do NOT externalize EP weights pre-gate** — it's
+  a build-time storage saving that doesn't affect runtime; logged as tech-debt (export-with-shared-weights would
+  shrink EPs ~30×).
+
 ## Ownership / topology contract (pin before building)
 One shared steady AOTI loader **`num_runners=N`** + explicit **per-worker CUDA streams**; **per-worker**
 `SessionState`, `AudioFrontend`, `enc_first`, `joint`, `predict`, `preproc` (concurrent `forward()` on one shared
@@ -93,20 +125,27 @@ default-stream, `num_runners=1`. Log `num_runners`/stream-mode/topology in every
     32-vCPU box is a "more-cores/fewer-syncs" finding, not a STOP.)
 
 - [ ] **Step 1a — 5090 mini-sweep (spend-control proxy, NOT a project GO).** Real decode + real finalize +
-  per-thread streams/handles + the full telemetry schema. Knee **attributed to a binding resource (BW / launch /
-  lock / CPU-core)** via Nsight/CUPTI counters — "BW-bound" is a hypothesis, not NVML util. PASS-to-1b =
-  real-decode multiplier **≥2.00×** vs N=1 AND 0 mismatch AND WER in bound AND `ttfs` within the ttfs SLO budget
-  (Definitions). Report `TTFS_spread`. TUNE/RETEST = 1.50–2.00× with attribution to a fixable harness/topology issue (no
-  EC2 until ≥2.00× or a written non-predictive exception). STOP-candidate = <1.50× or SLO/WER/correctness fail.
-  The 5090→L40S transfer is noisy → a marginal 5090 PASS does NOT substitute for the L40S measurement.
+  per-thread streams/handles + the full telemetry schema, with a **BOUNDED workload** (`--density-sessions-per-worker`,
+  not the full corpus at real-time — the unbounded default ran ~30min/N; pre-register a MINIMUM sessions-per-worker
+  + repeat count, SAME bound for headline + floor). **Headline = sm_120-AUTOTUNE-ON** (recompiled locally to a
+  SEPARATE dir, not clobbering `enc_steady_aoti.pt2`) + a **bounded autotune-OFF floor** run → report the
+  **autotune win** (absolute SLO-robust streams/box Δ + %, headline vs floor). Knee **attributed to a binding resource (BW / launch / lock / CPU-core)** via Nsight/CUPTI
+  counters — "BW-bound" is a hypothesis, not NVML util. PASS-to-1b = autotune-on real-decode multiplier **≥2.00×**
+  vs N=1 AND 0 mismatch AND WER in bound AND `ttfs` within the ttfs SLO budget (Definitions). Report `TTFS_spread`.
+  TUNE/RETEST = 1.50–2.00× with attribution to a fixable harness/topology issue (no EC2 until ≥2.00× or a written
+  non-predictive exception). STOP-candidate = <1.50× or SLO/WER/correctness fail. The 5090→L40S transfer is noisy
+  → a marginal 5090 PASS does NOT substitute for the L40S measurement.
 
-- [ ] **Step 1b — L40S CEILING hard gate (EC2).** Same harness. PASS-to-build = `S_native_step1b ≥ max(34,
-  1.80·S_py_L40S)` (the 1.80× leaves margin for the ~17% Step-4 scheduler/WS haircut; 34 = 28/0.83) + 0 mismatch +
-  WER in bound + `ttfs` within the ttfs SLO budget (Definitions). `TTFS_spread` reported (GREEN ≤1.10× Python;
-  otherwise a build-risk signal, not a STOP — the binding tail is reported at Step 4). CONDITIONAL = ≥G1_floor but
-  <max(34, 1.80·S_py_L40S) → proceed only on explicit human risk-acceptance + a narrow de-risking prototype.
-  STOP-candidate = <G1_floor or SLO/WER/
-  correctness fail. PAIRED REVIEW (decisive measurement).
+- [ ] **Step 1b — L40S CEILING hard gate (EC2).** Same harness, **sm_89-AUTOTUNE-ON compiled NATIVELY on the
+  g6e** (EPs shipped via S3 per the Compile & artifact policy; autotune-on re-validated token-exact on the exact
+  package SHA) **+ a bounded sm_89 autotune-OFF floor** (or an explicit waiver — win inferred from the 5090 off→on),
+  reported as the absolute streams/box Δ + % with identical workload/N/bound/cadence/topology + distinct artifact
+  hashes. PASS-to-build = `S_native_step1b ≥ max(34, 1.80·S_py_L40S)` (the 1.80× leaves margin for the ~17% Step-4 scheduler/WS haircut;
+  34 = 28/0.83) + 0 mismatch + WER in bound + `ttfs` within the ttfs SLO budget (Definitions). `TTFS_spread`
+  reported (GREEN ≤1.10× Python; otherwise a build-risk signal, not a STOP — the binding tail is reported at
+  Step 4). CONDITIONAL = ≥G1_floor but <max(34, 1.80·S_py_L40S) → proceed only on explicit human risk-acceptance +
+  a narrow de-risking prototype. STOP-candidate = <G1_floor or SLO/WER/correctness fail. PAIRED REVIEW (decisive
+  measurement).
 
 - [ ] **Step 2 — scheduler design + admission (blocked on Step-1 telemetry).** From the Step-1 **telemetry
   schema** (not a scalar knee): one **box-global active/admitted cap** + one **box-global backlog-COUNT cap**
