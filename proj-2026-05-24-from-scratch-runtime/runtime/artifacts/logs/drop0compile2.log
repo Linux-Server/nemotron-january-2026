@@ -1,0 +1,91 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.8.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+  compile attempt 1/3: enc_finalize_d0_T34_ep.pt2 -> enc_finalize_d0_T34.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=34 -> enc_finalize_d0_T34.pt2 (2482.6 MB, sha=a4596dbab832..., self_check max_abs=1.569e-02)
+  compile attempt 1/3: enc_finalize_d0_T35_ep.pt2 -> enc_finalize_d0_T35.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=35 -> enc_finalize_d0_T35.pt2 (2482.6 MB, sha=ff39e48279a7..., self_check max_abs=1.314e-02)
+  compile attempt 1/3: enc_finalize_d0_T36_ep.pt2 -> enc_finalize_d0_T36.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=36 -> enc_finalize_d0_T36.pt2 (2482.6 MB, sha=a1335547600c..., self_check max_abs=1.011e-02)
+  compile attempt 1/3: enc_finalize_d0_T37_ep.pt2 -> enc_finalize_d0_T37.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=37 -> enc_finalize_d0_T37.pt2 (2482.6 MB, sha=62a11abced46..., self_check max_abs=9.333e-03)
+  compile attempt 1/3: enc_finalize_d0_T38_ep.pt2 -> enc_finalize_d0_T38.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=38 -> enc_finalize_d0_T38.pt2 (2482.6 MB, sha=2f5a3f4e2827..., self_check max_abs=2.162e-02)
+  compile attempt 1/3: enc_finalize_d0_T39_ep.pt2 -> enc_finalize_d0_T39.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=39 -> enc_finalize_d0_T39.pt2 (2482.6 MB, sha=e482029cf1ee..., self_check max_abs=1.557e-02)
+  compile attempt 1/3: enc_finalize_d0_T40_ep.pt2 -> enc_finalize_d0_T40.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=40 -> enc_finalize_d0_T40.pt2 (2482.6 MB, sha=59774674e7f7..., self_check max_abs=1.380e-02)
+  compile attempt 1/3: enc_finalize_d0_T41_ep.pt2 -> enc_finalize_d0_T41.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=41 -> enc_finalize_d0_T41.pt2 (2482.6 MB, sha=34de95d36338..., self_check max_abs=1.477e-02)
+  compile attempt 1/3: enc_finalize_d0_T42_ep.pt2 -> enc_finalize_d0_T42.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=42 -> enc_finalize_d0_T42.pt2 (2482.7 MB, sha=a8f0a0fe690b..., self_check max_abs=1.367e-02)
+  compile attempt 1/3: enc_finalize_d0_T43_ep.pt2 -> enc_finalize_d0_T43.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=43 -> enc_finalize_d0_T43.pt2 (2482.7 MB, sha=af929ab53cbf..., self_check max_abs=1.413e-02)
+  compile attempt 1/3: enc_finalize_d0_T44_ep.pt2 -> enc_finalize_d0_T44.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=44 -> enc_finalize_d0_T44.pt2 (2482.6 MB, sha=979b532f4dbf..., self_check max_abs=1.367e-02)
+  compile attempt 1/3: enc_finalize_d0_T45_ep.pt2 -> enc_finalize_d0_T45.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=45 -> enc_finalize_d0_T45.pt2 (2482.7 MB, sha=1ea27d5f3ee1..., self_check max_abs=8.345e-03)
+  compile attempt 1/3: enc_finalize_d0_T46_ep.pt2 -> enc_finalize_d0_T46.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=46 -> enc_finalize_d0_T46.pt2 (2482.7 MB, sha=068280807069..., self_check max_abs=1.180e-02)
+  compile attempt 1/3: enc_finalize_d0_T47_ep.pt2 -> enc_finalize_d0_T47.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=47 -> enc_finalize_d0_T47.pt2 (2482.7 MB, sha=c57acfa2e4d2..., self_check max_abs=9.140e-03)
+  compile attempt 1/3: enc_finalize_d0_T48_ep.pt2 -> enc_finalize_d0_T48.pt2
+/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_fx.py:282: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+COMPILE_ONE_JSON {"ok": true, "noexecstack": true}
+  accepted drop=0 T=48 -> enc_finalize_d0_T48.pt2 (2482.7 MB, sha=ad11f855044b..., self_check max_abs=1.255e-02)
+=== accepted 15 constants-on-disk finalize buckets ===

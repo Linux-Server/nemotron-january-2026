@@ -1,0 +1,528 @@
+/home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T34.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1611% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T34.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T35.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1612% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T35.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T36.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1616% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T36.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T37.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1616% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T37.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T38.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1618% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T38.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T39.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1619% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T39.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T40.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1613% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T40.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T41.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1614% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T41.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T42.pt2
+  original: 2.483 GB (2367.7 MiB)
+  stripped: 0.004 GB (3.9 MiB) (0.1630% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T42.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T43.pt2
+  original: 2.483 GB (2367.7 MiB)
+  stripped: 0.004 GB (3.9 MiB) (0.1631% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T43.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T44.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1625% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T44.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T45.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.8 MiB) (0.1626% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T45.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T46.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.9 MiB) (0.1628% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T46.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T47.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.9 MiB) (0.1629% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T47.pt2
+stripped 637 weight entries from artifacts/finalize_buckets/enc_finalize_d0_T48.pt2
+  original: 2.483 GB (2367.6 MiB)
+  stripped: 0.004 GB (3.9 MiB) (0.1628% of original)
+  zeroed uncompressed: 2.479 GB (2363.7 MiB)
+  zeroed compressed:   2.479 GB (2363.7 MiB)
+  output: artifacts/stripped_finalize_buckets/enc_finalize_d0_T48.pt2
+  generating eager finalize_ref examples for [(0, 34), (0, 35), (0, 36), (0, 37), (0, 38), (0, 39), (0, 40), (0, 41), (0, 42), (0, 43), (0, 44), (0, 45), (0, 46), (0, 47), (0, 48), (2, 43), (2, 46), (2, 47), (2, 48), (2, 49), (2, 50), (2, 51), (2, 52), (2, 53), (2, 54), (2, 55), (2, 56), (2, 57)]
+[NeMo I 2026-05-25 17:29:51 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo W 2026-05-25 17:29:51 nemo_logging:405] If you intend to do training or fine-tuning, please call the ModelPT.setup_training_data() method and provide a valid configuration file to setup the train data loader.
+    Train config : 
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    input_cfg: null
+    tarred_audio_filepaths: null
+    manifest_filepath: null
+    sample_rate: 16000
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    max_duration: 40.0
+    min_duration: 0.1
+    text_field: answer
+    batch_duration: null
+    use_bucketing: true
+    max_tps: null
+    bucket_duration_bins: null
+    bucket_batch_size: null
+    num_buckets: null
+    bucket_buffer_size: null
+    shuffle_buffer_size: null
+    augmentor: null
+    
+[NeMo W 2026-05-25 17:29:51 nemo_logging:405] If you intend to do validation, please call the ModelPT.setup_validation_data() or ModelPT.setup_multiple_validation_data() method and provide a valid configuration file to setup the validation data loader(s). 
+    Validation config : 
+    use_lhotse: true
+    manifest_filepath: /data/ASR/en/librispeech/test-other.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    max_duration: 40.0
+    min_duration: 0.1
+    num_workers: 2
+    pin_memory: true
+    text_field: answer
+    tarred_audio_filepaths: null
+    
+[NeMo I 2026-05-25 17:29:51 nemo_logging:393] PADDING: 0
+[NeMo I 2026-05-25 17:29:53 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 17:29:53 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 17:29:53 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 17:29:53 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 17:29:53 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 17:29:54 nemo_logging:393] Model EncDecRNNTBPEModel was successfully restored from /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-streaming-en-0.6b/snapshots/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4/nemotron-speech-streaming-en-0.6b.nemo.
+[NeMo I 2026-05-25 17:29:54 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 17:29:54 nemo_logging:393] Changed decoding strategy to 
+    model_type: rnnt
+    strategy: greedy_batch
+    compute_hypothesis_token_set: false
+    preserve_alignments: null
+    tdt_include_token_duration: null
+    confidence_cfg:
+      preserve_frame_confidence: false
+      preserve_token_confidence: false
+      preserve_word_confidence: false
+      exclude_blank: true
+      aggregation: min
+      tdt_include_duration: false
+      method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+    fused_batch_size: null
+    compute_timestamps: null
+    compute_langs: false
+    word_seperator: ' '
+    segment_seperators:
+    - .
+    - '!'
+    - '?'
+    segment_gap_threshold: null
+    rnnt_timestamp_type: all
+    greedy:
+      max_symbols_per_step: 10
+      preserve_alignments: false
+      preserve_frame_confidence: false
+      tdt_include_token_duration: false
+      tdt_include_duration_confidence: false
+      confidence_method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+      loop_labels: true
+      use_cuda_graph_decoder: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      max_symbols: 10
+    beam:
+      beam_size: 4
+      search_type: default
+      score_norm: true
+      return_best_hypothesis: true
+      tsd_max_sym_exp_per_step: 50
+      alsd_max_target_len: 1.0
+      nsc_max_timesteps_expansion: 1
+      nsc_prefix_alpha: 1
+      maes_num_steps: 2
+      maes_prefix_alpha: 1
+      maes_expansion_gamma: 2.3
+      maes_expansion_beta: 2
+      language_model: null
+      softmax_temperature: 1.0
+      preserve_alignments: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      hat_subtract_ilm: false
+      hat_ilm_weight: 0.0
+      max_symbols_per_step: 10
+      blank_lm_score_mode: LM_WEIGHTED_FULL
+      pruning_mode: LATE
+      allow_cuda_graphs: true
+    temperature: 1.0
+    durations: []
+    big_blank_durations: []
+    
+    captured eager example drop=0 T=34 source={'kind': 'synthetic_drop0_silence', 'samples': 161}
+    captured eager example drop=0 T=35 source={'kind': 'synthetic_drop0_silence', 'samples': 321}
+    captured eager example drop=0 T=36 source={'kind': 'synthetic_drop0_silence', 'samples': 481}
+    captured eager example drop=0 T=37 source={'kind': 'synthetic_drop0_silence', 'samples': 641}
+    captured eager example drop=0 T=38 source={'kind': 'synthetic_drop0_silence', 'samples': 801}
+    captured eager example drop=0 T=39 source={'kind': 'synthetic_drop0_silence', 'samples': 961}
+    captured eager example drop=0 T=40 source={'kind': 'synthetic_drop0_silence', 'samples': 1121}
+    captured eager example drop=0 T=41 source={'kind': 'synthetic_drop0_silence', 'samples': 1281}
+    captured eager example drop=0 T=42 source={'kind': 'synthetic_drop0_silence', 'samples': 1441}
+    captured eager example drop=0 T=43 source={'kind': 'synthetic_drop0_silence', 'samples': 1601}
+    captured eager example drop=0 T=44 source={'kind': 'synthetic_drop0_silence', 'samples': 1761}
+    captured eager example drop=0 T=45 source={'kind': 'synthetic_drop0_silence', 'samples': 1921}
+    captured eager example drop=0 T=46 source={'kind': 'synthetic_drop0_silence', 'samples': 2081}
+    captured eager example drop=0 T=47 source={'kind': 'synthetic_drop0_silence', 'samples': 2241}
+    captured eager example drop=0 T=48 source={'kind': 'synthetic_drop0_silence', 'samples': 2401}
+Using the latest cached version of the dataset since pipecat-ai/stt-benchmark-data couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'default' at /home/khkramer/.cache/huggingface/datasets/pipecat-ai___stt-benchmark-data/default/0.0.0/3fe50170d520c951957b86996ef082a6ab87b394 (last modified on Thu Feb 12 16:16:49 2026).
+    captured eager example drop=2 T=49 source={'kind': 'stt_benchmark', 'index': 0}
+    captured eager example drop=2 T=57 source={'kind': 'stt_benchmark', 'index': 1}
+    captured eager example drop=2 T=46 source={'kind': 'stt_benchmark', 'index': 5}
+    captured eager example drop=2 T=56 source={'kind': 'stt_benchmark', 'index': 7}
+    captured eager example drop=2 T=48 source={'kind': 'stt_benchmark', 'index': 10}
+    captured eager example drop=2 T=47 source={'kind': 'stt_benchmark', 'index': 14}
+    captured eager example drop=2 T=55 source={'kind': 'stt_benchmark', 'index': 15}
+    captured eager example drop=2 T=43 source={'kind': 'stt_benchmark', 'index': 16}
+    captured eager example drop=2 T=53 source={'kind': 'stt_benchmark', 'index': 18}
+    captured eager example drop=2 T=51 source={'kind': 'stt_benchmark', 'index': 20}
+    captured eager example drop=2 T=54 source={'kind': 'stt_benchmark', 'index': 27}
+    captured eager example drop=2 T=52 source={'kind': 'stt_benchmark', 'index': 35}
+    captured eager example drop=2 T=50 source={'kind': 'stt_benchmark', 'index': 60}
+  validating drop=0 T=34 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T34.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T34.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=35 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T35.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T35.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=36 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T36.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T36.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=37 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T37.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T37.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=38 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T38.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T38.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=39 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T39.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T39.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=40 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T40.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T40.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=41 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T41.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T41.pt2
+    result token_exact=PASS tokens=0 enc_len=6 direct=637 alias=0
+  validating drop=0 T=42 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T42.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T42.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=43 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T43.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T43.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=44 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T44.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T44.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=45 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T45.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T45.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=46 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T46.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T46.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=47 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T47.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T47.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=48 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T48.pt2
+    aoti_load_package artifacts/finalize_buckets/enc_finalize_d0_T48.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=0 T=49 basis=finalize_bundle
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d0_T49.pt2
+    result token_exact=PASS tokens=0 enc_len=7 direct=637 alias=0
+  validating drop=2 T=43 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T43.pt2
+    result token_exact=PASS tokens=74 enc_len=5 direct=637 alias=0
+  validating drop=2 T=44 basis=finalize_bundle
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T44.pt2
+    result token_exact=PASS tokens=66 enc_len=5 direct=637 alias=0
+  validating drop=2 T=45 basis=finalize_bundle
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T45.pt2
+    result token_exact=PASS tokens=74 enc_len=5 direct=637 alias=0
+  validating drop=2 T=46 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T46.pt2
+    result token_exact=PASS tokens=4 enc_len=5 direct=637 alias=0
+  validating drop=2 T=47 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T47.pt2
+    result token_exact=PASS tokens=51 enc_len=5 direct=637 alias=0
+  validating drop=2 T=48 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T48.pt2
+    result token_exact=PASS tokens=18 enc_len=5 direct=637 alias=0
+  validating drop=2 T=49 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T49.pt2
+    result token_exact=PASS tokens=20 enc_len=5 direct=637 alias=0
+  validating drop=2 T=50 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T50.pt2
+    result token_exact=PASS tokens=70 enc_len=6 direct=637 alias=0
+  validating drop=2 T=51 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T51.pt2
+    result token_exact=PASS tokens=70 enc_len=6 direct=637 alias=0
+  validating drop=2 T=52 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T52.pt2
+    result token_exact=PASS tokens=57 enc_len=6 direct=637 alias=0
+  validating drop=2 T=53 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T53.pt2
+    result token_exact=PASS tokens=62 enc_len=6 direct=637 alias=0
+  validating drop=2 T=54 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T54.pt2
+    result token_exact=PASS tokens=37 enc_len=6 direct=637 alias=0
+  validating drop=2 T=55 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T55.pt2
+    result token_exact=PASS tokens=62 enc_len=6 direct=637 alias=0
+  validating drop=2 T=56 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T56.pt2
+    result token_exact=PASS tokens=59 enc_len=6 direct=637 alias=0
+  validating drop=2 T=57 basis=eager_finalize_ref
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T57.pt2
+    result token_exact=PASS tokens=11 enc_len=6 direct=637 alias=0
+  validating drop=2 T=58 basis=finalize_bundle
+    aoti_load_package artifacts/stripped_finalize_buckets/enc_finalize_d2_T58.pt2
+    result token_exact=PASS tokens=47 enc_len=7 direct=637 alias=0
+[NeMo I 2026-05-25 17:31:08 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo W 2026-05-25 17:31:08 nemo_logging:405] If you intend to do training or fine-tuning, please call the ModelPT.setup_training_data() method and provide a valid configuration file to setup the train data loader.
+    Train config : 
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    input_cfg: null
+    tarred_audio_filepaths: null
+    manifest_filepath: null
+    sample_rate: 16000
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    max_duration: 40.0
+    min_duration: 0.1
+    text_field: answer
+    batch_duration: null
+    use_bucketing: true
+    max_tps: null
+    bucket_duration_bins: null
+    bucket_batch_size: null
+    num_buckets: null
+    bucket_buffer_size: null
+    shuffle_buffer_size: null
+    augmentor: null
+    
+[NeMo W 2026-05-25 17:31:08 nemo_logging:405] If you intend to do validation, please call the ModelPT.setup_validation_data() or ModelPT.setup_multiple_validation_data() method and provide a valid configuration file to setup the validation data loader(s). 
+    Validation config : 
+    use_lhotse: true
+    manifest_filepath: /data/ASR/en/librispeech/test-other.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    max_duration: 40.0
+    min_duration: 0.1
+    num_workers: 2
+    pin_memory: true
+    text_field: answer
+    tarred_audio_filepaths: null
+    
+[NeMo I 2026-05-25 17:31:08 nemo_logging:393] PADDING: 0
+[NeMo I 2026-05-25 17:31:09 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 17:31:09 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 17:31:09 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 17:31:09 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 17:31:09 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 17:31:10 nemo_logging:393] Model EncDecRNNTBPEModel was successfully restored from /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-streaming-en-0.6b/snapshots/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4/nemotron-speech-streaming-en-0.6b.nemo.
+[NeMo I 2026-05-25 17:31:10 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 17:31:10 nemo_logging:393] Changed decoding strategy to 
+    model_type: rnnt
+    strategy: greedy_batch
+    compute_hypothesis_token_set: false
+    preserve_alignments: null
+    tdt_include_token_duration: null
+    confidence_cfg:
+      preserve_frame_confidence: false
+      preserve_token_confidence: false
+      preserve_word_confidence: false
+      exclude_blank: true
+      aggregation: min
+      tdt_include_duration: false
+      method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+    fused_batch_size: null
+    compute_timestamps: null
+    compute_langs: false
+    word_seperator: ' '
+    segment_seperators:
+    - .
+    - '!'
+    - '?'
+    segment_gap_threshold: null
+    rnnt_timestamp_type: all
+    greedy:
+      max_symbols_per_step: 10
+      preserve_alignments: false
+      preserve_frame_confidence: false
+      tdt_include_token_duration: false
+      tdt_include_duration_confidence: false
+      confidence_method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+      loop_labels: true
+      use_cuda_graph_decoder: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      max_symbols: 10
+    beam:
+      beam_size: 4
+      search_type: default
+      score_norm: true
+      return_best_hypothesis: true
+      tsd_max_sym_exp_per_step: 50
+      alsd_max_target_len: 1.0
+      nsc_max_timesteps_expansion: 1
+      nsc_prefix_alpha: 1
+      maes_num_steps: 2
+      maes_prefix_alpha: 1
+      maes_expansion_gamma: 2.3
+      maes_expansion_beta: 2
+      language_model: null
+      softmax_temperature: 1.0
+      preserve_alignments: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      hat_subtract_ilm: false
+      hat_ilm_weight: 0.0
+      max_symbols_per_step: 10
+      blank_lm_score_mode: LM_WEIGHTED_FULL
+      pruning_mode: LATE
+      allow_cuda_graphs: true
+    temperature: 1.0
+    durations: []
+    big_blank_durations: []
+    
+updated artifacts/stripped_finalize_buckets/manifest.json with 32 strip validation records
+
+=== strip --all summary ===
+source buckets stripped this run: 15
+  drop=0 T=34: PASS basis=unstripped_package
+  drop=0 T=35: PASS basis=unstripped_package
+  drop=0 T=36: PASS basis=unstripped_package
+  drop=0 T=37: PASS basis=unstripped_package
+  drop=0 T=38: PASS basis=unstripped_package
+  drop=0 T=39: PASS basis=unstripped_package
+  drop=0 T=40: PASS basis=unstripped_package
+  drop=0 T=41: PASS basis=unstripped_package
+  drop=0 T=42: PASS basis=unstripped_package
+  drop=0 T=43: PASS basis=unstripped_package
+  drop=0 T=44: PASS basis=unstripped_package
+  drop=0 T=45: PASS basis=unstripped_package
+  drop=0 T=46: PASS basis=unstripped_package
+  drop=0 T=47: PASS basis=unstripped_package
+  drop=0 T=48: PASS basis=unstripped_package
+  drop=0 T=49: PASS basis=finalize_bundle
+  drop=2 T=43: PASS basis=eager_finalize_ref
+  drop=2 T=44: PASS basis=finalize_bundle
+  drop=2 T=45: PASS basis=finalize_bundle
+  drop=2 T=46: PASS basis=eager_finalize_ref
+  drop=2 T=47: PASS basis=eager_finalize_ref
+  drop=2 T=48: PASS basis=eager_finalize_ref
+  drop=2 T=49: PASS basis=eager_finalize_ref
+  drop=2 T=50: PASS basis=eager_finalize_ref
+  drop=2 T=51: PASS basis=eager_finalize_ref
+  drop=2 T=52: PASS basis=eager_finalize_ref
+  drop=2 T=53: PASS basis=eager_finalize_ref
+  drop=2 T=54: PASS basis=eager_finalize_ref
+  drop=2 T=55: PASS basis=eager_finalize_ref
+  drop=2 T=56: PASS basis=eager_finalize_ref
+  drop=2 T=57: PASS basis=eager_finalize_ref
+  drop=2 T=58: PASS basis=finalize_bundle

@@ -1,0 +1,151 @@
+/home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+[NeMo I 2026-05-25 17:33:13 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo W 2026-05-25 17:33:13 nemo_logging:405] If you intend to do training or fine-tuning, please call the ModelPT.setup_training_data() method and provide a valid configuration file to setup the train data loader.
+    Train config : 
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    input_cfg: null
+    tarred_audio_filepaths: null
+    manifest_filepath: null
+    sample_rate: 16000
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    max_duration: 40.0
+    min_duration: 0.1
+    text_field: answer
+    batch_duration: null
+    use_bucketing: true
+    max_tps: null
+    bucket_duration_bins: null
+    bucket_batch_size: null
+    num_buckets: null
+    bucket_buffer_size: null
+    shuffle_buffer_size: null
+    augmentor: null
+    
+[NeMo W 2026-05-25 17:33:13 nemo_logging:405] If you intend to do validation, please call the ModelPT.setup_validation_data() or ModelPT.setup_multiple_validation_data() method and provide a valid configuration file to setup the validation data loader(s). 
+    Validation config : 
+    use_lhotse: true
+    manifest_filepath: /data/ASR/en/librispeech/test-other.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    max_duration: 40.0
+    min_duration: 0.1
+    num_workers: 2
+    pin_memory: true
+    text_field: answer
+    tarred_audio_filepaths: null
+    
+[NeMo I 2026-05-25 17:33:13 nemo_logging:393] PADDING: 0
+[NeMo I 2026-05-25 17:33:15 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 17:33:15 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 17:33:15 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 17:33:15 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo W 2026-05-25 17:33:15 nemo_logging:405] No conditional node support for Cuda.
+    Cuda graphs with while loops are disabled, decoding speed will be slower
+    Reason: No `cuda-python` module. Please do `pip install cuda-python>=12.3`
+[NeMo I 2026-05-25 17:33:16 nemo_logging:393] Model EncDecRNNTBPEModel was successfully restored from /home/khkramer/.cache/huggingface/hub/models--nvidia--nemotron-speech-streaming-en-0.6b/snapshots/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4/nemotron-speech-streaming-en-0.6b.nemo.
+[NeMo I 2026-05-25 17:33:16 nemo_logging:393] Using RNNT Loss : warprnnt_numba
+    Loss warprnnt_numba_kwargs: {'fastemit_lambda': 0.005, 'clamp': -1.0}
+[NeMo I 2026-05-25 17:33:16 nemo_logging:393] Changed decoding strategy to 
+    model_type: rnnt
+    strategy: greedy_batch
+    compute_hypothesis_token_set: false
+    preserve_alignments: null
+    tdt_include_token_duration: null
+    confidence_cfg:
+      preserve_frame_confidence: false
+      preserve_token_confidence: false
+      preserve_word_confidence: false
+      exclude_blank: true
+      aggregation: min
+      tdt_include_duration: false
+      method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+    fused_batch_size: null
+    compute_timestamps: null
+    compute_langs: false
+    word_seperator: ' '
+    segment_seperators:
+    - .
+    - '!'
+    - '?'
+    segment_gap_threshold: null
+    rnnt_timestamp_type: all
+    greedy:
+      max_symbols_per_step: 10
+      preserve_alignments: false
+      preserve_frame_confidence: false
+      tdt_include_token_duration: false
+      tdt_include_duration_confidence: false
+      confidence_method_cfg:
+        name: entropy
+        entropy_type: tsallis
+        alpha: 0.33
+        entropy_norm: exp
+        temperature: DEPRECATED
+      loop_labels: true
+      use_cuda_graph_decoder: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      max_symbols: 10
+    beam:
+      beam_size: 4
+      search_type: default
+      score_norm: true
+      return_best_hypothesis: true
+      tsd_max_sym_exp_per_step: 50
+      alsd_max_target_len: 1.0
+      nsc_max_timesteps_expansion: 1
+      nsc_prefix_alpha: 1
+      maes_num_steps: 2
+      maes_prefix_alpha: 1
+      maes_expansion_gamma: 2.3
+      maes_expansion_beta: 2
+      language_model: null
+      softmax_temperature: 1.0
+      preserve_alignments: false
+      ngram_lm_model: null
+      ngram_lm_alpha: 0.0
+      hat_subtract_ilm: false
+      hat_ilm_weight: 0.0
+      max_symbols_per_step: 10
+      blank_lm_score_mode: LM_WEIGHTED_FULL
+      pruning_mode: LATE
+      allow_cuda_graphs: true
+    temperature: 1.0
+    durations: []
+    big_blank_durations: []
+    
+Using the latest cached version of the dataset since pipecat-ai/stt-benchmark-data couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'default' at /home/khkramer/.cache/huggingface/datasets/pipecat-ai___stt-benchmark-data/default/0.0.0/3fe50170d520c951957b86996ef082a6ab87b394 (last modified on Thu Feb 12 16:16:49 2026).
+loaded 16 drop0 bucket runners: T=[34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
+  drop0 T=34: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=35: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=36: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=37: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=38: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=39: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=40: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=41: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=42: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=43: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=44: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=45: eager_tok=0 bucket_tok=0 TOKEN_EXACT=True
+  drop0 T=46: eager_tok=2 bucket_tok=2 TOKEN_EXACT=True
+  drop0 T=47: eager_tok=2 bucket_tok=2 TOKEN_EXACT=True
+  drop0 T=48: eager_tok=2 bucket_tok=2 TOKEN_EXACT=True
+  drop0 T=49: eager_tok=2 bucket_tok=2 TOKEN_EXACT=True
+=== drop0 shadow: 16/16 token-exact; missing-bucket T=[]; divergent=[] -> PASS ===

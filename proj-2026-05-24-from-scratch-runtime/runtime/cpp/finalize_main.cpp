@@ -10,10 +10,18 @@
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdio>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <map>
 #include <memory>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -29,6 +37,11 @@ static constexpr int MAX_SYMBOLS = 10;
 static constexpr int SHIFT = 16;
 static constexpr int PRE = 9;
 static constexpr int DROP = 2;
+static constexpr int RIGHT_CONTEXT = 1;
+static constexpr int FINAL_PADDING_FRAMES = 32;
+static constexpr int ATT_CONTEXT_LEFT = 70;
+static constexpr int ATT_CONTEXT_RIGHT = 1;
+static constexpr const char* MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6b";
 
 struct ParentState {
   torch::Tensor clc;
@@ -178,6 +191,357 @@ static std::map<std::pair<int64_t, int64_t>, std::string> discover_finalize_buck
   return buckets;
 }
 
+struct ManifestContract {
+  std::string model_id;
+  std::vector<int64_t> att_context;
+  int64_t right_context = -1;
+  int64_t shift = -1;
+  int64_t pre_encode_cache = -1;
+  int64_t drop_extra = -1;
+  int64_t final_padding_frames = -1;
+  int64_t blank = -1;
+  int64_t max_symbols = -1;
+  std::string weights_sha256;
+};
+
+struct ManifestBucket {
+  int64_t drop = -1;
+  int64_t T = -1;
+  std::string pkg;
+  std::string pkg_sha256;
+};
+
+struct BucketManifest {
+  ManifestContract contract;
+  std::vector<ManifestBucket> buckets;
+};
+
+struct Sha256Ctx {
+  std::array<uint8_t, 64> data{};
+  uint32_t datalen = 0;
+  uint64_t bitlen = 0;
+  std::array<uint32_t, 8> state{
+      0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+      0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
+};
+
+static uint32_t rotr(uint32_t x, uint32_t n) {
+  return (x >> n) | (x << (32U - n));
+}
+
+static void sha256_transform(Sha256Ctx& ctx, const uint8_t data[64]) {
+  static constexpr std::array<uint32_t, 64> k{
+      0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+      0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+      0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+      0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+      0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+      0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+      0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+      0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
+
+  std::array<uint32_t, 64> m{};
+  for (uint32_t i = 0, j = 0; i < 16; ++i, j += 4) {
+    m[i] = (static_cast<uint32_t>(data[j]) << 24) |
+           (static_cast<uint32_t>(data[j + 1]) << 16) |
+           (static_cast<uint32_t>(data[j + 2]) << 8) |
+           (static_cast<uint32_t>(data[j + 3]));
+  }
+  for (uint32_t i = 16; i < 64; ++i) {
+    uint32_t s0 = rotr(m[i - 15], 7) ^ rotr(m[i - 15], 18) ^ (m[i - 15] >> 3);
+    uint32_t s1 = rotr(m[i - 2], 17) ^ rotr(m[i - 2], 19) ^ (m[i - 2] >> 10);
+    m[i] = m[i - 16] + s0 + m[i - 7] + s1;
+  }
+
+  uint32_t a = ctx.state[0], b = ctx.state[1], c = ctx.state[2], d = ctx.state[3];
+  uint32_t e = ctx.state[4], f = ctx.state[5], g = ctx.state[6], h = ctx.state[7];
+  for (uint32_t i = 0; i < 64; ++i) {
+    uint32_t s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+    uint32_t ch = (e & f) ^ ((~e) & g);
+    uint32_t temp1 = h + s1 + ch + k[i] + m[i];
+    uint32_t s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+    uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+    uint32_t temp2 = s0 + maj;
+    h = g;
+    g = f;
+    f = e;
+    e = d + temp1;
+    d = c;
+    c = b;
+    b = a;
+    a = temp1 + temp2;
+  }
+  ctx.state[0] += a; ctx.state[1] += b; ctx.state[2] += c; ctx.state[3] += d;
+  ctx.state[4] += e; ctx.state[5] += f; ctx.state[6] += g; ctx.state[7] += h;
+}
+
+static void sha256_update(Sha256Ctx& ctx, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    ctx.data[ctx.datalen++] = data[i];
+    if (ctx.datalen == 64) {
+      sha256_transform(ctx, ctx.data.data());
+      ctx.bitlen += 512;
+      ctx.datalen = 0;
+    }
+  }
+}
+
+static std::string sha256_final(Sha256Ctx& ctx) {
+  uint32_t i = ctx.datalen;
+  uint64_t total_bits = ctx.bitlen + static_cast<uint64_t>(ctx.datalen) * 8U;
+
+  ctx.data[i++] = 0x80U;
+  if (i > 56) {
+    while (i < 64) ctx.data[i++] = 0;
+    sha256_transform(ctx, ctx.data.data());
+    i = 0;
+  }
+  while (i < 56) ctx.data[i++] = 0;
+  for (int shift = 56; shift >= 0; shift -= 8) {
+    ctx.data[i++] = static_cast<uint8_t>((total_bits >> shift) & 0xffU);
+  }
+  sha256_transform(ctx, ctx.data.data());
+
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (uint32_t word : ctx.state) oss << std::setw(8) << word;
+  return oss.str();
+}
+
+static std::string sha256_file(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot open for sha256: " + path);
+  Sha256Ctx ctx;
+  std::array<char, 1024 * 1024> buffer{};
+  while (f) {
+    f.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    std::streamsize got = f.gcount();
+    if (got > 0) {
+      sha256_update(ctx, reinterpret_cast<const uint8_t*>(buffer.data()), static_cast<size_t>(got));
+    }
+  }
+  return sha256_final(ctx);
+}
+
+static std::string read_text_file(const std::string& path) {
+  std::ifstream f(path);
+  if (!f) throw std::runtime_error("cannot open manifest: " + path);
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+static size_t skip_ws(const std::string& s, size_t pos) {
+  while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) ++pos;
+  return pos;
+}
+
+static size_t find_matching_json_delim(const std::string& s, size_t open_pos) {
+  char open = s.at(open_pos);
+  char close = open == '{' ? '}' : ']';
+  int depth = 0;
+  bool in_string = false;
+  bool escape = false;
+  for (size_t i = open_pos; i < s.size(); ++i) {
+    char ch = s[i];
+    if (in_string) {
+      if (escape) {
+        escape = false;
+      } else if (ch == '\\') {
+        escape = true;
+      } else if (ch == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+    if (ch == '"') {
+      in_string = true;
+    } else if (ch == open) {
+      ++depth;
+    } else if (ch == close) {
+      --depth;
+      if (depth == 0) return i;
+    }
+  }
+  throw std::runtime_error("unterminated JSON object/array in manifest");
+}
+
+static std::string json_value_for_key(const std::string& object, const std::string& key) {
+  std::string needle = "\"" + key + "\"";
+  size_t key_pos = object.find(needle);
+  if (key_pos == std::string::npos) throw std::runtime_error("manifest missing key: " + key);
+  size_t colon = object.find(':', key_pos + needle.size());
+  if (colon == std::string::npos) throw std::runtime_error("manifest key has no colon: " + key);
+  size_t start = skip_ws(object, colon + 1);
+  if (start >= object.size()) throw std::runtime_error("manifest key has no value: " + key);
+
+  size_t end = start;
+  if (object[start] == '{' || object[start] == '[') {
+    end = find_matching_json_delim(object, start) + 1;
+  } else if (object[start] == '"') {
+    bool escape = false;
+    for (end = start + 1; end < object.size(); ++end) {
+      char ch = object[end];
+      if (escape) {
+        escape = false;
+      } else if (ch == '\\') {
+        escape = true;
+      } else if (ch == '"') {
+        ++end;
+        break;
+      }
+    }
+  } else {
+    while (end < object.size() && object[end] != ',' && object[end] != '}' && object[end] != ']') ++end;
+  }
+  return object.substr(start, end - start);
+}
+
+static std::string json_string_field(const std::string& object, const std::string& key) {
+  std::string value = json_value_for_key(object, key);
+  value = value.substr(skip_ws(value, 0));
+  if (value.size() < 2 || value.front() != '"' || value.back() != '"') {
+    throw std::runtime_error("manifest key is not a string: " + key);
+  }
+  return value.substr(1, value.size() - 2);
+}
+
+static int64_t json_int_field(const std::string& object, const std::string& key) {
+  std::string value = json_value_for_key(object, key);
+  size_t n = 0;
+  long long out = std::stoll(value, &n);
+  n = skip_ws(value, n);
+  if (n != value.size()) throw std::runtime_error("manifest key is not an integer: " + key);
+  return out;
+}
+
+static std::vector<int64_t> json_int_array_field(const std::string& object, const std::string& key) {
+  std::string value = json_value_for_key(object, key);
+  if (value.empty() || value.front() != '[' || value.back() != ']') {
+    throw std::runtime_error("manifest key is not an array: " + key);
+  }
+  std::vector<int64_t> out;
+  std::regex num_re("-?\\d+");
+  for (auto it = std::sregex_iterator(value.begin(), value.end(), num_re);
+       it != std::sregex_iterator(); ++it) {
+    out.push_back(std::stoll((*it)[0].str()));
+  }
+  return out;
+}
+
+static BucketManifest load_bucket_manifest(const std::string& manifest_path) {
+  std::string text = read_text_file(manifest_path);
+  std::string contract_obj = json_value_for_key(text, "CONTRACT");
+  std::string buckets_arr = json_value_for_key(text, "buckets");
+  if (contract_obj.empty() || contract_obj.front() != '{') throw std::runtime_error("manifest CONTRACT is not an object");
+  if (buckets_arr.empty() || buckets_arr.front() != '[') throw std::runtime_error("manifest buckets is not an array");
+
+  BucketManifest manifest;
+  manifest.contract.model_id = json_string_field(contract_obj, "model_id");
+  manifest.contract.att_context = json_int_array_field(contract_obj, "att_context");
+  manifest.contract.right_context = json_int_field(contract_obj, "right_context");
+  manifest.contract.shift = json_int_field(contract_obj, "shift");
+  manifest.contract.pre_encode_cache = json_int_field(contract_obj, "pre_encode_cache");
+  manifest.contract.drop_extra = json_int_field(contract_obj, "drop_extra");
+  manifest.contract.final_padding_frames = json_int_field(contract_obj, "final_padding_frames");
+  manifest.contract.blank = json_int_field(contract_obj, "blank");
+  manifest.contract.max_symbols = json_int_field(contract_obj, "max_symbols");
+  manifest.contract.weights_sha256 = json_string_field(contract_obj, "weights_sha256");
+
+  size_t pos = 1;
+  while (pos + 1 < buckets_arr.size()) {
+    pos = skip_ws(buckets_arr, pos);
+    if (pos >= buckets_arr.size() || buckets_arr[pos] == ']') break;
+    if (buckets_arr[pos] == ',') {
+      ++pos;
+      continue;
+    }
+    if (buckets_arr[pos] != '{') throw std::runtime_error("manifest bucket entry is not an object");
+    size_t end = find_matching_json_delim(buckets_arr, pos);
+    std::string obj = buckets_arr.substr(pos, end - pos + 1);
+    ManifestBucket b;
+    b.drop = json_int_field(obj, "drop");
+    b.T = json_int_field(obj, "T");
+    b.pkg = json_string_field(obj, "pkg");
+    b.pkg_sha256 = json_string_field(obj, "pkg_sha256");
+    manifest.buckets.push_back(std::move(b));
+    pos = end + 1;
+  }
+  return manifest;
+}
+
+static void require_contract_eq(const char* name, int64_t actual, int64_t expected) {
+  if (actual != expected) {
+    throw std::runtime_error(std::string("manifest CONTRACT mismatch for ") + name +
+                             ": got " + std::to_string(actual) +
+                             " expected " + std::to_string(expected));
+  }
+}
+
+static void verify_bucket_manifest(const BucketManifest& manifest,
+                                   const std::map<std::pair<int64_t, int64_t>, std::string>& discovered,
+                                   const std::string& buckets_dir,
+                                   const std::string& shared_weights_pt) {
+  const auto& c = manifest.contract;
+  if (c.model_id != MODEL_ID) {
+    throw std::runtime_error("manifest CONTRACT model_id mismatch: " + c.model_id);
+  }
+  if (c.att_context.size() != 2 || c.att_context[0] != ATT_CONTEXT_LEFT || c.att_context[1] != ATT_CONTEXT_RIGHT) {
+    throw std::runtime_error("manifest CONTRACT att_context mismatch");
+  }
+  require_contract_eq("right_context", c.right_context, RIGHT_CONTEXT);
+  require_contract_eq("shift", c.shift, SHIFT);
+  require_contract_eq("pre_encode_cache", c.pre_encode_cache, PRE);
+  require_contract_eq("drop_extra", c.drop_extra, DROP);
+  require_contract_eq("final_padding_frames", c.final_padding_frames, FINAL_PADDING_FRAMES);
+  require_contract_eq("blank", c.blank, BLANK);
+  require_contract_eq("max_symbols", c.max_symbols, MAX_SYMBOLS);
+
+  if (!file_exists(shared_weights_pt)) {
+    throw std::runtime_error("manifest requires shared weights .pt but file is missing: " + shared_weights_pt);
+  }
+  std::string weights_sha = sha256_file(shared_weights_pt);
+  if (weights_sha != c.weights_sha256) {
+    throw std::runtime_error("shared weights sha256 mismatch: manifest=" + c.weights_sha256 + " actual=" + weights_sha);
+  }
+
+  std::set<std::pair<int64_t, int64_t>> manifest_keys;
+  std::set<std::string> manifest_pkgs;
+  for (const auto& b : manifest.buckets) {
+    if (!manifest_keys.emplace(b.drop, b.T).second) {
+      throw std::runtime_error("duplicate manifest bucket key drop=" + std::to_string(b.drop) +
+                               " T=" + std::to_string(b.T));
+    }
+    if (!manifest_pkgs.emplace(b.pkg).second) throw std::runtime_error("duplicate manifest pkg: " + b.pkg);
+
+    int64_t parsed_drop = 0;
+    int64_t parsed_T = 0;
+    if (!parse_bucket_filename(b.pkg, parsed_drop, parsed_T) || parsed_drop != b.drop || parsed_T != b.T) {
+      throw std::runtime_error("manifest pkg filename does not match drop/T: " + b.pkg);
+    }
+
+    auto found = discovered.find(std::make_pair(b.drop, b.T));
+    if (found == discovered.end()) {
+      throw std::runtime_error("manifest bucket missing from directory: " + b.pkg);
+    }
+    fs::path expected_path = fs::path(buckets_dir) / b.pkg;
+    if (fs::path(found->second).filename() != expected_path.filename()) {
+      throw std::runtime_error("manifest/discovered pkg name mismatch for " + b.pkg);
+    }
+    std::string actual_sha = sha256_file(expected_path.string());
+    if (actual_sha != b.pkg_sha256) {
+      throw std::runtime_error("bucket sha256 mismatch for " + b.pkg +
+                               ": manifest=" + b.pkg_sha256 + " actual=" + actual_sha);
+    }
+  }
+
+  for (const auto& kv : discovered) {
+    if (manifest_keys.find(kv.first) == manifest_keys.end()) {
+      throw std::runtime_error("bucket file is not listed in manifest: " + kv.second);
+    }
+  }
+}
+
 static std::unordered_map<std::string, at::Tensor> load_shared_constants(const std::string& weights_path,
                                                                          torch::Device device) {
   auto weights_module = torch::jit::load(weights_path);
@@ -189,38 +553,59 @@ static std::unordered_map<std::string, at::Tensor> load_shared_constants(const s
     if (!item.value().isTensor()) throw std::runtime_error("finalize_shared_weights.ts has a non-tensor value");
     constants.emplace(item.key().toStringRef(), item.value().toTensor().to(device));
   }
-
-  // Exporters have used both self.e and self.encoder for the wrapped module. Keep both names pointing at the same
-  // CUDA tensors so the bucket packages can share one weight set across either FQN convention.
-  std::vector<std::pair<std::string, at::Tensor>> aliases;
-  aliases.reserve(constants.size());
-  for (const auto& kv : constants) {
-    if (kv.first.rfind("e.", 0) == 0) {
-      aliases.emplace_back("encoder." + kv.first.substr(2), kv.second);
-    } else if (kv.first.rfind("encoder.", 0) == 0) {
-      aliases.emplace_back("e." + kv.first.substr(8), kv.second);
-    }
-  }
-  for (auto& alias : aliases) {
-    if (constants.find(alias.first) == constants.end()) constants.emplace(std::move(alias));
-  }
   return constants;
 }
 
-static std::unordered_map<std::string, at::Tensor> constants_for_bucket(
+struct BucketConstants {
+  std::unordered_map<std::string, at::Tensor> values;
+  size_t direct_matches = 0;
+  size_t alias_fallbacks = 0;
+};
+
+static const at::Tensor* resolve_shared_constant(const std::unordered_map<std::string, at::Tensor>& shared_constants,
+                                                 const std::string& fqn,
+                                                 bool& used_alias) {
+  auto it = shared_constants.find(fqn);
+  if (it != shared_constants.end()) {
+    used_alias = false;
+    return &it->second;
+  }
+
+  // Compatibility fallback only: old shared-weight files used e.* while current buckets use encoder.*.
+  std::string alt;
+  if (fqn.rfind("encoder.", 0) == 0) {
+    alt = "e." + fqn.substr(8);
+  } else if (fqn.rfind("e.", 0) == 0) {
+    alt = "encoder." + fqn.substr(2);
+  } else {
+    return nullptr;
+  }
+  it = shared_constants.find(alt);
+  if (it == shared_constants.end()) return nullptr;
+  used_alias = true;
+  return &it->second;
+}
+
+static BucketConstants constants_for_bucket(
     const std::unordered_map<std::string, at::Tensor>& shared_constants,
     AOTIModelPackageLoader& loader,
     const std::string& pkg) {
   auto fqns = loader.get_constant_fqns();
-  std::unordered_map<std::string, at::Tensor> bucket_constants;
-  bucket_constants.reserve(fqns.size());
+  BucketConstants bucket_constants;
+  bucket_constants.values.reserve(fqns.size());
   std::vector<std::string> missing;
   for (const auto& fqn : fqns) {
-    auto it = shared_constants.find(fqn);
-    if (it == shared_constants.end()) {
+    bool used_alias = false;
+    const at::Tensor* tensor = resolve_shared_constant(shared_constants, fqn, used_alias);
+    if (tensor == nullptr) {
       missing.push_back(fqn);
     } else {
-      bucket_constants.emplace(fqn, it->second);
+      if (used_alias) {
+        ++bucket_constants.alias_fallbacks;
+      } else {
+        ++bucket_constants.direct_matches;
+      }
+      bucket_constants.values.emplace(fqn, *tensor);
     }
   }
   if (!missing.empty()) {
@@ -378,6 +763,7 @@ int main(int argc, char** argv) {
   std::string buckets_dir = dir + "/stripped_finalize_buckets";
   if (!directory_exists(buckets_dir)) buckets_dir = dir + "/finalize_buckets";
   std::string shared_weights = dir + "/finalize_shared_weights.ts";
+  std::string shared_weights_pt = dir + "/finalize_shared_weights.pt";
   bool phase_b_present = false;
   bool phase_b_ok = true;
   if (!directory_exists(buckets_dir) || !file_exists(shared_weights)) {
@@ -391,8 +777,17 @@ int main(int argc, char** argv) {
       std::printf("=== Phase B: AOTI finalize encoder buckets + decode-continuation (%zu buckets) ===\n",
                   bucket_paths.size());
       try {
+        std::string manifest_path = buckets_dir + "/manifest.json";
+        if (!file_exists(manifest_path)) {
+          throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
+        }
+        auto manifest = load_bucket_manifest(manifest_path);
+        verify_bucket_manifest(manifest, bucket_paths, buckets_dir, shared_weights_pt);
+        std::printf("  manifest verified: %zu buckets, weights_sha256=%s\n",
+                    manifest.buckets.size(), manifest.contract.weights_sha256.c_str());
+
         auto shared_constants = load_shared_constants(shared_weights, device);
-        std::printf("  loaded shared constants: %zu FQN entries (aliases included) from %s\n",
+        std::printf("  loaded shared constants: %zu primary FQN entries from %s\n",
                     shared_constants.size(), shared_weights.c_str());
 
         std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>> loaders;
@@ -404,10 +799,11 @@ int main(int argc, char** argv) {
                                                                  /*num_runners=*/1, /*device_index=*/-1);
           auto bucket_constants = constants_for_bucket(shared_constants, *loader, pkg);
           // C++ signature: (constants_map, use_inactive, check_full_update, user_managed).
-          loader->load_constants(bucket_constants, /*use_inactive=*/false,
+          loader->load_constants(bucket_constants.values, /*use_inactive=*/false,
                                  /*check_full_update=*/false, /*user_managed=*/true);
-          std::printf("  bucket drop=%ld T=%ld: loaded %zu constants -> %s\n",
-                      (long)drop, (long)T, bucket_constants.size(), pkg.c_str());
+          std::printf("  bucket drop=%ld T=%ld: loaded %zu constants (direct=%zu alias_fallback=%zu) -> %s\n",
+                      (long)drop, (long)T, bucket_constants.values.size(),
+                      bucket_constants.direct_matches, bucket_constants.alias_fallbacks, pkg.c_str());
           loaders.emplace(kv.first, std::move(loader));
         }
 
