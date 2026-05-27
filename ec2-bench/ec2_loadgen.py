@@ -133,8 +133,9 @@ def _summ(results):
     lag95 = _pct(lags, 0.95)
     return {"ok": len(ok), "errors": len(results) - len(ok),
             "tag_leaks": sum(1 for r in results if r["tag_leak"]),
-            "ttfs_p50": _pct(ttfs, 0.5), "ttfs_p95": _pct(ttfs, 0.95),
-            "lag_p50": _pct(lags, 0.5), "lag_p95": lag95,
+            "ttfs_p50": _pct(ttfs, 0.5), "ttfs_p95": _pct(ttfs, 0.95), "ttfs_p99": _pct(ttfs, 0.99),
+            "ttfs_n": len(ttfs), "ttfs_max": max(ttfs) if ttfs else None,
+            "lag_p50": _pct(lags, 0.5), "lag_p95": lag95, "lag_p99": _pct(lags, 0.99),
             "over_p95": _pct(over, 0.95), "over_max": max(over) if over else None,
             "keepup": (lag95 is not None and lag95 < KEEPUP_LAG_MS)}
 
@@ -153,7 +154,7 @@ def main():
     ndistinct = len({a["sid"] for a in audios})
     reps = max(1, args.rounds)
     print(f"loadgen vs {args.url} | {ndistinct} distinct clips (cycled to N) | levels={levels} | repeats={reps}")
-    print("  N   ok  errs  TTFSp50 TTFSp95  lagp50  lagp95  over95  keepup")
+    print("  N   ok  errs  TTFSp50 TTFSp95 TTFSp99 TTFSmax  ttfsN  lagp50  lagp95  lagp99  keepup")
     out = {"url": args.url, "levels": levels, "repeats": reps, "summaries": {}}
     knee = 0
     for n in levels:
@@ -163,8 +164,8 @@ def main():
         s = _summ(pooled)
         out["summaries"][str(n)] = s
         f = lambda v: "nan" if v is None else f"{v:.0f}"
-        print(f"  {n:<3} {s['ok']:<3} {s['errors']:<4} {f(s['ttfs_p50']):>7} {f(s['ttfs_p95']):>7} "
-              f"{f(s['lag_p50']):>7} {f(s['lag_p95']):>7} {f(s['over_p95']):>6}  {'YES' if s['keepup'] else 'no'}")
+        print(f"  {n:<3} {s['ok']:<3} {s['errors']:<4} {f(s['ttfs_p50']):>7} {f(s['ttfs_p95']):>7} {f(s['ttfs_p99']):>7} {f(s['ttfs_max']):>7} {s['ttfs_n']:>6} "
+              f"{f(s['lag_p50']):>7} {f(s['lag_p95']):>7} {f(s['lag_p99']):>7}  {'YES' if s['keepup'] else 'no'}")
         if s["keepup"] and s["errors"] == 0:
             knee = n
     print(f"\nKNEE (max N with proc-lag p95 < {KEEPUP_LAG_MS:.0f}ms and 0 errors): {knee}")

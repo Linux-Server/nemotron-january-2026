@@ -41,7 +41,9 @@ in the Python finalize-graph win) → a lock-serialization finding is a topology
 
 ## Definitions used by the gates
 - `S_py_L40S` — fresh Python baseline, SLO-robust **successful** streams/box, re-measured back-to-back under the
-  Step-4 apples-to-apples manifest (NOT the stale ~16–20).
+  Step-4 apples-to-apples manifest (NOT the stale ~16–20). **Preliminary same-box single-proc re-measure 2026-05-27
+  = ~20 @ ttfs p50 ~42ms (single-utterance burst, `spy_*.json`); the full multi-turn Step-4 manifest is still pending
+  — but ~20 already pins the 1.8× multiplier at-bar.**
 - `G1_floor = max(28, 1.50·S_py_L40S)`. SLO-robust = keep-up `lag_p95 < 500ms` AND `ttfs` within the ttfs SLO
   budget AND non-intentional admitted error rate ≤1%; count **admitted-successful** streams, never offered.
 - **ttfs SLO budget** (server-side vad_stop→final, co-located → NO real WAN): **`ttfs_p95 ≤ 175ms` (gate),
@@ -160,19 +162,80 @@ default-stream, `num_runners=1`. Log `num_runners`/stream-mode/topology in every
   non-predictive exception). STOP-candidate = <1.50× or SLO/WER/correctness fail. The 5090→L40S transfer is noisy
   → a marginal 5090 PASS does NOT substitute for the L40S measurement.
 
-- [ ] **Step 1b — L40S CEILING hard gate (EC2).** Same harness, **sm_89-AUTOTUNE-ON compiled NATIVELY on the
-  g6e** (EPs shipped via S3 per the Compile & artifact policy; autotune-on re-validated token-exact on the exact
-  package SHA) **+ a bounded sm_89 autotune-OFF floor** (or an explicit waiver — win inferred from the 5090 off→on),
-  reported as the absolute streams/box Δ + % with identical workload/N/bound/cadence/topology + distinct artifact
-  hashes. PASS-to-build = `S_native_step1b ≥ max(34, 1.80·S_py_L40S)` (the 1.80× leaves margin for the ~17% Step-4 scheduler/WS haircut;
+- [x] **Step 1b — L40S CEILING hard gate (EC2). DONE → PASS. L40S native knee = N=36 SLO-robust (true ∈[36,39]); N=40 first non-SLO; keep-up/GPU-compute-bound (not memory); ~1.8-2.25× Python; stagger-robust; paired-reviewed GO (Codex+Opus). See the progress table 1b row + reviews/codex-l40s-knee-verdict.md.** Same harness, **sm_89-AUTOTUNE-OFF compiled NATIVELY on the
+  g6e** as the PRIMARY T1-valid ceiling — and what the gate is read against. (Autotune-ON is currently **T1-BROKEN**:
+  cache_t drift 10.27, 995/1000, precision-policy divergence from eager's TF32-reduced path — see Levers — so the
+  autotune-OFF measurement is the only token-safe ceiling.) EPs shipped via S3 per the Compile & artifact policy;
+  artifact package SHA recorded. **Autotune-ON is a CONTINGENT Tier-2 follow-up, NOT this gate:** attempted only IF
+  the L40S returns compute-CONTENTION-bound (autotune speeds compute → moot if memory/CPU-bound) AND a
+  precision-matched ladder (rung-1 = match eager TF32) passes T1 first; if attempted, reported as the off→on
+  streams/box Δ + % with identical workload/N/bound/cadence/topology + distinct artifact hashes. Run config: g6e.8xlarge
+  (1× L40S 48GB, 32 vCPU — matches the 5090 box's thread count, where the knee used only 3.2/32 cores, so CPU is not
+  an artificial cap), fresh-process-per-N N=1..80. PASS-to-build = `S_native_step1b ≥ max(34, 1.80·S_py_L40S)` (the 1.80× leaves margin for the ~17% Step-4 scheduler/WS haircut;
   34 = 28/0.83) + 0 mismatch + WER in bound + `ttfs` within the ttfs SLO budget (Definitions). `TTFS_spread`
   reported (GREEN ≤1.10× Python; otherwise a build-risk signal, not a STOP — the binding tail is reported at
   Step 4). CONDITIONAL = ≥G1_floor but <max(34, 1.80·S_py_L40S) → proceed only on explicit human risk-acceptance +
   a narrow de-risking prototype. STOP-candidate = <G1_floor or SLO/WER/correctness fail. PAIRED REVIEW (decisive
   measurement).
 
-- [ ] **Step 2 — scheduler design + admission (blocked on Step-1 telemetry).** From the Step-1 **telemetry
-  schema** (not a scalar knee): one **box-global active/admitted cap** + one **box-global backlog-COUNT cap**
+- [ ] **Step 1b.5 — S_py_LOCK (BLOCKING; gates the Step 1c scope + funding decisions).** *(Paired-review must-fix MF-1, 2026-05-27 — `reviews/goforward-paired-verdict.md`.)* The same-box re-measure that yielded S_py≈20 is a **noisy `repeats=2` single-utterance burst, no p99, non-monotonic** (conc 12/14/16/18/20 ttfs_p95 = 131/58/147/67/158; first FAIL=24) **AND not apples-to-apples** — Python ttfs is client-over-WS (`ec2_loadgen.py:77`), native N=36 is server-side pre-WS (Step 3 unbuilt), so the 1.8× is inflated by the WS slice native hasn't paid. Before 1c sets scope: re-measure Python on the **same L40S, the Step-4 apples-to-apples manifest, WS-matched (or WS-subtracted)**, `repeats≥10` (or until repeat CV≤10% AND pass/fail monotone), levels {16,18,20,22,24}+a bracket point, emit **p50/p95/p99 + P95−P50/P99−P50**, multi-turn included or explicitly scoped. `S_py_lock` = highest level passing lag_p95<500 ∧ ttfs_p95≤175 ∧ ttfs_p99≤250 ∧ err≤1% in ALL qualifying repeats (non-monotone → use the largest contiguous-from-bottom pass, not an isolated higher one). Set **`S_native_req = ceil(max(34, 1.80·S_py_lock, 1.50·S_py_lock/0.83))`**. **Branches:** `S_py_lock≤18` → 36 already clears a robust GO → **Step 1c DEMOTED to optional**; `[19,21]` → proceed to 1c; `≥22` → trigger Funding-recheck F1 before any g6e/Phase-3 spend. *(The in-flight apples p50/p95/p99 chart is the first half of this.)*
+
+- [ ] **Step 1c — push the knee >36 (sync/batch triage; target = `S_native_req` from 1b.5, NOT a bare ">36").** Motivation: the
+  same-box Python re-measure (2026-05-27) pins **S_py≈20**, making the 1.8× multiplier **at-bar with ZERO margin**,
+  and the Step-4 ~17% haircut keeps it at-bar (0.83·36≈30 vs 1.5·20=30) → a robust Step-4 GO needs knee **>36**.
+  Two independent analyses (`reviews/{opus,codex}-scaling-above-36-levers.md` → `CHECKPOINT-scaling-above-36.md`)
+  attribute the ceiling to **host-side serialization** (36× B=1 forwards + per-token `.item()` D2H syncs leaving
+  17–27% GPU idle — NOT memory, NOT the AOTI exec lock = a `std::shared_lock`, NOT `enc_first`); util-bound ceiling
+  **≈44–48** (>48 needs reduced per-stream compute). Pre-registered sub-gates, **cheapest arbiter first**:
+  - **1c-0a decode-sync ablation — 5090 DEV/T1 SMOKE (NOT a density arbiter).** *(MF-3.)* `--decode-no-host-sync`:
+    host-compute `enc_len` from `(drop,T)` + device-side greedy argmax / fused blank flag. **PRECONDITION:** prove
+    device-argmax **T1 bit-exact** vs the CPU `.argmax().item()` on a fixture FIRST (device-vs-CPU tie-breaking is
+    not guaranteed identical); if it fails, 1c-0 collapses to enc_len-only (~no-op, +0–2 streams) → skip to the
+    batching decision. T1 binds to the exact build (1000/1000 finals + strict events; any flip → STOP this lever).
+    **⚠️ EXPECTED OUTCOME = PIVOT (FACT-2, verified):** `decode_item_wait` p95 is only **~17ms (flat across N)** while
+    `decode_wall` explodes to **309ms@40** — the `.item()` sync is NOT the explosion (that's joint/predict GEMMs
+    queued under cross-stream contention), so sync-removal is **bounded ~17ms** and almost certainly does NOT reach
+    `S_native_req`. 5090 is a dev/T1 proxy, NOT an L40S density verdict.
+  - **1c-0b L40S net-density confirm (THE arbiter).** Same g6e/L40S, sm_89 pkg, manifest; flag-on/off paired
+    controls; N=36/40/44 + `S_native_req`; CV≤10%. **GO:** `N≥S_native_req` SLO-robust (lag<500, ttfs p95≤175,
+    p99≤250), 0 mismatch, err≤1%, **AND no net regression at N=36** (throughput_rt ≥0.98× control, lag_p95 ≤
+    control+50ms, TTFS_spread ≤ control+25ms — catches the fill-window double-edge). **PIVOT→1c-A:** N=40 non-SLO OR
+    `decode_wall` p95 ≥150ms OR lag worsens ≥30% vs control. **AMBIGUOUS (50–150ms or TTFS-only gain):** run 1c-A/1c-B first.
+  - **1c-A batching kill-gate (only if 1c-0 PIVOTs).** (1) opportunity trace, no model change: replay arrivals at
+    8/12ms windows — GO if median B≥2.5, p95 B≥4, B=1≤35%, added-wait p95≤8ms; STOP-batching if median B<2 or
+    B=1>50% (the workload won't fill batches; the `spikes/0.5-batching-sim` prior says realistic B≈1.5–2). (2)
+    B=2/B=4 steady AOTI fixture shadow-vs-alone — GO if B=4 per-row ≤0.75× B=1, 0 token/cache/event mismatch,
+    predicted N=44 holds SLO; STOP on drift or per-row gain <15%. (Native B>1 ⇒ Phase-3.)
+  - **1c-B Nsight/CUPTI attribution (MANDATORY — gates the batching decision, not optional narrative).** *(MF-4.)*
+    N=36/40, ±stagger, ±`--mutex-serialize-run`/default-stream controls. Counters: kernel timeline, launch gaps,
+    stream overlap, SM occupancy, DRAM throughput, AOTI host-launch time, **finalize pool wait/reclaim split OUT of
+    AOTI-run** (`finalize_wait=0` is mis-attributed). **3-way routing** (resolves sync-vs-contention): (a) decode_wall
+    <50 after 1c-0 → sync-bound; (b) decode_wall>150 AND SM/DRAM<85% with launch gaps≥15% → **cross-stream
+    kernel-queue contention → steady-graph/coalescing (Tier-3), NOT batching**; (c) decode_wall>150 AND SM/DRAM≥90%
+    → compute-bound → batching. **Do NOT use mean-util to forecast streams** (N=36 mean 73% but p50/p95=91/96;
+    staggered N=40 FAILS at 72.6%) — "44–48" is an upper bound, not a forecast.
+  - **1c-C scalar/decode cleanup** (deterministic `enc_len` first): GO for density-credit if item_wait p95 −≥50%
+    AND N=40 lag p95 −≥30% without widening TTFS; STOP-density-credit if it only improves TTFS (still report it).
+  - **1c-D `enc_first` pool** — run ONLY if product traffic is short-session/high-churn or N=37–39 certification
+    margin is needed; STOP as a density lever (N=40 still fails — the likely outcome; the 6.9 GiB buys ~0 prod density).
+  **STOP line (MF-6):** 1c STOPS (success) once a knee clearing `S_native_req` is **stagger-robust at the knee N and
+  N+4**; OR, after 1c-0+1c-B, if no ≤Tier-1b lever closes the formula → **do NOT auto-continue into Tier-3/batching** —
+  escalate to Funding-recheck F1 with the realized ceiling (Phase-3 batching needs its own explicit GO). PAIRED REVIEW
+  (1c-0 changes the gate math). The outcome selects what Step 2b schedules; a B>1 selection spins up Phase-3.
+
+- [ ] **Funding-recheck F1 — after Step 1b.5 + Step 1c, before freezing the Step-2/3 build scope.** *(MF-2.)* The
+  multiplier softened from the hoped 2.0–2.25× to a zero-margin 1.8× (lower once native pays its WS tax). Report
+  `nominal_realized = 0.83·S_native_candidate/S_py_lock`, `pessimistic = 0.75·S_native_candidate/S_py_lock`, and the
+  remaining eng-weeks + permanent dual-stack carry. **GO-to-build without escalation only if nominal ≥1.70× AND
+  pessimistic ≥1.50× with the p99 guardrail met;** otherwise mark **TECHNICAL-CONDITIONAL** → explicit human
+  re-justification of the 2nd-stack bet. (Does not change the technical density gate; prevents a strategically weak
+  1.5× from silently inheriting the 2.0× rationale.)
+
+- [ ] **Step 2 — scheduler design + admission (blocked on Step-1 telemetry).** **(MF-6 split: Step 2a — invariant
+  work [admission close-shed + admitted-vs-offered accounting, stale-generation harness, WS-tail microbench
+  scaffolding, telemetry schema] may proceed in PARALLEL once Step 1b.5 starts; Step 2b — the final scheduler
+  topology (B=1-threaded vs B>1-batched vs priority-finalize partitioning) WAITS on the 1c-A selection.)** From the
+  Step-1 **telemetry schema** (not a scalar knee): one **box-global active/admitted cap** + one **box-global backlog-COUNT cap**
   (ready-age is dead; sweep ~8/10/12), shed = **close** (count admitted, not offered; two curves). A declared
   numeric **priority-finalize-lane policy over the `num_runners=N` pool** — either partitioned
   (`N_finalize_reserved≥1`, steady-starvation p95 ≤2× no-finalize) or weighted (finalize runner-wait ≤25% TTFS,
@@ -259,22 +322,37 @@ independent re-run.
   in the copies — but volumes are tiny (mel ~8KB, scalars) so it's the **sync stall, not bandwidth.**
 
 ### Lever inventory — TIERED by the binding resource
-- **Tier 1 — `enc_first` DEDUP** (the current 5090 binding resource — W1 corrected this from "finalize-memory"):
-  the per-worker 2.48 GiB `enc_first` copy is the memory wall. **Fix-2** (share one enc_first ref + a lock for the
-  rare first-chunk forward, ~10 lines, fast confirm) or **Fix-1** (fold first-chunk into the shared steady AOTI
-  loader → ~0 GiB/worker + closes the first-chunk-TorchScript residual). Est. 5090 N=4→~40-45. (Finalize-bucket
-  hygiene — load+warm only the needed subset — is ALREADY implemented + correct; padded-bucket consolidation is
-  REJECTED: ~0 saving + not token-safe.)
-- **Tier 2 — GATE-DEPENDENT** (pending the L40S sweep's binding-resource attribution): L40S memory-bound → Tier 1;
-  **contention-bound → the autotune ladder** (R1a precision-matched, T1-gated); host-bound → Tier 3.
-- **Tier 3 — sync / host-ceiling / tail levers** (first-order ONLY once memory is relaxed + the binding shifts to
-  host): eliminate the `enc_len` D2H `.item()` (compute host-side; ~4–6ms/chunk + a sync point); trim the finalize
-  glue (async/cheaper FORK_ASSERT+text); pinned+`non_blocking` copies (minor — tiny volumes); **cross-stream
-  transfer/compute batching** (a Step-2/3 *scheduler* change). *Double-edge:* the `.item()` idle is the multi-thread
-  fill window → eliminating syncs cuts per-thread latency but also fill-opportunity; net density effect must be
-  MEASURED (the phase-split telemetry does).
-- **NOT levers (ruled out this session):** a finalize CUDA graph for the "234ms" (it was cold-start; warm=8ms);
-  autotune for the memory wall; aggressive `max_autotune`+`coordinate_descent` (breaks T1).
+**L40S post-W3 re-tiering (2026-05-27 — SUPERSEDES the 5090-era `enc_first`-memory tiers; that 5090 memory wall was
+RESOLVED by W1 Fix-2, see Live findings + the 1a row).** Two independent analyses (`reviews/{opus,codex}-scaling-
+above-36-levers.md` → `CHECKPOINT-scaling-above-36.md`) attribute the N=36 ceiling to **host-side serialization**
+(36× B=1 forwards + blocking per-token `.item()` D2H syncs → 17–27% GPU idle) — NOT memory (0.035 GiB/stream), NOT a
+saturated GPU, NOT the AOTI exec lock (it's a `std::shared_lock`, `model_container.h:82`), NOT `enc_first`. **Ceiling:
+the util-mean extrapolation is INVALID** (N=36 mean 73% but p50/p95=**91/96**; staggered N=40 FAILS at 72.6%) — "≈44–48"
+is an upper bound pending the 1c-B Nsight attribution, NOT a forecast. Multiplier **1.8× at-bar/zero-margin — and
+INFLATED** (native ttfs is server-side pre-WS vs Python's client-over-WS; the honest WS-paid number is lower — lock it
+in Step 1b.5/MF-1). >36 is load-bearing for Step-4 *if* S_py_lock ≥19.
+- **Tier 1a — decode/`enc_len` scalar-sync removal** (device argmax + fused blank flag; host-computed `enc_len`):
+  **CORRECTED (FACT-2, verified): BOUNDED ~17ms.** `decode_item_wait` p95 is flat ~17ms across N while `decode_wall`
+  explodes to 309ms@40 — the explosion is joint/predict GEMMs **queued under cross-stream contention**, NOT the
+  `.item()` sync. So this is a **TTFS/tail cleanup (~17ms + enc_len ~22ms), NOT the decode-contention fix**, and
+  **1c-0 is expected to PIVOT.** Cheap + T1-gated (do it for TTFS), but it does NOT reach `S_native_req` alone.
+- **Tier 1b — `finalize_num_runners` > 2 + priority-finalize-lane:** the `min(N,2)` pool serializes synchronized
+  finalize bursts; the wait is mis-attributed into aoti-time (so "finalize_wait=0" hides it). **~free** (buckets
+  share one constants set). Fold into Step 2.
+- **Tier 2 — cross-stream batched greedy decode/steady — THE decode-contention lever (re-ranked UP, FACT-2):** the
+  `decode_wall` explosion is cross-stream GEMM queueing, so **batching is what addresses it** (collapses 36×B=1 +
+  amortizes one `.item()` across N) — sync-removal can't. Phase-3-scale (B>1 export + ragged batched decode + T1),
+  **B-fill-gated** (sim `spikes/0.5-batching-sim`: realistic B≈1.5–2 → 20–35%, not 2–3×). Gated by the 1c-A
+  opportunity trace; needs its own Phase-3 GO.
+- **Tier 3 — steady-encoder CUDA-graph** (the shipped finalize-graph primitive) + the autotune-ON ladder
+  (T1-blocked): help launch/dispatch, NOT GEMM time (steady is BW-bound). **Nsight-gated** (only if launch gaps ≥15%).
+- **De-prioritized — `enc_first` K-pool / AOTI fold — but TRAFFIC-CONDITIONAL (MF-5):** `lag`-not-`ttfs`,
+  stagger-erased (640→10ms), a harness artifact for the ~12s sessions. Keep de-prioritized **ONLY IF** target
+  traffic has p95 session lifetime ≥60s OR first-chunk starts ≤5% of steady chunks at the admitted cap
+  (barge-in / reconnects / multi-stream-per-call / greeting snippets resurrect it); else a Step-2 hygiene gate.
+  ~0 prod *density* regardless (don't count it as steady density unless N=40+ actually becomes SLO-robust).
+- **NOT levers (ruled out):** a finalize CUDA graph for the "234ms" (cold-start; warm=8ms); autotune for memory;
+  aggressive `max_autotune`+`coordinate_descent` (breaks T1).
 
 ### Scoped next work (priority / dependency)
 - **W0 DONE:** autotune-on T1-FAILED (995/1000); finalize-234ms = cold-start (warmup-fixed); W1 root-caused the
@@ -298,8 +376,11 @@ independent re-run.
 |---|---|---|---|
 | 0 cheap kill-gates (5090) | done | d77bede, 92b8a9f | density_main.cpp, paired-reviewed + gate-soundness fixes. **conjunct-2 binary = YES.** 0a PASS (~1.7× encoder-only; serial-oracle 0 mismatch; loader-delta 2.309GiB flat N=1→16 = ONE weight copy; controls: single-runner≡N=1, mutex −22%, default −30%). 0b PASS (identity 0/200; scalar-locality sentinel: `.item()` doesn't drain unrelated streams). 0c PASS (8-worker same+mixed 0 mismatch after finalize-pool fix: cap min(workers,2)/bucket + preload-needed + hot=workers; 10-worker OOM → finalize memory-tight ~30.8/31.3GiB on 5090, L40S has headroom). **ATTRIBUTION: the plateau is GPU CONTENTION (encoder saturates 5090 ~N=4), NOT the execution lock** (kernel p50 5.28→13.63→28.54ms with N). nsys absent → kernel-duration-vs-N substitutes. Density magnitude (full session w/ host-bound decode) = Step 1a. |
 | 1a 5090 spend-control | DONE (PASS) | e5f2753, 99fbba3, +W1b' | **TRUE 5090 knee = N=40 SLO-robust (TTFS p95 82.5ms ≪175; lag_p95 −60ms; 0 mismatch at EVERY N=1..64); N=48 first non-SLO. BINDING = GPU CONTENTION** (not memory 19.8/32GiB, not streams unique-to-64, not CPU 3.2/32, not the enc_first lock — lock p95 300ms@N=40 but TTFS 82.5/lag −60, so NO K-pool needed). Full arc: N=4 (enc_first-dup memory-capped) → N=40 (compute-bound) after the Fix-2 dedup + unique-streams. ~2.5× per-process vs Python 5090 (~14-16/proc). Spend-control PASS → L40S. enc_len_sync(25ms)+glue(50ms) grow → W2 could nudge higher. Earlier: 234ms=cold-start(fixed); autotune T1-FAIL(995/1000, shelved); Fix-1 AOTI-first-chunk T1-blocked(stays TorchScript). |
-| 1b L40S ceiling gate | todo | | PASS ≥max(34, 1.80·S_py); paired; the density ceiling |
-| 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design) |
+| 1b L40S ceiling gate | DONE (PASS) | run#13/#14 logs in runtime/artifacts/l40s_w3_logs/ | **L40S native knee = N=36 SLO-robust (true ∈[36,39]); N=40 first non-SLO → PASS** (≥34 floor; ~1.8-2.25× Python S_py~16-20; at-bar vs S_py=20). g6e.8xlarge (32 vCPU/L40S 48GB), sm_89 autotune-OFF, 8 sessions/worker, fresh-process-per-N. **BINDING = keep-up/GPU-compute**: lag p95 −35ms@36 → +1337@40; ttfs p99 147@36 → 720@40 (budget 175/250); finalize_wait 0; per-stream mem 0.035 GiB (NOT memory — could hold 1000s); CPU 5.9/32. steady_gpu+finalize_gpu p50 ~18→~28ms + decode_wall p95 17→309ms at 40 = GPU-scheduling + decode tail. **N=32 control == run#9** (finalize_gpu 14ms, ttfs p99 110) validates the rig. **STAGGER-ROBUST (run#14)**: a 10s per-worker start-stagger improves margins (N=36 ttfs p99 147→50, lag −35→−119) but N=40 STILL collapses (lag +1149) → genuine compute saturation, NOT a synchronized-burst artifact (closes the reviewers' false-fail objection). **PAIRED REVIEW: Codex + Opus both GO** (reviews/codex-l40s-w3-profile.md, codex-l40s-knee-verdict.md). Caveats: exact knee bracketed [36,39] (37-39 untested); at-bar vs high-end S_py=20. **SAME-BOX PYTHON RE-MEASURE DONE 2026-05-27 (spy_*.json): S_py≈20 single-proc @ ttfs p50 ~42ms → 1.8× CONFIRMED AT-BAR / ZERO MARGIN** (the prod 245ms was an MPS-multiproc artifact, not inherent — one proc ≈ same density at ~6× lower ttfs). ⟹ pushing knee >36 is **load-bearing for Step-4** (see Step 1c + CHECKPOINT-scaling-above-36.md). aggregator summary prints ttfs/lag 0.0 + binding=not_observed (cosmetic parser bug; per-N rows authoritative). **RIG (cross-arch sm_89, cu128 wheel + CUDA-13):** share-ONE-bundle context (0.8s — concurrent 668MB jit::load LIVELOCKS on torch's global registry; was the ~60min/N hog, not warmup); cudart-12 unify (CUDA-13 vs torch cudart-12 deadlocked the multi-thread path); full per-worker finalize warmup (the lean per-bucket-runner variant under-warmed 34/36 worker streams → false-fail); SKIP_EPS_VERIFY (90GB SHA ~12min); arch_list/venv/cmake-source fixes. autotune-ON shelved (T1-broken, moot while compute-bound). T1: 1000/1000 finals byte-exact vs gold (run#9); 5/1000 interim-event-timing drift (WER-neutral, counted not gated). |
+| 1b.5 S_py_LOCK (BLOCKING) | todo | | **MF-1 — gates 1c scope+funding.** Re-measure Python same-box, Step-4 manifest, **WS-matched**, repeats≥10, p50/p95/p99, levels {16,18,20,22,24}. S_py noisy/non-monotonic/**not-apples-to-apples** (147ms@conc16 PASSES; first fail conc24@249). Set **S_native_req=ceil(max(34, 1.80·S_py, 1.50·S_py/0.83))**. ≤18→1c optional; 19-21→proceed; ≥22→F1. In-flight apples chart = first half. |
+| 1c push knee >36 (sync/batch triage) | todo | | **Target=S_native_req (not bare >36); load-bearing iff S_py≥19.** **1c-0a 5090 dev/T1 smoke (EXPECTED PIVOT — sync bounded ~17ms, FACT-2)** → **1c-0b L40S net-density arbiter** → 1c-A batching (THE decode-contention lever) / 1c-B Nsight (MANDATORY, 3-way route) / 1c-C scalar / 1c-D enc_first(traffic-cond). **STOP line**; "44-48"=upper-bound-not-forecast. Paired red-team **GO-WITH-CHANGES** (reviews/goforward-paired-verdict.md). PAIRED. |
+| F1 funding recheck | todo | | **MF-2** — after 1b.5+1c, before freezing Step-2/3 build. GO-to-build only if nominal 0.83·S_native/S_py≥**1.70×** AND pessimistic 0.75·…≥**1.50×** + p99 guardrail; else TECHNICAL-CONDITIONAL→human re-justify (multiplier softened 2-2.25×→1.8× at-bar). |
+| 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design). **2a invariant work (admission/stale-gen/WS-tail/telemetry) parallel after 1b.5; 2b topology waits on 1c-A.** |
 | 3 multi-session + real WS | todo | | WS-tail microbench + stale-gen gate; closes 1.4b interim-cadence |
-| 4 realized density (apples) | todo | | TECHNICAL GO ≥G1_floor; G2 TTFS_spread reported; manifest + re-measured baseline |
+| 4 realized density (apples) | todo | | TECHNICAL GO ≥G1_floor; G2 TTFS_spread reported; manifest + re-measured baseline. **AT-RISK (2026-05-27): S_py≈20 → 1.8× at-bar; after the 0.83 haircut 0.83·36≈30 vs 1.5·20=30 = at-bar → push knee >36 (Step 1c) for a robust GO.** |
 | 5 per-target confirmation | todo | | confirm Step-1 attribution; Spark aarch64 preflight; EC2 |

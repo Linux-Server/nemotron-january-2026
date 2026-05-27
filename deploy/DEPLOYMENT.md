@@ -20,6 +20,8 @@ far lower — ~5–7/proc on L40S, ~3/proc on L4 — because the per-proc asynci
 (`vad_stop_recv_to_process` blows to seconds) well before the keep-up knee, while the GPU sits 40–65% idle.
 **Provision for the SLO-robust point, not the keep-up knee.**
 
+> **⚠️ Re-measure correction (2026-05-27, same g6e/L40S, single-utterance burst — `proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_*.json`):** a **single** server process on the *full* GPU is SLO-robust to **~20 streams** at **ttfs p50 ~42–54ms** (p95 158ms @20; server-side vad_stop→final). The multi-proc **K=3+MPS** config reaches the *same* ~16–20/box but at **ttfs p50 ~245ms** at matched load — so MPS+multi-proc here buys **≈no density over one process** yet pays a **~190ms median-latency tax** (it was sized on the since-refuted "48/box" keep-up belief). The "~5–7/proc" above is the *MPS-degraded* per-proc, **not** a single proc's ceiling. **This is a LEAD, not yet a flip:** the loadgen is one-utterance-per-connection; the genuine multi-proc rationale is per-proc asyncio **intake** parallelism under *sustained multi-turn* load, which this test does not exercise. **Action before changing prod:** run a single-proc *sustained multi-turn* load test — if a single proc holds ~16–20 under sustained load, prefer **fewer procs / no MPS** for the latency win.
+
 ## Per-GPU config matrix (measured 2026-05-24, cloud SLO-robust — `proj-2026-05-24-0859/validation.md`)
 SLO-robust = sustained **p95<300ms + clean p99** (the competitive bar). Relaxing to the 400ms hard budget gives
 ~24/box L40S / ~8/box L4, but p99 degrades. The OLD "knee" numbers (L4 ~32 / L40S 48) were *keep-up* knees that do
@@ -87,12 +89,32 @@ Scale boxes on aggregate utilization = active_streams / (boxes × per-box-knee),
 ASG; deregistration delay = the drain window. Cold start (model load + MPS + K-process warmup) is ~minutes → keep
 warm headroom or pre-warm new boxes before adding to the LB.
 
+## Native runtime (density roadmap — Phase-2, when funded)
+The Python multi-proc+MPS design above is the *shipping* path. The L40S **density ceiling** is GIL/asyncio per-proc
+intake + scheduler serialization (GPU 40–65% idle at the SLO-robust point) — **not** the GPU. A **native
+C++/libtorch runtime** (one process, N true threads, ONE shared weight set via `AOTIModelPackageLoader(num_runners=N)`)
+breaks that ceiling.
+
+**Phase-2 Step-1b gate — DONE/PASS (2026-05-27, `proj-2026-05-24-from-scratch-runtime/`):**
+- **SLO-robust knee = ~36 streams/box on L40S** (one process) vs Python's ~16–20/box = **~1.8–2.25×**. Binding =
+  keep-up/GPU-compute, **not memory** (0.035 GiB/stream → could hold 1000s).
+- **Density, not latency:** server-side ttfs is *comparable* to a single Python proc (native p99 147ms @36 vs
+  single-proc Python ~42ms p50 @20 — both well under the 175/250 budget). The ~2× is purely the GIL-break letting
+  the GPU saturate at 36 vs ~20. (The Python *245ms* is the MPS multi-proc tax noted above, not inherent.)
+- **No MPS, no multi-proc, one weight copy** → smaller blast radius than the MPS design.
+
+**When to invest:** a ~40–60 eng-week 2nd-stack bet (separate *funding* call; technical-GO ≠ funding-GO). Take it
+when L40S density (fewer/denser boxes at ~2×) beats the Python fleet's ops simplicity. Levers to push the knee >36
+(steady-encoder contention / decode D2H syncs / enc_first lock / cross-stream batching) are under analysis — see
+`proj-2026-05-24-from-scratch-runtime/reviews/` + the checkpoint notes.
+
 ## $/stream summary
 **L4 (g6.2xlarge) ≈ $0.031/stream is cheapest → cost-optimized + horizontal scale.** L40S (g6e) is the
-density play (**48/box at K=3**, fewer instances) at ~3× $/stream — its density shrank because the finalize graph
-caps L40S at K=3 (memory), so use the cheaper **g6e.4xlarge** (not g6e.8xlarge) when you do want L40S density.
-Choose L4-multi-box unless ops strongly prefers fewer/denser boxes. Spot pricing ~halves both (keeps the ratio);
-use spot for stateless capacity with drain on interruption.
+density play (**~16–20/box** SLO-robust — *not* the old "48"; that was a keep-up knee that overstated ~2–3×) at
+~3× $/stream, capped by per-proc intake + GPU-BW (not proc count), so use the cheaper **g6e.4xlarge** (not
+g6e.8xlarge — its extra vCPU sits idle). Choose L4-multi-box unless ops strongly prefers fewer/denser boxes. Spot
+pricing ~halves both (keeps the ratio); use spot for stateless capacity with drain on interruption. **The native
+runtime (below) is the real L40S density play (~36/box, ~2× Python) when funded.**
 
 ## Artifacts
 - `deploy/launch_multiproc.sh` — multi-process + MPS launcher (Step 2).

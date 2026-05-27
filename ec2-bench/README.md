@@ -12,6 +12,19 @@ so it must be measured on the actual instance (see `memory/deployment-target-sag
 - Run server **and** load-gen on one box (no ingress / no WAN); the load-gen is ~7% CPU at the knee, so it does
   not confound the measurement.
 
+## Apples-to-apples measurement notes (learned 2026-05-27, comparing Python vs the native runtime)
+- **Same metric**: server-side **ttfs = vad_stop→final over the local WS** (no WAN, no endpoint-wait); `ec2_loadgen.py`
+  measures exactly this. Budget: ttfs **p95≤175 / p99≤250ms**, keep-up **lag p95<500ms** (= 400 − VAD~200 − WAN~25).
+- **Same arrival pattern**: the loadgen fires a **synchronized burst** (N concurrent conns, no stagger). Match the
+  other side — the native density harness must also run **no-stagger** (a per-worker start-stagger improved native
+  N=36 ttfs p99 to 50 vs 147 no-stagger; comparing staggered-vs-burst is a real confound).
+- **Single-proc vs MPS**: run **one process on the full GPU** to isolate runtime/GIL efficiency; **K-proc+MPS** is
+  the deployment config but adds an MPS latency tax at ≈no density gain (see `deploy/DEPLOYMENT.md`). Say which you ran.
+  Same-box result: 1 Python proc ≈ **~20 streams @ ttfs p50 ~42ms**; native (1 process) ≈ **~36 @ p99 147ms**.
+- **p99 needs samples**: pool **conc×rounds ≳ 100–200** per level before trusting a p99 (bump `--rounds`).
+- **Coverage gap**: the loadgen is **one utterance per connection** — sustained *multi-turn* load per stream (where
+  the per-proc asyncio intake bottleneck bites) is **not** exercised. It's the open caveat behind the single-proc lead.
+
 ## Prerequisites
 - AWS creds — scripts default to the **auto-refreshing SSO profile** `AWSAdministratorAccess-419599258555`
   (set up once: `aws sso login --sso-session khk`; boto3 then mints fresh role creds on its own). Override with
@@ -55,7 +68,7 @@ $PY ec2-bench/ec2_down.py
 | `run_bench.sh` | on-box: B=1 baseline + batched knee sweeps → `baseline.json`, `batched.json`. |
 | `run_lanes.sh` | on-box: B=1 baseline + `NEMOTRON_MODEL_LANES` sweep (env `LANES`, `SWEEP`). |
 | `run_multiproc.sh` | on-box: multi-PROCESS scaling test — K server processes (each lanes=2) + K concurrent load-gens (env `K_LIST`, `N_PER`); pair with CUDA MPS for concurrent GPU sharing. |
-| `ec2_loadgen.py` | standalone in-box load-gen (lifted from `coloc_loadgen.py`): N concurrent realtime WS streams from `loadgen_audio/*.pcm`, reports proc-lag/TTFS p50/p95 + the keep-up knee. |
+| `ec2_loadgen.py` | standalone in-box load-gen (lifted from `coloc_loadgen.py`): N concurrent realtime WS streams from `loadgen_audio/*.pcm`, reports proc-lag + TTFS **p50/p95/p99 + sample count + max** + lag p99 + the keep-up knee. `--rounds R` pools N×R samples/level (raise it for a trustworthy p99). |
 | `ec2_down.py` | terminate the instance. |
 
 ## Config knobs
