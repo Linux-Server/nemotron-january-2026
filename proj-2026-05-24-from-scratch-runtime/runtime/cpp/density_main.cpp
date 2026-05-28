@@ -43,6 +43,23 @@ static void cuda_check(cudaError_t err, const char* expr, const char* file, int 
 
 #define CUDA_CHECK(expr) cuda_check((expr), #expr, __FILE__, __LINE__)
 
+struct ScopedCudaEvent {
+  cudaEvent_t event = nullptr;
+
+  ScopedCudaEvent() = default;
+  ScopedCudaEvent(const ScopedCudaEvent&) = delete;
+  ScopedCudaEvent& operator=(const ScopedCudaEvent&) = delete;
+
+  ~ScopedCudaEvent() {
+    if (event != nullptr) cudaEventDestroy(event);
+  }
+
+  void create(unsigned int flags = 0) {
+    if (event != nullptr) CUDA_CHECK(cudaEventDestroy(event));
+    CUDA_CHECK(cudaEventCreateWithFlags(&event, flags));
+  }
+};
+
 #include "steady_batch_primitive.h"
 #include "batched_steady_scheduler.h"
 
@@ -433,6 +450,97 @@ static std::string int_list_json(const std::vector<int>& values) {
   }
   oss << "]";
   return oss.str();
+}
+
+static std::string scheduler_us_stats_json(const std::vector<double>& values) {
+  auto s = summarize(values);
+  std::ostringstream oss;
+  oss << "{\"n\":" << s.n
+      << ",\"p50_us\":" << s.p50
+      << ",\"p95_us\":" << s.p95
+      << ",\"p99_us\":" << s.p99
+      << ",\"p95_minus_p50_us\":" << (s.p95 - s.p50)
+      << ",\"p99_minus_p50_us\":" << (s.p99 - s.p50)
+      << ",\"mean_us\":" << s.mean
+      << ",\"max_us\":" << s.max
+      << "}";
+  return oss.str();
+}
+
+static std::string scheduler_value_stats_json(const std::vector<double>& values) {
+  return value_stats_json(summarize(values));
+}
+
+static double pct_clamped(double numerator, double denominator) {
+  if (denominator <= 0.0) return 0.0;
+  double pct = 100.0 * numerator / denominator;
+  if (pct < 0.0) return 0.0;
+  if (pct > 100.0) return 100.0;
+  return pct;
+}
+
+static std::string scheduler_telemetry_json(const BatchedSteadySchedulerTelemetry& telemetry) {
+  std::ostringstream oss;
+  oss << "{\"counts\":{\"enqueued\":" << telemetry.enqueued
+      << ",\"completed\":" << telemetry.completed
+      << ",\"dispatch_cycles\":" << telemetry.dispatch_cycles
+      << ",\"warmup_runs\":" << telemetry.warmup_runs
+      << ",\"B1\":" << telemetry.bucket_b1
+      << ",\"B2\":" << telemetry.bucket_b2
+      << ",\"B4\":" << telemetry.bucket_b4
+      << ",\"K3_padded_to_B4\":" << telemetry.k3_padded_to_b4
+      << ",\"K4\":" << telemetry.k4
+      << ",\"backlog_gt_bmax\":" << telemetry.backlog_gt_bmax
+      << ",\"dispatcher_exceptions\":" << telemetry.dispatcher_exceptions
+      << "}"
+      << ",\"dispatcher_cpu_pct\":" << pct_clamped(telemetry.dispatcher_cpu_us, telemetry.dispatcher_wall_us)
+      << ",\"dispatcher_cpu_us\":" << telemetry.dispatcher_cpu_us
+      << ",\"dispatcher_wall_us\":" << telemetry.dispatcher_wall_us
+      << ",\"dispatcher_stream_util_pct\":"
+      << pct_clamped(telemetry.dispatcher_stream_run_us, telemetry.dispatcher_wall_us)
+      << ",\"dispatcher_stream_run_us\":" << telemetry.dispatcher_stream_run_us
+      << ",\"timers\":{\"gather_wait_us\":" << scheduler_us_stats_json(telemetry.gather_wait_us)
+      << ",\"service_wait_us\":" << scheduler_us_stats_json(telemetry.service_wait_us)
+      << ",\"cuda_run_us\":" << scheduler_us_stats_json(telemetry.cuda_run_us)
+      << ",\"output_sync_us\":" << scheduler_us_stats_json(telemetry.output_sync_us)
+      << ",\"worker_blocked_us\":" << scheduler_us_stats_json(telemetry.worker_blocked_us)
+      << ",\"window_wakeup_jitter_us\":" << scheduler_us_stats_json(telemetry.window_wakeup_jitter_us)
+      << "}"
+      << ",\"queue_depth\":" << scheduler_value_stats_json(telemetry.queue_depth)
+      << ",\"per_stream_fairness_spread_us\":"
+      << scheduler_us_stats_json(telemetry.per_stream_fairness_spread_us)
+      << "}";
+  return oss.str();
+}
+
+static void merge_scheduler_telemetry(BatchedSteadySchedulerTelemetry& dst,
+                                      const BatchedSteadySchedulerTelemetry& src) {
+  dst.enqueued += src.enqueued;
+  dst.completed += src.completed;
+  dst.dispatch_cycles += src.dispatch_cycles;
+  dst.warmup_runs += src.warmup_runs;
+  dst.bucket_b1 += src.bucket_b1;
+  dst.bucket_b2 += src.bucket_b2;
+  dst.bucket_b4 += src.bucket_b4;
+  dst.k3_padded_to_b4 += src.k3_padded_to_b4;
+  dst.k4 += src.k4;
+  dst.backlog_gt_bmax += src.backlog_gt_bmax;
+  dst.dispatcher_exceptions += src.dispatcher_exceptions;
+  dst.dispatcher_cpu_us += src.dispatcher_cpu_us;
+  dst.dispatcher_wall_us += src.dispatcher_wall_us;
+  dst.dispatcher_stream_run_us += src.dispatcher_stream_run_us;
+  dst.gather_wait_us.insert(dst.gather_wait_us.end(), src.gather_wait_us.begin(), src.gather_wait_us.end());
+  dst.service_wait_us.insert(dst.service_wait_us.end(), src.service_wait_us.begin(), src.service_wait_us.end());
+  dst.cuda_run_us.insert(dst.cuda_run_us.end(), src.cuda_run_us.begin(), src.cuda_run_us.end());
+  dst.output_sync_us.insert(dst.output_sync_us.end(), src.output_sync_us.begin(), src.output_sync_us.end());
+  dst.worker_blocked_us.insert(dst.worker_blocked_us.end(), src.worker_blocked_us.begin(), src.worker_blocked_us.end());
+  dst.window_wakeup_jitter_us.insert(dst.window_wakeup_jitter_us.end(),
+                                     src.window_wakeup_jitter_us.begin(),
+                                     src.window_wakeup_jitter_us.end());
+  dst.queue_depth.insert(dst.queue_depth.end(), src.queue_depth.begin(), src.queue_depth.end());
+  dst.per_stream_fairness_spread_us.insert(dst.per_stream_fairness_spread_us.end(),
+                                           src.per_stream_fairness_spread_us.begin(),
+                                           src.per_stream_fairness_spread_us.end());
 }
 
 static void emit_telemetry(const std::string& dir,
@@ -1214,6 +1322,12 @@ static void run_steady_chunk_density(SessionState& state,
   cudaEvent_t ev_start{};
   cudaEvent_t ev_stop{};
   bool has_aoti_event = false;
+  ScopedCudaEvent output_sync_start_event;
+  ScopedCudaEvent output_sync_stop_event;
+  bool has_scheduler_output_sync_event = false;
+  int64_t scheduler_cycle_id = -1;
+  int scheduler_k = 0;
+  double scheduler_worker_blocked_us = 0.0;
 
   if (expected_first) {
     if (drop_extra != 0 || chunk_T != new_mel.size(2)) throw std::runtime_error("density first steady geometry mismatch");
@@ -1261,14 +1375,22 @@ static void run_steady_chunk_density(SessionState& state,
         throw std::runtime_error("batch steady scheduler future timeout for " + label);
       }
       auto result = future.get();
+      output_sync_start_event.create();
+      output_sync_stop_event.create();
+      has_scheduler_output_sync_event = true;
+      CUDA_CHECK(cudaEventRecord(output_sync_start_event.event, stream.stream()));
       auto sync_start = Clock::now();
       CUDA_CHECK(cudaStreamWaitEvent(stream.stream(), result.completion, 0));
+      CUDA_CHECK(cudaEventRecord(output_sync_stop_event.event, stream.stream()));
       auto sync_end = Clock::now();
       CUDA_CHECK(cudaEventDestroy(result.completion));
       out = std::move(result.row_tensors);
       gpu_ms = result.cuda_run_us / 1000.0;
       runner_wait = elapsed_us(enqueue_start, sync_end) / 1000.0;
-      scheduler->record_worker_wait(elapsed_us(sync_start, sync_end), elapsed_us(enqueue_start, sync_end));
+      scheduler_cycle_id = result.cycle_id;
+      scheduler_k = result.k;
+      scheduler_worker_blocked_us = elapsed_us(enqueue_start, sync_end);
+      (void)sync_start;
       if (scheduler_diff_stats != nullptr && scheduler_diff_loader != nullptr) {
         auto ref = run_steady_encoder_stream(*scheduler_diff_loader,
                                              chunk,
@@ -1297,6 +1419,16 @@ static void run_steady_chunk_density(SessionState& state,
                                                         chunk.size(2),
                                                         drop_extra,
                                                         label + ".encoder");
+
+  if (has_scheduler_output_sync_event) {
+    CUDA_CHECK(cudaEventSynchronize(output_sync_stop_event.event));
+    float output_sync_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&output_sync_ms, output_sync_start_event.event, output_sync_stop_event.event));
+    scheduler->record_worker_wait(scheduler_cycle_id,
+                                  scheduler_k,
+                                  static_cast<double>(output_sync_ms) * 1000.0,
+                                  scheduler_worker_blocked_us);
+  }
 
   if (has_aoti_event) {
     CUDA_CHECK(cudaEventSynchronize(ev_stop));
@@ -2920,6 +3052,7 @@ static bool run_b2_t1_gate(const DensityArgs& args,
   double max_enc_out = 0.0;
   double max_cache_ch = 0.0;
   double max_cache_t = 0.0;
+  BatchedSteadySchedulerTelemetry combined_scheduler_telemetry;
   for (const auto& c : cases) {
     ok = ok && c.pass;
     token_divergences += c.token_divergences;
@@ -2928,6 +3061,7 @@ static bool run_b2_t1_gate(const DensityArgs& args,
     max_enc_out = std::max(max_enc_out, c.max_enc_out_diff);
     max_cache_ch = std::max(max_cache_ch, c.max_cache_ch_diff);
     max_cache_t = std::max(max_cache_t, c.max_cache_t_diff);
+    merge_scheduler_telemetry(combined_scheduler_telemetry, c.telemetry);
   }
   std::ostringstream json;
   json << "{\"check\":\"b2_batched_scheduler_t1\""
@@ -2940,6 +3074,21 @@ static bool run_b2_t1_gate(const DensityArgs& args,
        << ",\"max_enc_out_diff\":" << max_enc_out
        << ",\"max_cache_ch_diff\":" << max_cache_ch
        << ",\"max_cache_t_diff\":" << max_cache_t
+       << ",\"scheduler_telemetry\":" << scheduler_telemetry_json(combined_scheduler_telemetry)
+       << ",\"cases\":[";
+  for (size_t i = 0; i < cases.size(); ++i) {
+    const auto& c = cases[i];
+    if (i > 0) json << ",";
+    json << "{\"name\":" << json_quote(c.name)
+         << ",\"pass\":" << json_bool(c.pass)
+         << ",\"rows\":" << c.rows
+         << ",\"errors\":" << c.errors
+         << ",\"token_divergences\":" << c.token_divergences
+         << ",\"event_divergences\":" << c.event_divergences
+         << ",\"scheduler_telemetry\":" << scheduler_telemetry_json(c.telemetry)
+         << "}";
+  }
+  json << "]"
        << ",\"pass\":" << json_bool(ok)
        << "}";
   emit_telemetry(args.dir, stamp, 1, "explicit", "b2_batched_scheduler_t1", json.str());
@@ -4901,8 +5050,11 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"B4\":" << batch_telemetry.bucket_b4
        << ",\"K3_padded_to_B4\":" << batch_telemetry.k3_padded_to_b4
        << ",\"K4\":" << batch_telemetry.k4
-       << ",\"backlog_gt_bmax\":" << batch_telemetry.backlog_gt_bmax << "}"
-       << ",\"cadence_ms\":" << args.density_chunk_period_ms
+       << ",\"backlog_gt_bmax\":" << batch_telemetry.backlog_gt_bmax << "}";
+  if (scheduler != nullptr) {
+    json << ",\"scheduler_telemetry\":" << scheduler_telemetry_json(batch_telemetry);
+  }
+  json << ",\"cadence_ms\":" << args.density_chunk_period_ms
        << ",\"rows_total\":" << rows_total
        << ",\"requested_sessions\":" << result.requested_sessions
        << ",\"sessions_completed\":" << result.sessions_completed

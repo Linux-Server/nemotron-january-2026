@@ -58,12 +58,17 @@ struct BatchedSteadySchedulerTelemetry {
   int64_t k4 = 0;
   int64_t backlog_gt_bmax = 0;
   int64_t dispatcher_exceptions = 0;
+  double dispatcher_cpu_us = 0.0;
+  double dispatcher_wall_us = 0.0;
+  double dispatcher_stream_run_us = 0.0;
   std::vector<double> gather_wait_us;
   std::vector<double> service_wait_us;
   std::vector<double> cuda_run_us;
   std::vector<double> output_sync_us;
   std::vector<double> worker_blocked_us;
   std::vector<double> window_wakeup_jitter_us;
+  std::vector<double> queue_depth;
+  std::vector<double> per_stream_fairness_spread_us;
 };
 
 class BatchedSteadyScheduler {
@@ -79,7 +84,7 @@ class BatchedSteadyScheduler {
   void start();
   void close();
   void warmup_buckets();
-  void record_worker_wait(double output_sync_us, double worker_blocked_us);
+  void record_worker_wait(int64_t cycle_id, int k, double output_sync_us, double worker_blocked_us);
 
   BatchedSteadySchedulerTelemetry telemetry_snapshot() const;
   const BatchedSteadySchedulerPolicy& policy() const { return policy_; }
@@ -117,12 +122,17 @@ class BatchedSteadyScheduler {
   void set_pending_exception_locked(std::exception_ptr ep, std::vector<std::shared_ptr<QueueItem>>* pending);
   void set_item_exception(const std::shared_ptr<QueueItem>& item, std::exception_ptr ep);
   void add_dispatch_telemetry(int bucket,
+                              int64_t cycle_id,
                               int k,
                               bool backlog,
                               const std::vector<double>& gather_wait_us,
                               const std::vector<double>& service_wait_us,
                               double cuda_run_us,
-                              double wakeup_jitter_us);
+                              double wakeup_jitter_us,
+                              Clock::time_point dispatch_wall_start,
+                              Clock::time_point dispatch_wall_end,
+                              double dispatch_cpu_start_us,
+                              double dispatch_cpu_end_us);
   static void cuda_check(cudaError_t err, const char* expr, const char* file, int line);
 
   BatchedSteadyLoaderSet& loader_set_;
@@ -144,5 +154,10 @@ class BatchedSteadyScheduler {
 
   mutable std::mutex telemetry_mutex_;
   BatchedSteadySchedulerTelemetry telemetry_;
+  bool dispatcher_measurement_started_ = false;
+  Clock::time_point dispatcher_measurement_wall_start_;
+  double dispatcher_measurement_cpu_start_us_ = 0.0;
+  std::map<int64_t, int> worker_wait_expected_by_cycle_;
+  std::map<int64_t, std::vector<double>> worker_waits_by_cycle_;
   std::map<int, Scratch> scratch_;
 };
