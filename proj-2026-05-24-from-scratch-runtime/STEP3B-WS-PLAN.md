@@ -1,5 +1,16 @@
 # Plan: Step 3b — Production WS+HTTP Server for the Native Runtime
 
+**v2 2026-05-28** — supersedes v1 (committed `c266771`) after Round 1 paired adversarial review:
+- `reviews/codex-Step3b-plan-review-round1.md` (verdict: GO-with-1-2-must-folds-to-v2).
+- `reviews/opus-Step3b-plan-review-round1.md` (verdict: GO-with-3-must-folds-to-v2).
+
+v2 folds the convergent must-folds + Codex's v4-contract-restoration findings: Part B commit
+semantics, in-flight Part A v1 salvage audit gate inline in Step 3, tightened bars on Steps 4/9/11,
+restored v4 contract items (/stats admission Python-shape, /health enum, pid/process_label, HTTP
+admin pool, /health PCM-frame matrix row deferral note), Silero N=64 CPU probe, WS-overhead perf
+gate, "Bars are ADDITIVE to the global per-step protocol" header rule, N=200 + full smoke set on
+every code step.
+
 Project directory: `./proj-2026-05-24-from-scratch-runtime`
 
 ## Context
@@ -100,6 +111,18 @@ review.
 
 ## Steps
 
+**Important rule (v2 fold per Codex Round 1 #3 + bars-additive concern)**: every Step's "Bar"
+below is **ADDITIVE** to the global per-step test protocol (PLAN_RULES.md test protocol: build →
+harness → **N=200 session gate (`cpp/session_main`) + b2-t1 4-row + density-sweep N=4 OFF +
+stalegen-smoke + admission-smoke + stats-smoke** all PASS to confirm no regression). The Bar
+specifies the step's NEW assertion; the smoke set + N=200 always re-run.
+
+**Commit semantics (v2 fold per Round 1 #1)**: each Step commits with `[x]` when its OWN Bar +
+the global smoke set PASS. **Step 11 (the test oracle) is the integration test for Steps 8-10;
+its failure is documented as an INTEGRATION regression to fix (most likely by amending Step 9's
+lifecycle wiring), NOT as un-marking prior steps.** Steps 8-10 stay `[x]` based on their per-step
+bars; Step 11 stays `[!]` until the integration passes.
+
 - [ ] **1. server.py protocol audit → `reviews/server-py-protocol-audit.md`** (PAIRED REVIEW)
   Line-by-line read of `src/nemotron_speech/server.py`. Produce a canonical protocol-compatibility
   table covering: HTTP routes (`/health` exact JSON shape; `/stats` exact shape; query params),
@@ -125,22 +148,29 @@ review.
   Key files: `runtime/container/Dockerfile`, `runtime/cpp/lib/runtime_io/json.hpp` (NEW vendored),
   `runtime/cpp/lib/runtime_io/picohttpparser.h` (NEW vendored).
 
-- [ ] **3. CMakeLists library carve + lib/{session,runtime_io,admission,scheduler,telemetry}
+- [ ] **3. Part A v1 salvage audit + CMakeLists library carve + lib/{session,runtime_io,admission,scheduler,telemetry}
        skeleton + density_main migration** (PAIRED REVIEW)
-  Per v4 §II + §XII (Part A revised scope). Carve `add_library(nemotron_runtime STATIC ...)` in
-  `runtime/cpp/CMakeLists.txt`. Initial library content (mechanical first pass):
-  `lib/session/session.cpp` (a moved copy of `session_main.cpp`) + `lib/session/session.h` exposing
-  the public surface (`SessionState`, `SessionMode`, `FinalizeFinish`, `Tokenizer`,
-  `WorkerContext`, `AOTIArtifacts`) + `lib/admission/` (move `density_admission.{h,cpp}`) +
-  `lib/scheduler/` (move `batched_steady_scheduler.{h,cpp}` + `steady_batch_primitive.h` —
-  extract its SHA256+JSON parser helpers to `lib/runtime_io/`). Migrate `density_main.cpp` to
-  `target_link_libraries(density_main nemotron_runtime ...)` instead of
-  `#include "session_main.cpp"`. **Static-global audit (v4 §II step 1.5):** identify any static
-  globals in `session_main.cpp` (tokenizer caches, finalize bucket loaders, AOTI handles); leave
-  them in place as part of `session.cpp` for this step (transfer to `SharedRuntime` ownership is
-  Step WS-A4). Bar: b2-t1 4-row PASS (0 token/0 event), density-sweep N=4 OFF smoke PASS,
-  stalegen-smoke PASS, admission-smoke PASS, stats-smoke PASS. If ANY smoke regresses, STOP this
-  step.
+  Per v4 §II + §XII. **Salvage audit FIRST** (v2 fold per both reviewers — explicit gate, not
+  hand-wavy):
+  list every hunk in the in-flight Part A v1 commit (`bdajesege`'s commit, once landed) →
+  classify each as `keep-mechanical` (CMake target shape, file moves, include-path fixes, no-
+  behavior cleanup matching v4) / `discard-protocol` (WS routing/handshake/route stubs predating
+  v4) / `discard-public-api` (WS skeleton + StatsCollector if shaped non-Python). Output to
+  `reviews/part-a-v1-salvage-audit.md`. Then proceed with the carve.
+  Carve: `add_library(nemotron_runtime STATIC ...)` in `runtime/cpp/CMakeLists.txt`. Initial
+  library content (mechanical first pass): `lib/session/session.cpp` (a moved copy of
+  `session_main.cpp`) + `lib/session/session.h` exposing the public surface (`SessionState`,
+  `SessionMode`, `FinalizeFinish`, `Tokenizer`, `WorkerContext`, `AOTIArtifacts`) + `lib/admission/`
+  (move `density_admission.{h,cpp}`) + `lib/scheduler/` (move `batched_steady_scheduler.{h,cpp}`
+  + `steady_batch_primitive.h` — extract its SHA256+JSON parser helpers to `lib/runtime_io/`).
+  Migrate `density_main.cpp` to `target_link_libraries(density_main nemotron_runtime ...)` instead
+  of `#include "session_main.cpp"`. **Static-global audit (v4 §II step 1.5)**: identify any static
+  globals in `session_main.cpp` (tokenizer caches, finalize bucket loaders, AOTI handles); output
+  to `reviews/session-cpp-static-globals.md` listing every static + disposition (stays in session.cpp
+  / transfer to SharedRuntime in Step 4 / irrelevant). Leave statics in place for this step;
+  transfer is Step 4. Bar: b2-t1 4-row PASS (0 token/0 event), density-sweep N=4 OFF smoke PASS,
+  stalegen-smoke PASS, admission-smoke PASS, stats-smoke PASS, **N=200 session gate** (per global
+  rule) PASS. If ANY smoke regresses, STOP this step.
   Key files: `runtime/cpp/CMakeLists.txt`, `runtime/cpp/lib/session/session.{h,cpp}` (NEW; carved),
   `runtime/cpp/lib/admission/`, `runtime/cpp/lib/scheduler/`, `runtime/cpp/lib/runtime_io/io.{h,cpp}`,
   `runtime/cpp/density_main.cpp` (migrate include).
@@ -158,9 +188,16 @@ review.
   optional fields). `SessionTiming` struct (5 SLO metrics + lifecycle metadata: `finalize_seq,
   active_sessions_at_emit, was_suppressed, emit_unix_ts, close_reason`). The production methods
   wrap the existing `run_steady_chunk_density` / `run_finalize_density` (which stay private).
-  Bar: b2-t1 4-row still PASS (the public-API wrappers don't change density behavior); a NEW
-  `--mode runtime-smoke` exercises `SessionRuntime` end-to-end with 1 synthetic PCM frame +
-  expects one interim emit + clean finalize.
+  Bar (v2 fold per both reviewers' tightening): **wrapper-equivalence harness** — feed real
+  20ms PCM chunks from the b2-t1 4-row fixture through `SessionRuntime::append_pcm_and_drain` +
+  `SessionRuntime::finalize_now`; assert token/event/delta equality vs `finalize_ref` for those
+  4 rows (NOT just "1 synthetic frame" which was brittle). Specifically: `--mode runtime-smoke`
+  exercises the SessionRuntime wrappers; tokens + events match finalize_ref's outputs for the
+  4-row fixture (0 token / 0 event divergence). Plus the global smoke set re-run.
+  **Static-global transfer audit gate**: `grep -rE "^static [^ ]+ [a-z]" lib/session/session.cpp`
+  returns only `static constexpr` / `static inline` / verified-OK statics from
+  `reviews/session-cpp-static-globals.md`; every other static is transferred to SharedRuntime
+  ownership.
   Key files: `runtime/cpp/lib/session/runtime.{h,cpp}` (NEW), `runtime/cpp/density_main.cpp`
   (add `--mode runtime-smoke`).
 
@@ -170,11 +207,14 @@ review.
   (`!was_suppressed && vad_stop_to_sent_ms.has_value()`); `snapshot(last_n)` returns a `Snapshot`
   struct (Python-exact fields: `enabled, window_size, samples, since_unix, until_unix,
   emitted_in_window, suppressed_in_window, lifetime_emitted, lifetime_suppressed, metrics{5 SLO
-  with per-metric count}, active_sessions_at_emit Distribution`); `snapshot_json` + future
-  `snapshot_prometheus` serializers. Lock semantics: copy deque under mutex (~µs), sort/serialize
-  outside mutex. Env: `NEMOTRON_STATS_ENABLED` (default 1), `NEMOTRON_STATS_WINDOW` (default 2048).
-  Quantile formula: `round(p * (n-1))` clamped to `[0, n-1]`. Wire `StatsCollector::record(timing,
-  emitted)` into `SessionRuntime::finalize_now()` (caller passes timing + emit-decision flag).
+  with per-metric count}, active_sessions_at_emit Distribution`, **`admission` sub-object with
+  Python-shape fields `enabled/attempted/admitted/rejected/max_backlog/max_ready_age_ms/signal{}`
+  mapped from DensityAdmission's native counters** — v2 fold per Codex Round 1 #2). `snapshot_json`
+  + future `snapshot_prometheus` serializers. Lock semantics: copy deque under mutex (~µs), sort/
+  serialize outside mutex. Env: `NEMOTRON_STATS_ENABLED` (default 1), `NEMOTRON_STATS_WINDOW`
+  (default 2048). Quantile formula: `round(p * (n-1))` clamped to `[0, n-1]`. Wire
+  `StatsCollector::record(timing, emitted)` into `SessionRuntime::finalize_now()` (caller passes
+  timing + emit-decision flag).
   Bar: `--mode stats-smoke` (50 synthetic finalizes; assert p50/p95/max behave; `last=N` narrowing;
   missing-field tolerance; `enabled=false` short-circuits).
   Key files: `runtime/cpp/lib/telemetry/session_timing.h` (NEW),
@@ -200,22 +240,38 @@ review.
   (NEW), `runtime/cpp/lib/ws/routes.{h,cpp}` (NEW), `runtime/cpp/density_main.cpp` (add
   `--mode ws-lib-smoke`).
 
-- [ ] **7. ws_server.cpp skeleton + --selftest-and-exit smoke matrix** (Opus review)
-  Per v4 §XII + §XV. **Discard the v1 ws_server.cpp** (from in-flight Part A `bdajesege`); start
-  from v4. New `runtime/cpp/ws_server.cpp` with: `main()` parsing CLI (`--port` REQUIRED;
-  `--admission-active-cap` REQUIRED-or-env; `--admission-backlog-cap`; `--steady-batch-dir`;
-  `--process-label`; `--selftest-and-exit`); construct `SharedRuntime` + `DensityAdmission` +
-  `StatsCollector` + (when env-enabled) `BatchedSteadyScheduler`; bind HTTP+WS listener via
-  `lib/ws/` routes. **Route stubs** returning Python-exact shapes per WS-A1 audit (e.g., `/health`
-  returns `{"status":"healthy"|"loading","model_loaded":bool}`; `/stats` returns
-  `StatsCollector::snapshot_json(?last)`; `/scheduler_telemetry` returns
-  scheduler's `telemetry_snapshot()` JSON; `WS /` accepts handshake + sends `{"type":"ready"}` +
-  closes with WS-1011 not-implemented). The `--selftest-and-exit` flag exercises the v4 §XV smoke
-  matrix (default env / `NEMOTRON_STATS_ENABLED=0` / invalid `NEMOTRON_STATS_WINDOW=abc` /
-  scheduler-ON with valid artifacts / scheduler-ON with missing MANIFEST / `--port 0` / invalid
-  cap / 1 /health + 1 /stats + 1 WS handshake / cap=1 + 2 connections / malformed first line /
-  oversize headers). Bar: `--selftest-and-exit` exits 0 for clean cases, non-zero with diagnostic
-  for failure cases.
+- [ ] **7. ws_server.cpp skeleton + --selftest-and-exit smoke matrix + HTTP admin handler pool +
+       /health Python enum + pid/process_label + grouped config table** (Opus review)
+  Per v4 §VII + §XI + §XII + §XIII + §XV + §XVI. **Discard the v1 ws_server.cpp** (Part A v1
+  superseded). New `runtime/cpp/ws_server.cpp` with:
+  - **CLI**: `--port` REQUIRED (NO compiled default per v4 §XIII MPS protection);
+    `--admission-active-cap` REQUIRED-or-env; `--admission-backlog-cap`; `--steady-batch-dir`;
+    `--process-label`; `--selftest-and-exit`.
+  - **HTTP admin handler pool** (v4 §XI; v2 fold per Codex Round 1): fixed size 2 worker threads,
+    bounded queue depth 16, serves /health + /stats + /scheduler_telemetry. Accept/router thread
+    dispatches; bounded queue prevents /stats poller DoS.
+  - **Construct**: `SharedRuntime` + `DensityAdmission` + `StatsCollector` + (when env-enabled)
+    `BatchedSteadyScheduler`; bind HTTP+WS listener via `lib/ws/` routes.
+  - **Route stubs** (Python-exact shapes per WS-A1 audit + v4 §VII):
+    - `GET /health` → `{"status":"healthy"|"loading"|"draining"|"degraded","model_loaded":<bool>,
+      "pid":<int>,"process_label":<string?>}` (v2 fold: unified enum per v4 §VII; pid/process_label
+      per v4 §XIII).
+    - `GET /stats[?last=N]` → `StatsCollector::snapshot_json(?last)` (includes admission
+      Python-shape per Step 5 + pid/process_label per v4 §XIII).
+    - `GET /scheduler_telemetry` → scheduler's `telemetry_snapshot()` JSON.
+    - `WS /` accepts handshake + sends `{"type":"ready"}` + closes WS-1011 not-implemented (Step 9
+      replaces with the real lifecycle).
+  - **v4 §XVI grouped operator config table**: emit a `--print-config` flag (or include in /health)
+    returning the grouped env+CLI table (runtime/admission/stats/WS/shutdown/VAD knobs).
+  - **`--selftest-and-exit` matrix per v4 §XV** (v2 fold per Codex Round 1 — explicit handshake-only
+    deferral): default env / `NEMOTRON_STATS_ENABLED=0` / invalid `NEMOTRON_STATS_WINDOW=abc` /
+    scheduler-ON with valid artifacts / scheduler-ON with missing MANIFEST / `--port 0` / invalid
+    cap / 1 /health + 1 /stats + **1 WS handshake-only** (lifecycle row "1 WS handshake + 1 PCM
+    frame + clean close" deferred to Step 9 which upgrades the matrix) / cap=1 + 2 connections
+    (gets HTTP 503) / malformed first line / oversize headers / **2 ws_server instances on
+    different ports both /health PASS** (v4 §XIII MPS readiness smoke per v2 fold). Bar:
+    `--selftest-and-exit` exits 0 for clean cases, non-zero with diagnostic for failure cases;
+    plus the global smoke set re-run.
   Key files: `runtime/cpp/ws_server.cpp` (REWRITE; discard v1), `runtime/cpp/CMakeLists.txt`
   (ws_server target).
 
@@ -228,10 +284,18 @@ review.
   shipped config) with the `NEMOTRON_VAD_WARMUP_MS` (default 200) cancellation hold, trigger
   `finalize_now(close_reason="vad_stop")`. Client-sent `vad_stop` is a HINT (logged but Silero is
   authoritative). Env: `NEMOTRON_VAD_MODE` (default `"server_authoritative"`; alt `"client_only"`
-  for debug). Bar: `--mode vad-smoke` runs N=4 synthetic streams of silence + speech and asserts
-  Silero triggers finalize at the right boundaries (per oracle); add `vad_load_failure` row to
-  the WS-A7 selftest matrix. Re-run b2-t1 4-row + density-sweep N=4 OFF; both PASS (VAD is
-  only-active-on-WS-server path; doesn't perturb density harness).
+  for debug). Bar (v2 fold per Codex Round 1 — Silero N=64 CPU probe is required, not optional):
+  - **(probe)** measure per-frame Silero eval cost on the target box; report p50/p95 µs.
+  - **(N=64 sim)** run an N=64-equivalent VAD loop with `torch::set_num_threads(2)` on synthetic
+    16kHz mono frames; report CPU% utilization + per-frame p95 latency; **FAIL** if VAD path
+    consumes enough CPU to threaten WS worker scheduling (e.g., > 50% of one core sustained).
+  - **(correctness)** `--mode vad-smoke` runs N=4 synthetic streams of silence + speech and
+    asserts Silero triggers finalize at the right boundaries (per oracle).
+  - **(matrix)** add `vad_load_failure` row to ws_server's `--selftest-and-exit` matrix
+    (Step 7's matrix).
+  - **(global)** re-run b2-t1 4-row + density-sweep N=4 OFF + stalegen-smoke + admission-smoke +
+    stats-smoke + N=200 session gate (per global rule; VAD is WS-server-only but the smoke set
+    must confirm no regression).
   Key files: `runtime/cpp/lib/session/runtime.{h,cpp}` (add VAD wiring),
   `runtime/cpp/lib/session/shared.cpp` (load Silero), `runtime/cpp/density_main.cpp` (add
   `--mode vad-smoke`), `runtime/cpp/ws_server.cpp` (selftest matrix update).
@@ -246,9 +310,21 @@ review.
   OR client control) → `StatsCollector::record(timing, emitted)` → emit final WireEvent with
   stale-gen check → close WS-1000. Generation bumps on reset/close/shed. **Stale-gen emit-point
   enumeration** (v4 §V table): drops_at_event_emit (interim suppressed); drops_at_finalize_output
-  (final suppressed); StatsCollector record sees `was_suppressed=true`. Bar: `--mode
-  ws-lifecycle-smoke` (or a small Python client driving 1 WS connection through the full lifecycle)
-  asserts the correct event sequence. The Python-compat oracle (WS-B6) is the deeper check.
+  (final suppressed); StatsCollector record sees `was_suppressed=true`.
+  Bar (v2 fold per both reviewers — concrete oracle, not "asserts the correct event sequence"):
+  `--mode ws-lifecycle-smoke` runs a Python client driving 1 WS connection through full lifecycle
+  + asserts: (handshake) ready frame EXACTLY `{"type":"ready"}`; (binary PCM) server accepts +
+  drives through SessionRuntime; (interim ordering) interim transcripts monotonically time-
+  ordered, `is_final=false`, `text` non-empty; (vad_start) log-only; (vad_stop/Silero)
+  finalize_now triggered + final transcript with `is_final=true`; (stale interim drop) reset bumps
+  generation mid-stream → interim dropped silently + `stale_gen.drops_at_event_emit++`; (stale
+  final drop) reset bumps between finalize_now() and emit → final dropped silently +
+  `stale_gen.drops_at_finalize_output++` + StatsCollector::record with `was_suppressed=true`;
+  (close code) clean WS-1000 on natural completion; (StatsCollector record) per-finalize record
+  called with timing + emitted flag matching emit decision. Plus the global smoke set + N=200
+  session gate (per global rule). The Python-compat oracle (Step 11) is the deeper check.
+  **Selftest matrix lifecycle row upgrade** (Step 7 had handshake-only): "1 WS handshake + 1
+  binary PCM frame + 1 control vad_stop + expect final + clean WS-1000 close" now PASSes.
   Key files: `runtime/cpp/ws_server.cpp` (lifecycle worker), `runtime/cpp/lib/session/runtime.cpp`
   (stale-gen check points).
 
@@ -271,7 +347,7 @@ review.
   `runtime/cpp/lib/ws/framing.cpp` (size check refined), `runtime/cpp/density_main.cpp` (add
   `--mode shutdown-smoke` + `--mode backpressure-smoke`).
 
-- [ ] **11. Test oracle: run_compat.py + canonicalized diff (Part B pre-merge gate)** (PAIRED REVIEW)
+- [ ] **11. Test oracle: run_compat.py + canonicalized diff + WS-overhead perf gate** (PAIRED REVIEW)
   Per v4 §XIV. Create `tests/server_compat/run_compat.py` (or extend `runtime/step6_server_oracle.py`).
   Audio fixture: `runtime/artifacts/session_audio_bundle.ts` rows `utt0..utt7` for smoke (smoke
   scope is bounded; full bundle in a follow-up). Wire: 16 kHz mono signed int16 LE PCM, 640-byte/
@@ -282,10 +358,25 @@ review.
   `type`, `text`, `is_final`, `finalize` flag, final `collector_text` (if applicable), event count;
   `finalize_timing` required keys present + numeric/non-null (values NOT compared — volatile);
   invalid-query (`?model=bogus`) → expected status/error; invalid `?last=` → expected error.
-  Volatile fields stripped: timestamps, finalize_timing values, sequence numbers, pid,
-  process_label, native scheduler/admission counters. JSON keys sorted before diff. Bar: 8 utts
-  PASS canonicalized diff against Python server. This step is the PART B PRE-MERGE GATE — Steps
-  WS-B1...WS-B5 are not committed-as-`[x]` until this oracle PASSes for them in combination.
+  Volatile fields stripped (v2 fold per both reviewers — exact list, NOT hand-wave):
+  timestamps, finalize_timing numeric values (key set + value types ARE compared after Step 1
+  pins them), sequence numbers, pid, process_label, native scheduler/admission counters. JSON
+  keys sorted before diff.
+
+  **Bar** (v2 fold per Codex Round 1 + Opus #3 + #6 — concrete + adds WS-overhead perf gate):
+  - **(correctness)** for each of 8 utts (utt0..utt7): event count equal Python's; per-event
+    `type` equal; per-event `text` equal; per-event `is_final` equal; per-event `finalize` flag
+    equal where applicable; final `collector_text` equal (if applicable); `finalize_timing` keys
+    present + value types numeric.
+  - **(invalid query)** `?model=bogus` returns expected error response per Step 1 audit.
+  - **(invalid `?last=`)** /stats `?last=bogus` returns expected error response per Step 1 audit.
+  - **(WS-overhead perf gate — v2 fold per Codex + Opus #6, NEW)** measure `ttfs_via_ws_server`
+    at N=8 (the low-load break-even from B3-FU low-load sweep). Assert `ws_overhead_p95 =
+    ttfs_via_ws_p95 − ttfs_via_density_scheduler_p95 ≤ max(2ms, 10% · ttfs_via_density_scheduler_p95)`
+    per v4 §IV (WS overhead must not silently regress the Phase-2 ttfs margin).
+  - **(integration role)** Step 11's failure is INTEGRATION REGRESSION (most likely Step 9's
+    lifecycle wiring); fix it via Step 9; do NOT un-mark Steps 8-10 (per the commit-semantics rule
+    at the top of Steps).
   Key files: `tests/server_compat/run_compat.py` (NEW), possibly
   `runtime/step6_server_oracle.py` (extend), `reviews/Step3b-WS-test-oracle.md` (oracle spec doc).
 
