@@ -637,4 +637,4 @@ system can deploy it from the docs without reading code. Every step must produce
 | 4 | Drain automation | done | 6055b45 | 456L + 3 fixtures; all exit codes verified |
 | 5 | Local smoke test | done | 100cee9 | 410+154+314L; runs 4 checks, exit 0 with 2P/2S |
 | 6 | Rewrite DEPLOYMENT.md for single-proc | done | c852a62 | 123→360L; 15 sections all present |
-| 7 | Hand-deploy runbook + deploy/README.md | done | (pending) | 1480 + 34L; 15 RUNBOOK sections + 17 troubleshoot entries |
+| 7 | Hand-deploy runbook + deploy/README.md | done | e4bd5fc | 1480 + 34L; 15 RUNBOOK sections + 17 troubleshoot entries |
