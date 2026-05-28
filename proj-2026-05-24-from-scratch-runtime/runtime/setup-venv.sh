@@ -1,28 +1,24 @@
 #!/bin/bash
-# Bootstrap script for the native runtime export + oracle venv.
+# Bootstrap script for the native runtime export + oracle venv (uv-native).
 #
-# Creates ./.venv at this directory, installs the full NeMo + torch+cu128 +
-# AOTI compile-time dependency tree from requirements.txt, and verifies
-# torch.cuda is functional + nemo loads.
+# Creates ./.venv at this directory and installs the deps declared in
+# pyproject.toml + locked in uv.lock. Verifies torch+cu128, NeMo, CUDA.
 #
 # Prerequisites:
 #   - uv (auto-installed if missing).
-#   - Python 3.12.10 — pinned in .python-version (uv can bootstrap it).
+#   - Python 3.12.x — pinned in .python-version (uv can bootstrap it).
 #   - CUDA 12.x on host (for torch+cu128 to load at runtime).
 #   - NVIDIA driver compatible with CUDA 12.8.
-#   - ~11 GiB disk for the venv (NeMo + torch + transformers + bitsandbytes +
+#   - ~10 GiB disk for the venv (NeMo + torch + transformers + bitsandbytes +
 #     pynini + janome + faiss + nvidia/* CUDA wheels).
 #
 # Usage (from this directory):
 #   bash setup-venv.sh
 #
-# Or to put the venv elsewhere:
-#   VENV_PATH=/somewhere/else bash setup-venv.sh
-#
 # After setup, scripts run as (from this runtime/ directory):
 #   HF_HUB_OFFLINE=1 ./.venv/bin/python export_steady_batched.py --out ./artifacts
 #
-# Or from the repo root:
+# Or from the repo root as:
 #   HF_HUB_OFFLINE=1 proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python \
 #       proj-2026-05-24-from-scratch-runtime/runtime/export_steady_batched.py --out ...
 #
@@ -32,25 +28,24 @@
 # WebSocket server (a much smaller dep set: pipecat-ai, nvidia-riva-client,
 # websockets, aiohttp, numpy, loguru) — kept separate intentionally to avoid
 # bloating that lockfile with NeMo+torch+CUDA wheels.
+#
+# Lockfile model: uv-native (pyproject.toml + uv.lock). To regenerate the
+# lockfile after editing pyproject.toml: `uv lock`. To install exactly what's
+# in the lockfile: `uv sync` (what this script does).
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VENV_PATH="${VENV_PATH:-.venv}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.12.10}"
-REQUIREMENTS="${REQUIREMENTS:-requirements.txt}"
-PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
-
-echo "=== Nemotron native-runtime export venv setup ==="
-echo "  venv path:   $VENV_PATH"
-echo "  python:      $PYTHON_VERSION"
-echo "  reqs file:   $REQUIREMENTS"
-echo "  pytorch idx: $PYTORCH_INDEX_URL"
+echo "=== Nemotron native-runtime export venv setup (uv-native) ==="
+echo "  project dir: $SCRIPT_DIR"
+echo "  venv path:   .venv"
+echo "  python:      $(cat .python-version 2>/dev/null || echo "(no .python-version)")"
+echo "  uv source:   pyproject.toml + uv.lock"
 echo
 
-# Ensure uv is available
+# Ensure uv is available.
 if ! command -v uv &> /dev/null; then
     echo "Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -59,30 +54,16 @@ fi
 echo "uv version: $(uv --version)"
 echo
 
-# Create the venv with the pinned Python version (uv bootstraps Python if not
-# already installed via pyenv or system).
-if [ ! -d "$VENV_PATH" ]; then
-    echo "Creating venv at $VENV_PATH (Python $PYTHON_VERSION)..."
-    uv venv "$VENV_PATH" --python "$PYTHON_VERSION"
-else
-    echo "Reusing existing venv at $VENV_PATH"
-fi
+# uv sync: creates .venv if missing, installs Python if needed, resolves +
+# downloads + extracts wheels per uv.lock. Idempotent. ~10 min on a cold
+# machine, ~10 sec on a warm uv cache.
+echo "Running 'uv sync' (this can take 5-20 min on a cold machine; near-instant on a warm uv cache)..."
+uv sync
 echo
 
-# Install from the requirements lockfile, with the cu128 index for torch wheels.
-# --index-strategy unsafe-best-match lets uv prefer the PyTorch index when
-# torch/torchvision are explicitly pinned to +cu128 versions.
-echo "Installing requirements (this can take 5-20 minutes; ~11 GiB of wheels)..."
-VIRTUAL_ENV="$(cd "$VENV_PATH" && pwd)" \
-    uv pip install \
-        --index-strategy unsafe-best-match \
-        --extra-index-url "$PYTORCH_INDEX_URL" \
-        -r "$REQUIREMENTS"
-echo
-
-# Verify
+# Verify install.
 echo "Verifying install..."
-"$VENV_PATH/bin/python" - <<'PY'
+.venv/bin/python - <<'PY'
 import sys
 assert sys.version_info[:2] == (3, 12), f"Expected Python 3.12, got {sys.version_info}"
 print(f"  ✓ Python {sys.version.split()[0]}")
@@ -94,13 +75,13 @@ print(f"  ✓ torch {torch.__version__}")
 import nemo
 print(f"  ✓ nemo {nemo.__version__}")
 
-# Soft CUDA check (no GPU needed for export/oracle work on a CPU dev host, but warn)
+# Soft CUDA check (no GPU needed for export-only work on a CPU dev host, but warn).
 if torch.cuda.is_available():
     print(f"  ✓ CUDA {torch.version.cuda} available, device: {torch.cuda.get_device_name(0)}")
 else:
     print(f"  ⚠ CUDA not available on this host (export-only ok; oracle work needs a GPU)")
 
-# Quick NeMo ASR import check (the most common failure mode if NeMo deps drift)
+# Quick NeMo ASR import check (the most common failure mode if NeMo deps drift).
 try:
     import nemo.collections.asr as nemo_asr  # noqa: F401
     print(f"  ✓ nemo.collections.asr imports cleanly")
