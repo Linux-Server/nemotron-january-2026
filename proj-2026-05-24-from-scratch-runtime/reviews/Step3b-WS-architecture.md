@@ -1,133 +1,198 @@
-# Step 3b — production WS server architecture (design v2)
+# Step 3b — production WS server architecture (design v3)
 
-**v2 2026-05-28** — supersedes v1 (committed `8b7e783`) after Round 1 paired adversarial review folded
-both `reviews/codex-Step3b-design-round1.md` (verdict: HOLD Part A) and `reviews/opus-Step3b-design-
-round1.md` (GO-with-changes). v1's direction was right; v2 fills in the substantive gaps: explicit
-library boundary, Python-compatible WS protocol (with values extracted from `server.py`), exact
-StatsCollector contract, threading model, close-code table, graceful shutdown, OpenSSL dependency fix,
-expanded startup smoke matrix.
+**v3 2026-05-28** — supersedes v2 (committed `0e58e46`) after Round 2 paired adversarial review:
+- `reviews/codex-Step3b-design-round2.md` (verdict: GO-with-substantive-revisions-to-v3, NOT converged).
+- `reviews/opus-Step3b-design-round2.md` (verdict: GO-with-1-substantive-fold + must-fixes → v3).
 
-Goal: build the production WebSocket + HTTP server for the native runtime. **(1) Core library**
-(`libnemotron_runtime.a`) carved from the current `#include "session_main.cpp"` monolith + **(2) a
-production WS+HTTP application** (`ws_server`) that links the library and adds protocol/lifecycle/
-observability/admission/stale-gen/stats.
+Both Round 2 reviews converged on: hard-abort Part A; move full server.py audit INTO Part A
+(resolve the v2 §XII vs §XIII contradiction); StatsCollector needs Python-exact-or-native-extended
+decision; library boundary needs concrete signatures; graceful shutdown ordering bug.
 
-## I. Current state — the starting point
+v3 makes the substantive decisions + folds the concrete Python contract values Codex extracted from
+`src/nemotron_speech/server.py`.
 
-`runtime/cpp/` today is monolithic-compile binaries (Phase-1 pattern). `density_main.cpp:1` literally
-does `#include "session_main.cpp"`. No `libnemotron_runtime.a` exists. The WS server task needs us to
-create that boundary first.
+## I. Architecture (unchanged direction)
 
-## II. Library boundary — EXPLICIT public/private table
+**(1) Core library `libnemotron_runtime.a`** carved from the current `#include "session_main.cpp"`
+monolith + **(2) production WS+HTTP server `ws_server`** that links the library and adds protocol/
+lifecycle/observability/admission/stale-gen/stats.
 
-**Public** (exposed via `lib/session/session.h`; production callers — WS server + density_main use
-these):
-- Types: `SessionState`, `SessionMode`, `FinalizeFinish`, `Tokenizer`, `WorkerContext`, `AOTIArtifacts`.
-- Wire DTO (NEW — see §IV): `WireEvent` { `std::string type; std::optional<std::string> text;
-  std::optional<bool> is_final; std::optional<std::map<...>> finalize_timing;` } — separate from
-  internal `EmittedEvent` so production output isn't coupled to internal harness shapes.
-- Session lifecycle entry points (NEW — production-shaped wrappers, not the harness-shaped
-  `run_steady_chunk_density(bundle, prefix, chunk_idx, ...)`):
-  - `void reset_session(SessionState&, ...)`.
-  - `void append_pcm_and_drain(SessionState&, const PCMFrame&, ...)` — drives preproc → encoder
-    (via scheduler when on, direct B=1 when off) → decode → interim emit.
-  - `void handle_vad_start(SessionState&, ...)` / `handle_vad_stop(SessionState&, ...)`.
-  - `WireEvent finalize_session(SessionState&, FinalizeFinish, SessionTiming& out)` — runs finalize,
-    returns the final wire event, populates timing for StatsCollector.
-- Constants: WS protocol message types (`"transcript"`, `"reset"`, `"end"`, `"vad_start"`,
-  `"vad_stop"`, `"ready"`), close codes (see §V).
-- `SessionTiming` (`lib/telemetry/session_timing.h`) — see §III.
-- `StatsCollector` (`lib/telemetry/stats_collector.h`) — see §III.
-- `DensityAdmission` + `BatchedSteadyScheduler` + `BatchedSteadyLoaderSet` (existing modules, already
-  clean).
+## II. Library boundary — concrete public signatures (v3 §1 fold)
 
-**Private** (implementation only; NOT exposed in headers):
-- `EmittedEvent` (internal struct that downstream `WireEvent` is constructed from).
+### Public types + signatures (`lib/session/session.h`, `lib/session/runtime.h`)
+```cpp
+// PCM audio frame; v3 §13 fold concrete type.
+struct PCMFrame {
+  const int16_t* samples;     // signed 16-bit LE
+  size_t count;               // number of samples (NOT bytes)
+  // Convention: sample_rate=16000, channels=1; rejected at handshake/first-frame otherwise.
+};
+
+// Wire-shaped event sent to the WS client; matches Python server.py format.
+struct WireEvent {
+  std::string type;                                              // "ready"|"transcript"|"error"
+  std::optional<std::string> text;                               // transcript text
+  std::optional<bool> is_final;                                  // transcript-only
+  std::optional<std::map<std::string, double>> finalize_timing;  // on final only; keys per V.4 audit
+  std::optional<std::string> message;                            // on "error" only
+};
+
+// Per-finalize timing record (passed to StatsCollector).
+struct SessionTiming {
+  // 5 SLO metrics:
+  std::optional<double> vad_stop_to_sent_ms;
+  std::optional<double> fork_flush_wall_ms;
+  std::optional<double> vad_stop_recv_to_process_ms;
+  std::optional<double> lock_wait_ms;
+  std::optional<double> vad_stop_to_finalize_start_ms;
+  // Lifecycle metadata:
+  uint64_t finalize_seq;
+  int active_sessions_at_emit;
+  bool was_suppressed = false;
+  double emit_unix_ts;
+  std::optional<std::string> close_reason;
+};
+
+// Production session runtime — owns SessionState + per-session VAD + lifecycle.
+class SessionRuntime {
+ public:
+  SessionRuntime(const SharedRuntime& shared, SessionConfig cfg);
+  ~SessionRuntime();
+
+  // Append PCM, drive preproc+encoder+decode+interim-emit.
+  // Returns emitted WireEvents (may be empty if no interim threshold hit this call).
+  std::vector<WireEvent> append_pcm_and_drain(const PCMFrame& frame);
+
+  // Server-side VAD hints (informational; vad_stop triggers finalize if applicable).
+  void handle_vad_start();
+  std::vector<WireEvent> handle_vad_stop();   // may include the final WireEvent
+
+  // Explicit lifecycle.
+  std::vector<WireEvent> reset(bool finalize);    // {"type":"reset","finalize":true|false}
+  std::vector<WireEvent> end(bool finalize);      // {"type":"end","finalize":true|false}
+  std::vector<WireEvent> finalize_now();          // server-side: VAD silence detected → finalize
+
+  // Generation token (Step 2a stale-gen primitive).
+  uint64_t generation() const noexcept;
+  void bump_generation() noexcept;     // on reset/close/shed
+
+  // Timing for /stats; populated by finalize_now() / handle_vad_stop().
+  std::optional<SessionTiming> last_timing() const;
+};
+
+// "Shared" runtime resources: AOTI loaders, scheduler (when ON), tokenizer, finalize buckets, etc.
+// Owned ONCE by the binary (ws_server / density_main); SessionRuntimes hold a const& to it.
+class SharedRuntime {
+ public:
+  SharedRuntime(SharedRuntimeConfig cfg);     // loads artifacts, optionally constructs scheduler
+  ~SharedRuntime();
+  // Accessors return const refs; no globals.
+  const Tokenizer& tokenizer() const;
+  // ... internal getters used by SessionRuntime, kept package-private behind friend if practical.
+};
+
+// HTTP/WS dispatch helpers (the production-shaped public surface — NOT the harness
+// run_steady_chunk_density which stays private).
+```
+
+### Private (NOT in headers)
+- `EmittedEvent` (internal struct; `WireEvent` is its public projection).
 - `emit_event`, append-only delta helpers, state-machine internals.
 - `AudioFrontend`, `FinalizeAudioInputs`, internal mel/buffer types.
 - `TimingBuckets`, `MarginStats`, `CacheOwnershipStats` (debug telemetry — internal).
-- `gold_events_from_bundle`, equality checks, bundle/gold fixture helpers (HARNESS — NOT production).
-- All `--mode <test>` mode dispatchers (density-sweep, b2-t1, stalegen-smoke, etc.) — these stay in
-  density_main.cpp.
-- The current harness-shaped `run_steady_chunk_density(bundle, prefix, chunk_index, ...)` stays
-  internal; production calls `append_pcm_and_drain` which wraps it without leaking harness params.
+- `gold_events_from_bundle`, equality checks, bundle/gold fixture helpers (HARNESS).
+- `run_steady_chunk_density`, `run_finalize_density` (harness-shaped; private; `SessionRuntime`
+  methods wrap them with production-shaped signatures).
+- All `--mode <test>` mode dispatchers (density-sweep, b2-t1, stalegen-smoke, admission-smoke) stay
+  in density_main.cpp.
 
-**Refactor blast-radius mitigation** (per Codex review must-fold #1 + Opus #1):
-1. Step 1: extract the public API to `session.h` + leave the implementation as a single
-   `lib/session/session.cpp` (a moved copy of `session_main.cpp`).
-2. Step 2: migrate density_main to `target_link_libraries(density_main nemotron_runtime ...)` instead
-   of `#include`. Smoke that b2-t1 + density-sweep N=4 + stalegen-smoke still PASS.
-3. Step 3 (optional, later): split `session.cpp` into sub-modules (`preproc.cpp`, `encoder.cpp`,
-   `decode.cpp`, `finalize.cpp`, `emit.cpp`) — bounded refactor; not in this sprint.
+### Refactor blast-radius mitigation (v3 §2 fold)
+Static-library global-state risk: `session_main.cpp` likely has static globals (tokenizer caches,
+finalize bucket loaders, AOTI handles). v3 §II adds an explicit step:
+- **Step 1.5**: audit `session_main.cpp` for static globals; transfer their ownership to
+  `SharedRuntime` (which is binary-owned, not library-owned). Library code has NO statics for
+  resource state; pure functions/methods over passed-in `SharedRuntime&`.
 
-## III. Telemetry: SessionTiming + StatsCollector — Python-compatible contract
-
-### SessionTiming struct (per-finalize record)
-```cpp
-struct SessionTiming {
-  // The 5 SLO metrics (matching Python /stats):
-  std::optional<double> vad_stop_to_sent_ms;            // server-side TTFS — primary SLO signal
-  std::optional<double> fork_flush_wall_ms;             // encoder-finalize wall
-  std::optional<double> vad_stop_recv_to_process_ms;    // intake-backlog / load-tail
-  std::optional<double> lock_wait_ms;                   // inference_lock contention
-  std::optional<double> vad_stop_to_finalize_start_ms;  // trigger latency
-
-  // Lifecycle metadata (populated by caller at emit time, BEFORE session removal):
-  uint64_t finalize_seq;            // monotonic per-server counter
-  int active_sessions_at_emit;       // SNAPSHOT at the emitting worker, NOT live count at /stats time
-  bool was_suppressed = false;       // true if stale-gen check fired — record is counted as suppressed not emitted
-  double emit_unix_ts;               // server clock at the moment of final-send attempt
-
-  // Optional context:
-  std::optional<std::string> close_reason;     // "normal", "shed", "vad_stop", "client_reset", etc.
-};
+### Layout
+```
+runtime/cpp/
+├── lib/
+│   ├── session/
+│   │   ├── session.h        public types: SessionState, WireEvent, PCMFrame, SessionTiming
+│   │   ├── runtime.h        SessionRuntime + SharedRuntime classes
+│   │   ├── session.cpp      session lifecycle implementation
+│   │   └── shared.cpp       SharedRuntime (artifact loading)
+│   ├── telemetry/
+│   │   ├── session_timing.h struct (also in session.h's umbrella)
+│   │   ├── stats_collector.h
+│   │   └── stats_collector.cpp
+│   ├── ws/
+│   │   ├── handshake.h      HTTP request parser + WS handshake
+│   │   ├── handshake.cpp    (uses picohttpparser — see §X)
+│   │   ├── framing.h        WS frame read/write
+│   │   └── framing.cpp
+│   └── runtime_io/
+│       ├── io.h             file_exists, directory_exists, sha256_file, JSON parser, picohttpparser
+│       └── io.cpp
+├── ws_server.cpp            production binary (links libnemotron_runtime)
+├── density_main.cpp         MIGRATED: links library, no #include
+├── ws_tail_microbench.{cpp,_client.cpp}   UNCHANGED (standalone)
+└── CMakeLists.txt           add_library + target_link migrations + ws_server target
 ```
 
-### StatsCollector class
-```cpp
-class StatsCollector {
- public:
-  // Construction reads NEMOTRON_STATS_ENABLED (default 1) + NEMOTRON_STATS_WINDOW (default 2048).
-  explicit StatsCollector(size_t window_size = 2048, bool enabled = true);
+## III. The server.py protocol audit (v3 §2 fold — MOVED INTO PART A as its first sub-task)
 
-  // record() is called per finalize, from the emitting worker AFTER the final send attempt and the
-  // stale-gen check, BEFORE session removal. Thread-safe; ~tens of nanoseconds (mutex + deque push).
-  // If !enabled_: no-op. If timing.was_suppressed: increment suppressed_in_window + lifetime_suppressed
-  // only, do NOT append to the metric window.
-  void record(SessionTiming timing);
+Per Round 2 (both reviews), the audit produces a concrete protocol-compatibility table that v3
+references for all WS protocol details. This must be Part A's FIRST sub-task; protocol stubs in
+ws_server.cpp depend on it. v3 includes the values Codex extracted; Part A audits the remaining
+gaps + produces `reviews/server-py-protocol-audit.md` as the durable artifact.
 
-  // snapshot() returns a structured object that JSON / Prometheus serializers wrap.
-  // Lock semantics: copy the deque + counters under mutex, sort/serialize OUTSIDE mutex (avoid stall
-  // of finalizers during high-rate /stats polling — Codex must-fold #6 + Opus #9).
-  struct Snapshot {
-    bool enabled;
-    size_t window_size;
-    size_t samples;                       // total appended in window
-    double since_unix;                    // oldest sample's emit_unix_ts
-    double until_unix;                    // newest sample's emit_unix_ts
-    size_t emitted_in_window;             // appended samples (success path)
-    size_t suppressed_in_window;          // stale-gen suppressed (not appended)
-    uint64_t lifetime_emitted;
-    uint64_t lifetime_suppressed;
-    std::map<std::string, MetricSummary> metrics;     // per-metric p50/p90/p95/p99/max/count
-    Distribution active_sessions_at_emit;             // histogram at finalize time
-  };
-  Snapshot snapshot(std::optional<size_t> last_n = std::nullopt) const;
-  std::string snapshot_json(std::optional<size_t> last_n = std::nullopt) const;     // wraps snapshot()
-  std::string snapshot_prometheus(std::optional<size_t> last_n = std::nullopt) const;  // future-cheap
+### Protocol values extracted in Round 2
 
-  bool enabled() const { return enabled_; }
-  size_t window_size() const { return window_size_; }
-};
+**HTTP routes**:
+- `GET /health` → `{"status":"healthy"|"loading","model_loaded":<bool>[,"admission":...]}`.
+- `GET /stats[?last=N]` → see §IV stats response shape (Python-exact).
 
-struct MetricSummary {
-  size_t count;        // n samples WHERE THIS METRIC IS POPULATED (per-metric, per Codex #4 + Opus #4)
-  double p50, p90, p95, p99, max;     // quantile formula: round(p * (n-1)) clamped to [0, n-1]
-                                       // matches Python exactly; "nearest-rank" was ambiguous.
-};
-```
+**WS endpoint**: `GET /` with `Upgrade: websocket` headers; client may include query parameters
+`?model=<name>&language=<code>` validated before admission.
 
-### /stats response shape (matching Python)
+**WS frames**:
+- Client → server: binary PCM int16 LE @ 16kHz mono OR text JSON control messages.
+- Control message types (text JSON, recognized):
+  - `{"type":"reset"[,"finalize":true|false]}` (finalize defaults true).
+  - `{"type":"end"[,"finalize":true|false]}` (finalize defaults true).
+  - `{"type":"vad_start"}` (informational).
+  - `{"type":"vad_stop"}` (informational; server-side VAD is authoritative — see §VI).
+- Unknown control message types: log + IGNORE (forward-compat).
+- Invalid JSON in a text frame: log + IGNORE (matches Python).
+- Max WS message size: **10 MiB** (`NEMOTRON_WS_MAX_MESSAGE_SIZE`).
+
+**Server → client** (all text JSON):
+- On WS handshake completion: `{"type":"ready"}` exactly.
+- Transcripts: `{"type":"transcript","text":"...","is_final":false|true[,"finalize_timing":{...}]}`.
+- Errors (recoverable, before close): `{"type":"error","message":"..."}`.
+
+### Open audit items (Part A's first sub-task)
+- Exact `finalize_timing` map keys (likely subset of the 5 SLO metrics — confirm via line-by-line
+  audit).
+- Per-client config negotiation (model/language validation rules — what happens on invalid?
+  HTTP 400 before upgrade vs WS error+close).
+- Connection-level rate limits beyond admission.
+- Any custom headers / CORS / cookies handling.
+
+## IV. StatsCollector — Python-exact /stats contract (v3 §3 fold)
+
+Decision per Codex Round 2 must-fold #3: **Python-exact** for the /stats output. Native scheduler
+telemetry (the F2-T `scheduler_telemetry` block) is a SEPARATE optional sub-object, NOT mixed into
+the Python /stats core shape.
+
+### Per-finalize record semantics (matches Python)
+- Main deque contains ONLY complete samples (records where `vad_stop_ms` and `final_sent_ms` are
+  both present). Incomplete suppressed/stale finalizes increment lifetime counters only.
+- Complete send-failed samples CAN enter the deque with `emitted=false`.
+- Per-metric `count` = samples in window where THIS metric is populated.
+
+### /stats response shape (Python-exact)
 ```json
 {
   "enabled": true,
@@ -140,241 +205,327 @@ struct MetricSummary {
   "lifetime_emitted": 12345,
   "lifetime_suppressed": 12,
   "metrics": {
-    "vad_stop_to_sent_ms": {"count": 1020, "p50": 13.5, "p90": 19.2, "p95": 21.1, "p99": 27.2, "max": 89.1},
-    "fork_flush_wall_ms": {"count": 1020, "p50": ..., ...},
+    "vad_stop_to_sent_ms": {"count": 1020, "p50": ..., "p90": ..., "p95": ..., "p99": ..., "max": ...},
+    "fork_flush_wall_ms": {...},
     "vad_stop_recv_to_process_ms": {...},
     "lock_wait_ms": {...},
     "vad_stop_to_finalize_start_ms": {...}
   },
   "active_sessions_at_emit": {"p50": 32, "p90": 47, "p95": 50, "p99": 56, "max": 64},
   "admission": {
-    "active_cap": 64, "backlog_cap": 12,
-    "offered": 12500, "admitted": 12480,
-    "active_count": 38, "backlog_count": 0,
-    "active_peak": 64,
-    "shed_close_count": 20, "shed_close_rate": 0.0016
+    "enabled": true,
+    "attempted": 12500,
+    "admitted": 12480,
+    "rejected": 20,
+    "max_backlog": 12,
+    "max_ready_age_ms": ...,
+    "signal": {...}
   }
 }
 ```
 
-### `?last=N` query
-Snapshot narrows the metric-quantile computation to the most recent N samples (after sort by
-`emit_unix_ts` if necessary). `samples`, `since_unix`, `until_unix`, `emitted_in_window`,
-`suppressed_in_window` reflect the narrowed slice. `lifetime_*` counters are global.
+The admission sub-object shape matches Python's `attempted/admitted/rejected/max_backlog/...` (NOT
+v2's v2-native names). The C++ DensityAdmission's native counters (`active_count`, `active_peak`,
+etc.) map into Python-compatible names at /stats serialization time. Native counters are also
+accessible via a separate `/admission` endpoint if operators want the detailed view (optional).
 
-## IV. WS protocol contract — Python-compatible (extracted from `server.py`)
+The F2-T `scheduler_telemetry` (timer p50/p95/p99 + dispatcher CPU + queue depth + fairness spread)
+is available via `GET /scheduler_telemetry` (separate endpoint, native-extended; never mixed into
+/stats).
 
-### Routing on the single listener (matching Python)
+### Quantile formula
+`round(p * (n - 1))` clamped to `[0, n-1]` (matches Python `_compute_quantile_summary`).
+
+### StatsCollector class signature (v3)
+```cpp
+class StatsCollector {
+ public:
+  explicit StatsCollector(size_t window_size = 2048, bool enabled = true);
+
+  // Called per finalize from emit path. If timing.was_suppressed=true OR
+  // !timing.vad_stop_to_sent_ms OR !timing.fork_flush_wall_ms (the two required-for-completion
+  // fields per Python): increment lifetime_suppressed only; do NOT append to deque.
+  // Else: append complete sample with emit flag (true if final was sent, false if send failed).
+  void record(SessionTiming timing, bool emitted);
+
+  struct Snapshot { /* same fields as JSON above */ };
+  Snapshot snapshot(std::optional<size_t> last_n = std::nullopt) const;
+  std::string snapshot_json(std::optional<size_t> last_n = std::nullopt) const;
+  std::string snapshot_prometheus(std::optional<size_t> last_n = std::nullopt) const;
+
+  bool enabled() const;
+  size_t window_size() const;
+};
 ```
-TCP port (default 8080) → accept → read HTTP request line + headers:
-  GET /health           HTTP/1.1                         → JSON 200, terminate connection
-  GET /stats[?last=N]   HTTP/1.1                         → JSON 200, terminate connection
-  GET /                 with `Upgrade: websocket` headers → WS handshake → frames
-  GET /                 without Upgrade                  → HTTP 400 (or a docs redirect)
-  anything else                                          → HTTP 404
+
+### Lock semantics
+`snapshot()` copies the deque + counters under mutex (microseconds), then sorts/serializes
+OUTSIDE the mutex. Avoids /stats-polling starvation of finalizer record() calls.
+
+## V. Stale-gen integration — emit-point enumeration (v3 §3 fold, was-suppressed clarified)
+
+| Emit path | Check location | On stale | `was_suppressed` set by | StatsCollector behavior |
+|---|---|---|---|---|
+| Steady interim WS text | Before `ws.send(json)` | Drop silently | Worker, before send call | N/A (interim doesn't record to StatsCollector) |
+| Finalize → final WS text | Before `ws.send(json)` | Drop silently | Worker, before send call | record(timing{was_suppressed=true}, emitted=false) → lifetime_suppressed++ only |
+| Finalize → StatsCollector::record | Worker, after emit decision | (does nothing — recording behavior depends on was_suppressed flag) | N/A | (handled in record() per §IV) |
+| /stats response | NO check (snapshots already-vetted records) | N/A | N/A | N/A |
+| Generation bumps | Connection's worker thread on reset/close/shed | atomic-increment | N/A | N/A |
+
+## VI. VAD trigger — server-side Silero (v3 §1 substantive decision)
+
+**Decision: match Python — server-side Silero VAD is authoritative; client-side `vad_stop` is a HINT.**
+
+Rationale: Python shipped server uses server-side Silero per the `silence0-warm200-shippable`
+memory. Production reliability requires not depending on client-side VAD (which varies in quality +
+latency). C++ port adds:
+- Per-session Silero state (a torch::jit model loaded once into `SharedRuntime`, per-session
+  processing state).
+- After each `PCMFrame` ingested, Silero processes the audio → returns a probability that
+  silence-of-`NEMOTRON_FINALIZE_SILENCE_MS` (default 0ms, with the 200ms VAD-cancellation hold per
+  memory) has occurred → triggers `finalize_now()`.
+- Client-sent `vad_stop` is a HINT (logged); server's own VAD remains authoritative.
+
+**Part B scope expansion**: includes Silero integration. Estimated +1-2 days vs the v2 scope. The
+cost is unavoidable for Python-compatible behavior.
+
+**Configuration**:
+- `NEMOTRON_FINALIZE_SILENCE_MS` (default 0; matches existing prod silence0_warm200 config).
+- `NEMOTRON_VAD_WARMUP_MS` (default 200; matches existing prod).
+- `NEMOTRON_VAD_MODE` enum (default `"server_authoritative"`; alternative `"client_only"` for
+  future deployments that want to skip Silero — saves the model load + per-frame eval).
+
+## VII. WS protocol routing (v3 §1 fold, includes malformed handling)
+
 ```
-The Step 3a raw RFC6455 handshake (in `ws_tail_microbench.cpp`) only checks `Sec-WebSocket-Key` and
-ignores method/path/Upgrade/Connection/version. **It cannot be copied as-is** — the production
-handler reads + parses the full HTTP request line + headers, dispatches by path + Upgrade-presence,
-validates `Sec-WebSocket-Version: 13` + `Connection: Upgrade` + `Upgrade: websocket`, computes
-`Sec-WebSocket-Accept` (SHA1(key + magic) base64).
+TCP accept → read HTTP request line + headers (with 2s timeout, max 8 KiB headers; HTTP 400 on
+                                              malformed, HTTP 431 on oversize headers):
+  GET /health           → JSON 200 {"status":"healthy"|"loading","model_loaded":<bool>}, close.
+  GET /stats[?last=N]   → JSON 200 (Python-exact shape per §IV), close.
+  GET /scheduler_telemetry → JSON 200 (native-extended F2-T block), close.
+  GET / + Upgrade: websocket + Sec-WebSocket-Version: 13 + Sec-WebSocket-Key + Connection: Upgrade
+                        → validate ?model + ?language query params → admission check →
+                          if ADMITTED: WS handshake (Sec-WebSocket-Accept) → frames.
+                          if SHED_*: HTTP 503 with body `{"error":"admission_backpressure"}` (HTTP-
+                          level, not WS-level — matches what Python does on pre-upgrade reject).
+  GET / without Upgrade → HTTP 400 (or static "WS endpoint" page if we want).
+  anything else         → HTTP 404.
+  bytes that don't parse as HTTP → close without WS handshake, log + count as malformed.
+```
 
-### WS frames
+The Step 3a raw RFC6455 handshake only checks `Sec-WebSocket-Key` and IGNORES method/path/Upgrade/
+Connection/version. Production handshake uses `lib/ws/handshake.{h,cpp}` (NEW) which uses
+**picohttpparser** (single-header, no deps, ~500 LOC, permissive license — v3 §15 fold) for the
+HTTP request line + header parsing.
 
-**Client → server**:
-- Binary frames: PCM 16-bit @ 16kHz (default; confirm via server.py audit if codec flexibility exists).
-  Frame size: implementation-bounded by max-message-size (10 MiB per Python).
-- Text frames: control messages as JSON `{"type": "<type>", ...}`. Recognized types:
-  - `{"type": "reset"[, "finalize": true/false]}` — reset session (default finalize=true).
-  - `{"type": "end"[, "finalize": true/false]}` — end session (default finalize=true).
-  - `{"type": "vad_start"}` — client-side VAD hint.
-  - `{"type": "vad_stop"}` — client-side VAD hint (triggers finalize if applicable).
-- Unknown control message types: log + IGNORE (match Python behavior; do NOT close on unknown type
-  to preserve forward-compat).
+## VIII. WS close codes (v3 unchanged — explicit table from v2)
 
-**Server → client** (all as text frames, JSON):
-- On connect: `{"type": "ready"}` immediately after WS handshake completes.
-- Transcripts: `{"type": "transcript", "text": "...", "is_final": false/true, ...}`. Optional fields
-  (depending on event type / client config — confirm during full audit): `finalize_timing` on final.
-- Errors: `{"type": "error", "message": "..."}` for recoverable errors (before close).
-
-### Close codes (explicit table)
 | Code | Meaning | When |
 |---|---|---|
-| 1000 | Normal | Client-initiated close received & processed; server-initiated post-final-sent. |
-| 1001 | Going away | SIGTERM graceful shutdown drain. |
+| 1000 | Normal | Client-initiated close received & processed; server-initiated after final sent. |
+| 1001 | Going away | SIGTERM drain timeout reached (sent ONLY at the final close, not at SIGTERM receipt — see §IX). |
 | 1003 | Unsupported data | Non-PCM binary frame OR text frame in an unsupported encoding. |
-| 1008 | Policy violation | Per-connection rate limit / WS subprotocol mismatch (if used). |
-| 1009 | Message too big | Frame > NEMOTRON_WS_MAX_MESSAGE_SIZE (default 10 MiB matching Python). |
-| 1011 | Internal server error | Any unhandled C++ exception in the WS handler; scheduler fault. |
-| 1013 | Try again later | Admission shed (SHED_ACTIVE_CAP or SHED_BACKLOG_CAP); message `"admission_backpressure"`. |
+| 1008 | Policy violation | WS subprotocol mismatch (if used). |
+| 1009 | Message too big | Frame header indicates payload > `NEMOTRON_WS_MAX_MESSAGE_SIZE` (10 MiB). **Frame-header check is read BEFORE the payload** to prevent OOM (v3 §20 fold). |
+| 1011 | Internal server error | Any unhandled C++ exception in WS handler; scheduler fault; pong timeout. |
+| 1013 | Try again later | Admission shed (post-handshake — pre-handshake gets HTTP 503 per §VII). |
 
-## V. Stale-gen integration — emit point enumeration
+## IX. Graceful shutdown — corrected ordering (v3 §5 fold)
 
-Per Step 2a's generation primitive, the WS lifecycle has these output paths that need a generation
-check before emitting:
-
-| Path | Check location | On stale | Telemetry |
-|---|---|---|---|
-| Steady chunk → interim emit (WS text frame) | Before `ws.send(transcript_interim_json)` | Drop silently | `stale_gen.drops_at_event_emit++` |
-| Finalize completes → final emit (WS text frame) | Before `ws.send(transcript_final_json)` | Drop silently | `stale_gen.drops_at_finalize_output++` |
-| Finalize completes → StatsCollector::record | After the emit check, only if emit went through | If suppressed: `record(timing{was_suppressed=true})` → counts in `suppressed_in_window` not `emitted_in_window` | StatsCollector lifetime counters |
-| /stats response | NO check — snapshots already-vetted records | n/a | n/a |
-| Bumps (close/reset/shed) | Owned by the connection's worker thread (no cross-thread bump) | Generation counter atomic-incremented before any sub-emit | — |
-
-## VI. Threading + concurrency model
-
-- **1 accept/router thread**: accepts TCP, reads HTTP request, dispatches.
-- **1 dispatcher thread**: BatchedSteadyScheduler (existing, from B2; only constructed if
-  `NEMOTRON_DENSITY_BATCH_STEADY=1`).
-- **N per-connection worker threads**: one per active WS connection. Owns SessionState, generation
-  counter, emit path. Handles its own VAD-stop → finalize → stats-record → close sequence.
-- **HTTP admin handler**: synchronous, on the accept thread or a small dedicated pool. `/health` and
-  `/stats` are read-only / cheap operations.
-- **StatsCollector mutex**: at the realized N=64 with B_max=4, finalize rate is ~33-34/s; mutex
-  acquires/sec ~50 including /stats polls. Negligible contention. Snapshot copies the deque under
-  mutex (microseconds), sorts/serializes OUTSIDE mutex (no finalizer stall).
-
-## VII. Graceful shutdown (SIGTERM)
+v2's sequence sent WS-1001 to existing connections BEFORE the drain — wrong (close frame starts the
+close handshake; client stops sending). v3 corrected:
 
 ```
-SIGTERM → set shutting_down_=true in DensityAdmission
-       → new accepts: try_admit returns SHED_SHUTDOWN → close WS-1013 immediately (or HTTP 503 for /health/stats)
-       → existing connections: send WS-1001 "going away" frame; await natural VAD-stop → finalize → close
-       → wait up to NEMOTRON_SHUTDOWN_DRAIN_SEC (default 30s) for in-flight sessions to complete
-       → after drain timeout: force-close remaining with WS-1011, log session IDs
-       → flush StatsCollector lifetime totals to stdout for post-deploy analysis
-       → exit 0 if clean drain, non-zero if forced
+1. SIGTERM received → DensityAdmission.shutting_down_=true.
+2. New TCP accepts on the WS path: HTTP 503 with body `{"error":"draining"}`, no WS handshake.
+3. /health returns {"status":"draining","model_loaded":true}.
+4. /stats continues to serve (operators want post-deploy visibility).
+5. EXISTING WS connections: NO close frame yet. Server-side VAD continues; finalize triggers
+   naturally; final event sent; THEN socket-level close with WS-1000 (normal).
+   OR: enqueue a server-side finalize_now() on each existing session to accelerate drain (cleaner
+   than waiting on client speech).
+6. Wait up to `NEMOTRON_SHUTDOWN_DRAIN_SEC` (default 30s) for in-flight sessions to drain.
+7. After drain timeout: for any remaining open sockets, send WS-1001 "going away" close frame +
+   force-close. Mark forced; log session IDs.
+8. Call `scheduler.close()` AFTER workers have all completed (else in-flight enqueues deadlock —
+   v3 §4 fold). scheduler's close() drains its queue + joins dispatcher thread.
+9. Flush StatsCollector lifetime totals to stdout.
+10. Exit 0 (clean) or non-zero (forced).
 ```
 
-Critical for cluster rolling deploys; LB / orchestrator orchestrates the rolling restart.
+## X. Build dependencies + container fix (unchanged from v2 §X)
 
-## VIII. Startup smoke matrix (expanded per the 1257d47 lesson)
+- **`libssl-dev`** must be added to `runtime/container/Dockerfile` (Option A, recommended). Container
+  rebuild invalidates the image SHA but does NOT invalidate AOTI artifacts (content-keyed via
+  MANIFEST.json SHAs).
+- **`picohttpparser.h`** added to `lib/runtime_io/` as a vendored single-header (MIT license, ~500
+  LOC). No new package dep.
 
-The `--selftest-and-exit` flag must exercise these constructor-path scenarios; any failure
-catches at build/test time, not in live deploy:
+## XI. Threading + concurrency model (v3 §10 fold)
+
+- **1 accept/router thread**: TCP accept, HTTP parse, route dispatch. Bounded work; reads with
+  2s header timeout to prevent slowloris.
+- **HTTP admin handler pool**: **fixed size 2**, bounded queue depth 16. Handles /health, /stats,
+  /scheduler_telemetry. Each handler runs synchronously; queue bounds prevent operator from DoS'ing
+  via /stats polling.
+- **1 dispatcher thread** (scheduler, ONLY constructed when `NEMOTRON_DENSITY_BATCH_STEADY=1`):
+  exists per B2's BatchedSteadyScheduler.
+- **N per-connection worker threads**: one per active WS connection. Owns SessionRuntime, generation
+  counter, emit path, Silero VAD eval. When scheduler ON: enqueues to dispatcher; when OFF: runs B=1
+  directly on its own CUDA stream.
+- **StatsCollector mutex**: at N=64 with B_max=4, finalize rate ~33-34/s; /stats poll rate
+  operator-configurable but typically 1-10/s. Total mutex contention ~50/s on a microsecond-scale
+  critical section = negligible. Snapshot copies under lock + serializes outside.
+
+## XII. Bounded build scope (v3 §1 fold — Part A v1 superseded; relaunch on v3)
+
+**Part A v1-driven work (in-flight `bdajesege` as of v3 commit) is SUPERSEDED.** When it lands:
+- AUDIT its diff against v3.
+- KEEP mechanical pieces that match v3: CMakeLists `add_library` target structure, basic file moves,
+  any small fixes (e.g., dropping unused `ep` param if it shows up).
+- DISCARD any v1-driven choices that conflict with v3: WS routing/handshake stubs, StatsCollector
+  shape if non-Python, /health Python shape, library public API surface, OpenSSL workarounds, etc.
+- Specifically: do NOT use Part A's WS skeleton/handshake/route stubs as the baseline; they predate
+  the v3 server.py audit. Re-do those parts on v3.
+
+**Part A revised (v3 — relaunch as a NEW Codex delegation after v3 commits)**:
+1. **server.py audit FIRST** (the first sub-task): line-by-line read of `src/nemotron_speech/server.py`;
+   produce `reviews/server-py-protocol-audit.md` with the protocol-compatibility table (route shapes,
+   header validation, query params, control message handling, close codes, error-frame format,
+   `finalize_timing` keys, `_compute_quantile_summary` formula confirmation, /health shape, admission
+   sub-object shape). v3 §III + §IV reference this artifact for all protocol details.
+2. **Dockerfile fix**: `libssl-dev` added to `runtime/container/Dockerfile`.
+3. **CMakeLists library carve**: `add_library(nemotron_runtime STATIC ...)` per §II.
+4. **lib/session/{session,runtime,shared}.{h,cpp}** carved per §II with the explicit public API
+   (PCMFrame, WireEvent, SessionTiming, SessionRuntime, SharedRuntime).
+5. **Static-global audit + transfer to SharedRuntime ownership** (the v3 §II step 1.5).
+6. **lib/telemetry/{session_timing.h, stats_collector.{h,cpp}}** per §IV (Python-exact contract).
+7. **lib/ws/{handshake,framing}.{h,cpp}** per §VII (picohttpparser-based).
+8. **lib/runtime_io/{io.h, io.cpp, picohttpparser.h}** (vendored single-header parser).
+9. **runtime/cpp/ws_server.cpp** skeleton: `main()` with `--port` + admission CLI flags +
+   `--selftest-and-exit` exercising the §XV smoke matrix. Route stubs return Python-exact shapes
+   (per the audit table); WS endpoint accepts handshake + sends `{"type":"ready"}` + closes 1011
+   not-implemented.
+10. **density_main migrated** to `target_link_libraries(density_main nemotron_runtime ...)`. Smoke
+    b2-t1 + density-sweep N=4 OFF + stalegen-smoke + admission-smoke all PASS.
+
+**Part B (separate delegation, post-Part-A)**:
+- Server-side Silero VAD integration (per §VI).
+- Full WS lifecycle: accept → admit → SessionRuntime construct → recv-loop → server-VAD →
+  interim emit (stale-gen-checked) → finalize → final emit (stale-gen-checked) → StatsCollector
+  record → close.
+- /stats / /scheduler_telemetry / /admission routes wired live.
+- Graceful shutdown per §IX.
+- Backpressure: WS frame-size header-first check (1009), per-connection send timeout (1011),
+  ping/pong keep-alive (configurable; defaults match RFC: 60s ping interval, 30s pong timeout),
+  /stats polling rate via the bounded queue.
+- The test oracle (§XIV).
+
+## XIII. /port default + MPS-readiness (v3 §21 fold)
+
+- `--port` has NO compiled default (server logs warning + exits non-zero if not set). Forces
+  operators to think about MPS port assignment.
+- Each process binds its own port; `--port-base + slot_id` is the conventional pattern.
+- StatsCollector window is per-process; aggregation is LB-layer's job.
+- /health, /stats responses include `pid` + optional `process_label` (`--process-label <s>` CLI) so
+  operators distinguish MPS slots.
+
+## XIV. Test oracle (v3 §8 fold — concrete + canonicalized)
+
+`tests/server_compat/run_compat.py` (NEW; reuses `runtime/step6_server_oracle.py` infrastructure):
+- **Audio fixture**: `runtime/artifacts/session_audio_bundle.ts` rows `utt0..utt7` (smoke; expand to
+  full bundle in Part B+).
+- **Wire**: 16 kHz mono signed int16 LE PCM, 640-byte/20ms chunks, `vad_start` before audio,
+  `vad_stop` after audio, `NEMOTRON_CONTINUOUS=1`, `NEMOTRON_FINALIZE_SILENCE_MS=0`.
+- **Setup**: Python server on port 8080, C++ server on port 8081, both with batching ON, same
+  artifacts.
+- **Assertions (canonicalized, NOT byte-for-byte)**:
+  - Ready frame exact: `{"type":"ready"}`.
+  - Transcript sequence: matches Python's `type`, `text`, `is_final`, `finalize` flag, final
+    `collector_text`, and event count.
+  - `finalize_timing`: required keys present + numeric/non-null; exact values NOT compared
+    (volatile).
+  - Invalid-query (`?model=bogus`) → expected status/error frame.
+  - Invalid `?last=` query → expected /stats error response.
+- **Volatile fields stripped** before diff: timestamps, finalize_timing values, sequence numbers.
+- **JSON field order canonicalized** (sort keys before diff) — Python `json.dumps` order isn't
+  guaranteed.
+
+## XV. Startup smoke matrix (v3 §19 fold — includes scheduler-ON case)
+
+`ws_server --selftest-and-exit` exercises these constructor-path scenarios:
 
 | Scenario | Expected |
 |---|---|
 | Default env, valid artifacts | clean startup, /health 200, exit 0 |
 | `NEMOTRON_STATS_ENABLED=0` | startup OK, /stats returns `{"enabled":false}`, exit 0 |
-| `NEMOTRON_STATS_WINDOW=abc` (invalid int) | startup error logged, non-zero exit (don't silently fall through) |
+| `NEMOTRON_STATS_WINDOW=abc` (invalid int) | startup error logged, non-zero exit |
 | `NEMOTRON_DENSITY_BATCH_STEADY=1` + missing `steady_b_artifacts/MANIFEST.json` | startup error logged, non-zero exit |
+| **`NEMOTRON_DENSITY_BATCH_STEADY=1` + valid artifacts** | clean startup, scheduler constructed, /scheduler_telemetry serves, exit 0 |
 | `--port 0` (auto-bind) | clean startup, /health 200 on bound port, exit 0 |
-| `--admission-active-cap 0` (degenerate) | startup error (cap must be positive), non-zero exit |
-| Bound port + receive 1 /health request + 1 /stats request + 1 WS handshake (no audio) + clean close | all return correct JSON / 101 Switching Protocols, exit 0 |
-| One admission-shed scenario (cap=1, attempt 2 connections) | second connection gets WS-1013 with `"admission_backpressure"` message |
+| `--admission-active-cap 0` | startup error (cap must be positive), non-zero exit |
+| Bound port + 1 /health + 1 /stats + 1 WS handshake + 1 PCM frame + clean close | all return correct shapes, exit 0 |
+| Cap=1, attempt 2 connections | second connection gets HTTP 503 with body `{"error":"admission_backpressure"}` (pre-upgrade reject per §VII) |
+| Malformed first HTTP request line | HTTP 400 + connection closed, server continues |
+| Oversize headers (>8 KiB) | HTTP 431, connection closed, server continues |
 
-## IX. Environment + CLI contract
+## XVI. Environment + CLI contract (v3 §9 fold — consistent naming)
 
 Env vars (production override default at deploy):
 - `NEMOTRON_DENSITY_BATCH_STEADY` (default 0; 1 enables scheduler).
 - `NEMOTRON_DENSITY_BATCH_MAX` (default 4 when scheduler ON).
-- `NEMOTRON_DENSITY_BATCH_WINDOW_MS` (default 0 per v5 / plan-v5 banner).
+- `NEMOTRON_DENSITY_BATCH_WINDOW_MS` (default 0 per plan v5).
 - `NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS` (default 0).
-- `NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP` (NO default — deploy-required, per v5-B).
+- `NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP` (NO default — deploy-required).
 - `NEMOTRON_DENSITY_ADMISSION_BACKLOG_CAP` (default 12).
 - `NEMOTRON_STATS_ENABLED` (default 1).
 - `NEMOTRON_STATS_WINDOW` (default 2048).
 - `NEMOTRON_WS_MAX_MESSAGE_SIZE` (default 10485760 = 10 MiB).
+- `NEMOTRON_WS_PING_INTERVAL_SEC` (default 60; matches RFC suggestion).
+- `NEMOTRON_WS_PONG_TIMEOUT_SEC` (default 30).
 - `NEMOTRON_SHUTDOWN_DRAIN_SEC` (default 30).
+- `NEMOTRON_FINALIZE_SILENCE_MS` (default 0 per silence0_warm200 shipped config).
+- `NEMOTRON_VAD_WARMUP_MS` (default 200 per silence0_warm200).
+- `NEMOTRON_VAD_MODE` (default `"server_authoritative"`; alt `"client_only"`).
 - `NEMOTRON_GOLD_EVENTS_TOLERANT` (default 1 per Fix #8; opt-in strict for debug).
 
-CLI args (mirror env where it makes sense; `--<name>` flags override env):
-- `--port <int>` (required or default 8080).
+CLI (override env):
+- `--port <int>` REQUIRED.
+- `--admission-active-cap <int>` REQUIRED (env can satisfy).
+- `--admission-backlog-cap <int>`.
 - `--steady-batch-dir <path>` (default ./steady_b_artifacts).
-- `--admission-active-cap <int>` (REQUIRED if env not set).
-- `--selftest-and-exit` (run the §VIII matrix, exit 0/non-zero).
+- `--process-label <str>`.
+- `--selftest-and-exit`.
 
-## X. Build dependencies + container fix
+## XVII. Risk register
 
-**OpenSSL is REQUIRED** for the SHA1 + base64 in `Sec-WebSocket-Accept`. The current
-`runtime/container/Dockerfile` does NOT install `libssl-dev` (only `Dockerfile.unified` does, which
-isn't the build env used by Phase-2 work). **This will fail Part A's build.**
+1. **Server-side Silero adds Part B scope** (~1-2 days). Acceptable; production needs it.
+2. **Part A v1-driven work conflicts with v3 in non-trivial ways**. Mitigation: §XII spells out
+   what to keep vs discard.
+3. **picohttpparser is a single-header dep** — tested in many production servers, but a new dep
+   to vendor. Low risk.
+4. **DensityAdmission native counters → Python /stats shape mapping** is a serialization-layer
+   choice; mistakes hurt operator dashboards. Test oracle covers this.
+5. **MPS-readiness deferred to deployment config**; the design doesn't preclude it.
+6. **Static-global audit (§II step 1.5)** may surface unexpected complexity in session_main.cpp's
+   resource ownership. Bounded; budget some time.
 
-**Two options to fix** (both work):
-- **Option A**: add `libssl-dev` to `runtime/container/Dockerfile`. Then `find_package(OpenSSL
-  REQUIRED)` works, `ws_server` links `OpenSSL::Crypto`.
-- **Option B**: replace OpenSSL SHA1 with a repo-local SHA1 implementation (we already have a
-  SHA256 impl in `steady_batch_primitive.h`; add SHA1 similarly). Avoids the dep.
+## XVIII. Net
 
-**Recommendation**: Option A (small Dockerfile change, no code dup). Document in the design + the
-CMakeLists.
+v3 makes the substantive decisions Round 2 demanded:
+- Library boundary concrete signatures (SessionRuntime + SharedRuntime + PCMFrame + WireEvent +
+  SessionTiming).
+- Server-side Silero VAD as authoritative (matches Python, +1-2 days Part B).
+- StatsCollector Python-exact /stats output; native scheduler_telemetry separate endpoint.
+- Admission sub-object Python-shape wrapper.
+- /health Python shape.
+- Test oracle canonicalized (not byte-for-byte).
+- Graceful shutdown ordering corrected.
+- Malformed-request handling concrete.
+- Part A v1 superseded; v3 §XII relaunch scope.
+- HTTP parser library: picohttpparser.
+- Frame-size header-first check.
+- Smoke matrix expanded (scheduler-ON case + malformed + oversize headers).
 
-## XI. MPS-readiness (production deploy considers it)
-
-The deployment target is L40S + multi-process MPS per the project memory. The WS server design must
-NOT preclude this:
-- **Per-process port binding**: take `--port` arg; never hard-code.
-- **Per-process StatsCollector window**: each MPS slot has its own 2048-sample window; cross-process
-  aggregation deferred to LB/Prometheus.
-- **Process identity**: include `pid` + optionally `process_label` in /health + /stats responses for
-  operators to distinguish MPS slots.
-- **No cross-process state assumptions**: each instance is independent.
-
-LB-level aggregation (across MPS slots) is deployment-owned, not server-owned.
-
-## XII. Bounded "get started" scope (this sprint)
-
-**Part A revised** (delegated separately; **MAY NEED REDO** if the in-flight `bdajesege` Part A
-made wrong choices from v1):
-- Dockerfile fix: `libssl-dev` added.
-- CMakeLists: `add_library(nemotron_runtime STATIC ...)`; density_main migrated to `target_link`.
-- `lib/session/session.{h,cpp}` carved per §II's explicit boundary table.
-- `lib/telemetry/session_timing.h` + `stats_collector.{h,cpp}` per §III's Python-compatible contract
-  (including the `Snapshot` struct + json/prom serializers).
-- `lib/ws/handshake.{h,cpp}` — proper HTTP request/header parser + WS handshake (replaces the
-  ws_tail_microbench's minimal version per §IV routing).
-- `runtime/cpp/ws_server.cpp` — minimal main with `--selftest-and-exit` exercising the §VIII matrix.
-  Route stubs (`{"type":"ready"}` on WS, `{"status":"ok"}` on /health, `null` on /stats placeholder
-  until Part B wires it).
-
-**Part B** (separate post-Part-A delegation, ~half day):
-- Full `server.py` audit (line-by-line) producing a final protocol-compatibility table; revise any
-  Part A choices that the audit invalidates.
-- WS lifecycle wiring: accept → admit → session create → recv-loop → emit interim → vad_stop →
-  finalize → emit final + StatsCollector::record → close.
-- /stats route wired to StatsCollector.
-- Stale-gen integration at emit points (per §V table).
-- Graceful shutdown (per §VII).
-- Backpressure: WS frame size cap (1009 close), per-connection send timeout (1011), ping/pong
-  keep-alive, /stats polling rate limit (configurable; default 10/sec).
-- Bounded integration test: spin C++ server + drive one full session with a Python client; transcript
-  byte-for-byte == existing Python server output for the same audio.
-- Startup smoke matrix per §VIII fully implemented.
-
-## XIII. Risk register
-
-1. **Part A in-flight may need redo** if its v1-driven choices conflict with v2. Mitigation: when Part
-   A lands, audit the diff against v2; redo if substantive.
-2. **server.py audit moved forward into Part A** (was Part B). The audit might still surface details
-   the v2 design missed (e.g., per-client config negotiation, language hints, exact `finalize_timing`
-   shape). Mitigation: build a TEST ORACLE — a script that runs the same audio through Python and
-   C++ servers and diffs the wire JSON byte-for-byte. Catches any miss.
-3. **Dispatcher single-thread saturation at higher N**: same as v5 plan ceiling (~80-100). WS server
-   doesn't change this; multi-dispatcher is Tier-4 future work.
-4. **MPS deployment** is Phase-3 work; this design says "don't preclude" but doesn't implement
-   cross-process aggregation.
-5. **Auth/authz** explicitly NOT in v2 scope. Production deployment assumes trusted-network behind
-   an LB / API gateway. If auth is later required, the WS server gets an `Authorization` header
-   check on the HTTP handshake.
-
-## XIV. What HOLDS from v1 (with v2 sharpening)
-
-- Architecture: library + WS application.
-- StatsCollector as a first-class library API (now with the exact Python contract).
-- Default-on /stats with `NEMOTRON_STATS_ENABLED=0` opt-out.
-- Startup-smoke discipline (now with the §VIII expanded matrix).
-- WS_1013 admission shed + stale-gen via generation tokens (Step 2a primitive).
-
-## XV. Net
-
-v2 is **build-ready for Part A** (with the Dockerfile fix + the explicit boundary table). The
-remaining ambiguities are bounded test-oracle items (byte-for-byte server.py compatibility) deferred
-to Part B with a test mechanism that catches mismatches.
-
-If the in-flight Part A (`bdajesege`) lands with v1 choices that conflict with v2 on any of: library
-boundary, WS routing, wire format, control messages, close codes — REDO those parts. Else, fold
-forward.
-
-Round 2 paired review on v2 is the next adversarial pass (per the user's 5-round directive).
+Round 3 on v3 is the next pass. If Round 3 returns "minor only" on both reviews → CONVERGED → fold
+final into v4 + relaunch Part A on v3 (or v4).
