@@ -611,6 +611,25 @@ Expected output for each backend:
 If `status` stays `loading`, the HTTP server may not have reached bind yet.
 Use the journal, `nvidia-smi`, and troubleshooting item 1.
 
+Once healthy, the server also exposes `GET /stats` (always-on rolling-latency
+endpoint added post-Phase-1):
+
+```bash
+for s in $(ls ec2-bench/.instance_box*.json | sort -V); do
+  pub_ip=$(jq -r .ip "$s")
+  ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@${pub_ip}" \
+    'curl -fsS http://127.0.0.1:8080/stats?last=100 | jq .metrics.vad_stop_to_sent_ms'
+done
+```
+
+Returns the latest 100 finalizes' server-side TTFS percentiles
+(`vad_stop_to_sent_ms` = vad_stop → final_sent, the server-side equivalent
+of the client TTFB). The full `/stats` response also includes
+`fork_flush_wall_ms`, `vad_stop_recv_to_process_ms` (intake-backlog signal),
+`lock_wait_ms`, `vad_stop_to_finalize_start_ms`, the concurrent-session
+distribution, and admission counters. Drop `?last=N` for the entire sliding
+window (default 2048 samples; set via `NEMOTRON_STATS_WINDOW`).
+
 ## (4) Configure LB Host
 
 First copy deploy artifacts to the LB host. Use the same exclusion list,
@@ -1385,10 +1404,15 @@ Expected output after teardown:
     Fix:
     ```bash
     curl -fsS http://127.0.0.1:8080/health | jq .admission
+    curl -fsS http://127.0.0.1:8080/stats?last=200 \
+      | jq '{ttfs: .metrics.vad_stop_to_sent_ms, intake: .metrics.vad_stop_recv_to_process_ms, active_sessions: .active_sessions_at_emit}'
     ```
-    Check attempted/admitted/rejected counters. Lower HAProxy `maxconn` for that
-    box, lower client concurrency, or tune `NEMOTRON_ADMISSION_MAX_BACKLOG` after
-    validating tail latency.
+    Check attempted/admitted/rejected counters and the recent latency
+    distribution. The intake metric climbing into seconds while
+    `active_sessions_at_emit.p95` is at/over `maxconn` is the canonical
+    overload pattern. Lower HAProxy `maxconn` for that box, lower client
+    concurrency, or tune `NEMOTRON_ADMISSION_MAX_BACKLOG` after validating
+    tail latency.
 
 12. Symptom: HAProxy reload drops connections.
     Cause: operator used `restart` or killed HAProxy instead of reload.

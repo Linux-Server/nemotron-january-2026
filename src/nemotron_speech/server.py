@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+from collections import deque
 from pathlib import Path
 import re
 import threading
@@ -87,6 +88,38 @@ _DEFAULT_FINALIZE_SILENCE_MS = 150
 _MAX_FINALIZE_SILENCE_MS = 10_000
 _ADMISSION_MAX_BACKLOG_DEFAULT = 1_000_000_000
 _ADMISSION_MAX_READY_AGE_MS_DEFAULT = 1_000_000_000_000.0
+# Default sliding-window size for the /stats endpoint. ~2k records covers
+# ~10 minutes at conc=10 / 1 utterance every 3s. Each sample is ~80 bytes so
+# even 16k samples is ~1.3MB — bounded memory.
+_STATS_WINDOW_DEFAULT = 2048
+
+
+def _compute_quantile_summary(values: list[float]) -> dict[str, Any]:
+    """Compute p50/p90/p95/p99/max/count for a list of floats.
+
+    Pure function (no self) so it's testable without instantiating ASRServer.
+    Empty list → all metrics set to None. Single value → all percentiles
+    equal that value. Linear time for the sort (Python timsort); fast enough
+    on a 2048-element window (<1ms in practice).
+    """
+    if not values:
+        return {"p50": None, "p90": None, "p95": None, "p99": None, "max": None, "count": 0}
+    sorted_values = sorted(values)
+    n = len(sorted_values)
+
+    def percentile(p: float) -> float:
+        # Nearest-rank (per HAProxy convention; same shape as run_full1000_conc12.py).
+        idx = max(0, min(n - 1, int(round(p * (n - 1)))))
+        return float(sorted_values[idx])
+
+    return {
+        "p50": percentile(0.50),
+        "p90": percentile(0.90),
+        "p95": percentile(0.95),
+        "p99": percentile(0.99),
+        "max": float(sorted_values[-1]),
+        "count": n,
+    }
 
 STREAMING = "STREAMING"
 PENDING_FINALIZE = "PENDING_FINALIZE"
@@ -921,6 +954,28 @@ class ASRServer:
                 "admission_backpressure_enabled "
                 f"max_backlog={self.admission_max_backlog} "
                 f"max_ready_age_ms={self.admission_max_ready_age_ms}"
+            )
+
+        # /stats sliding window of finalize-time signals — cheap, always-on
+        # rolling latency telemetry. All signals are derived from the regular
+        # timing dict that every finalize already populates, so the only cost
+        # is a deque.append per finalize (O(1)). NEMOTRON_STATS_ENABLED=0
+        # disables; NEMOTRON_STATS_WINDOW sets the sample cap.
+        self.stats_enabled = os.environ.get("NEMOTRON_STATS_ENABLED", "1") != "0"
+        self.stats_window_size = _env_int(
+            "NEMOTRON_STATS_WINDOW",
+            _STATS_WINDOW_DEFAULT,
+            "NEMOTRON_STATS_WINDOW",
+        )
+        if self.stats_window_size <= 0:
+            raise ValueError("NEMOTRON_STATS_WINDOW must be > 0")
+        self._stats_samples: deque = deque(maxlen=self.stats_window_size)
+        self._stats_emitted_count = 0
+        self._stats_suppressed_count = 0
+        if self.stats_enabled:
+            logger.info(
+                "stats_endpoint_enabled "
+                f"window={self.stats_window_size}"
             )
 
         # Active sessions
@@ -3149,6 +3204,10 @@ class ASRServer:
         suppressed_reason: Optional[str],
         should_flush: bool,
     ) -> None:
+        # Always-on stats sample (cheap, no profile required) — populates the
+        # /stats sliding window even when NEMOTRON_FINALIZE_PROFILE is off.
+        self._record_stats_sample(timing, emitted_to_client=emitted_to_client)
+
         if profile is None:
             return
 
@@ -5024,6 +5083,115 @@ class ASRServer:
             "max_ready_age_ms": self.admission_max_ready_age_ms,
             "signal": self._admission_backlog_signal(),
         }
+
+    def _record_stats_sample(
+        self,
+        timing: Optional[dict[str, Any]],
+        *,
+        emitted_to_client: bool,
+    ) -> None:
+        """Append one finalize sample to the /stats sliding window.
+
+        Reads ONLY from the always-on timing dict (no FINALIZE_PROFILE
+        cuda_synchronize, no extra GPU work). Each sample is a tuple of
+        floats sized for cheap storage. Concurrent appends from the
+        scheduler thread are safe (CPython deque.append is atomic).
+        """
+        if not self.stats_enabled or timing is None:
+            return
+        try:
+            vad_stop = timing.get("vad_stop")
+            final_sent = timing.get("final_sent")
+            if vad_stop is None or final_sent is None:
+                # Not a complete finalize (suppressed/stale) — count separately.
+                if emitted_to_client:
+                    self._stats_emitted_count += 1
+                else:
+                    self._stats_suppressed_count += 1
+                return
+            fork_start = timing.get("fork_flush_start")
+            fork_done = timing.get("fork_flush_done")
+            vad_stop_recv = timing.get("vad_stop_recv")
+            lock_wait = timing.get("inference_lock_acquire_wait_ms")
+
+            def _ms(end: Any, start: Any) -> Optional[float]:
+                if end is None or start is None:
+                    return None
+                return max(0.0, (float(end) - float(start)) * 1000.0)
+
+            sample = (
+                float(final_sent),                                       # ts_unix
+                _ms(final_sent, vad_stop),                               # vad_stop_to_sent_ms (server TTFS)
+                _ms(fork_done, fork_start),                              # fork_flush_wall_ms
+                _ms(vad_stop, vad_stop_recv),                            # vad_stop_recv_to_process_ms (intake lag)
+                float(lock_wait) if lock_wait is not None else None,     # lock_wait_ms
+                _ms(fork_start, vad_stop),                               # vad_stop_to_finalize_start_ms
+                len(self.sessions),                                      # active_sessions_at_emit
+                bool(emitted_to_client),                                 # emitted
+            )
+            self._stats_samples.append(sample)
+            if emitted_to_client:
+                self._stats_emitted_count += 1
+            else:
+                self._stats_suppressed_count += 1
+        except Exception:
+            # /stats is a best-effort telemetry path; never crash a finalize.
+            logger.exception("record_stats_sample failed (telemetry only — finalize continues)")
+
+    def _stats_snapshot(self, last_n: Optional[int] = None) -> dict[str, Any]:
+        """Build the /stats response from the current sliding window.
+
+        last_n optionally narrows the snapshot to the most recent N samples
+        (operator-friendly for short-horizon checks). Default = entire window.
+        """
+        samples = list(self._stats_samples)  # atomic snapshot of the deque
+        if last_n is not None and last_n > 0:
+            samples = samples[-last_n:]
+        timestamps = [s[0] for s in samples]
+        active_sess = [float(s[6]) for s in samples]
+        emitted_in_window = sum(1 for s in samples if s[7])
+        suppressed_in_window = len(samples) - emitted_in_window
+
+        def collect(idx: int) -> list[float]:
+            return [float(s[idx]) for s in samples if s[idx] is not None]
+
+        return {
+            "enabled": self.stats_enabled,
+            "window_size": self.stats_window_size,
+            "samples": len(samples),
+            "since_unix": timestamps[0] if timestamps else None,
+            "until_unix": timestamps[-1] if timestamps else None,
+            "emitted_in_window": emitted_in_window,
+            "suppressed_in_window": suppressed_in_window,
+            "lifetime_emitted": self._stats_emitted_count,
+            "lifetime_suppressed": self._stats_suppressed_count,
+            "metrics": {
+                "vad_stop_to_sent_ms": _compute_quantile_summary(collect(1)),
+                "fork_flush_wall_ms": _compute_quantile_summary(collect(2)),
+                "vad_stop_recv_to_process_ms": _compute_quantile_summary(collect(3)),
+                "lock_wait_ms": _compute_quantile_summary(collect(4)),
+                "vad_stop_to_finalize_start_ms": _compute_quantile_summary(collect(5)),
+            },
+            "active_sessions_at_emit": _compute_quantile_summary(active_sess),
+            "admission": self._admission_status_snapshot(),
+        }
+
+    async def stats_handler(self, request: web.Request) -> web.Response:
+        """Rolling latency stats endpoint.
+
+        Query params:
+          last=N   limit summary to the most recent N samples (default: full window)
+        """
+        last_n: Optional[int] = None
+        last_raw = request.query.get("last")
+        if last_raw:
+            try:
+                last_n = int(last_raw)
+                if last_n <= 0:
+                    raise ValueError("last must be > 0")
+            except ValueError:
+                return web.json_response({"error": f"invalid 'last': {last_raw!r}"}, status=400)
+        return web.json_response(self._stats_snapshot(last_n=last_n))
 
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle a WebSocket client connection."""
@@ -10073,6 +10241,7 @@ class ASRServer:
 
         app = web.Application()
         app.router.add_get("/health", self.health_handler)
+        app.router.add_get("/stats", self.stats_handler)
         app.router.add_get("/", self.websocket_handler)
 
         runner = web.AppRunner(app)

@@ -270,14 +270,30 @@ Operators can see these signals today:
 
 - `curl http://<box>:8080/health` shows `status` and, when admission is enabled,
   admission counters.
+- `curl http://<box>:8080/stats` returns a JSON rolling-latency snapshot:
+  per-signal p50/p90/p95/p99/max + count over the last ~2048 finalizes for
+  `vad_stop_to_sent_ms` (the server-side TTFS), `fork_flush_wall_ms`,
+  `vad_stop_recv_to_process_ms` (intake-backlog signal), `lock_wait_ms`,
+  `vad_stop_to_finalize_start_ms`, plus the concurrent-session distribution
+  at finalize time and the admission counters. `?last=N` narrows to the most
+  recent N samples. Always on by default (cost: one deque append per
+  finalize, no GPU sync); toggle with `NEMOTRON_STATS_ENABLED=0` or resize
+  with `NEMOTRON_STATS_WINDOW`. Use this for ongoing latency observation;
+  the heavier `NEMOTRON_FINALIZE_PROFILE=1` log path is reserved for
+  diagnostic deep-dives (it adds ~2× intake tax on L40S).
 - `echo 'show stat' | socat /run/haproxy/admin.sock stdio` shows HAProxy backend
   status and current sessions; `deploy/drain.sh status` parses the same data.
 - `journalctl -u nemotron-asr -f` streams backend server logs from systemd.
 - `nvidia-smi` shows GPU memory and process presence on a backend box.
 
-What is not instrumented in Phase 1: no Prometheus, no log shipping, no alerting,
-no metric retention, no GPU memory time series, and no automatic p95 alert.
-[sources: `src/nemotron_speech/server.py:10035-10043`,
+What is not instrumented in Phase 1: no Prometheus scrape format (the
+`/stats` JSON is operator-pollable but not Prometheus-native), no log
+shipping, no alerting, no metric retention beyond the in-memory sliding
+window, no GPU memory time series, and no automatic p95 alert. A small
+external poller (cron + `curl /stats` + append to a JSONL or push to
+CloudWatch/Datadog) bridges to a proper monitoring system without changing
+the server. [sources: `src/nemotron_speech/server.py:10090-10097`,
+`src/nemotron_speech/server.py` (stats handler at `add_get("/stats", ...)`),
 `deploy/drain.sh:21-29`, `deploy/drain.sh:77-81`,
 `deploy/nemotron-asr.service:13-14`]
 
