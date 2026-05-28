@@ -241,7 +241,7 @@ system can deploy it from the docs without reading code. Every step must produce
   reading the file can match `drain.sh` arguments to real boxes.
   Key files: `deploy/gen_haproxy.py`
 
-- [ ] **4. Drain automation (`deploy/drain.sh`)**
+- [x] **4. Drain automation (`deploy/drain.sh`)**
   Operator script wrapping the HAProxy runtime socket via `socat … stdio` (document `socat` as an
   LB-host prereq; the runbook installs it). Subcommands:
   - `drain <box>` → `set server asr_pool/<box> state drain`
@@ -633,8 +633,8 @@ system can deploy it from the docs without reading code. Every step must produce
 |---|------|--------|--------|-------|
 | 1 | Single-proc launcher | done | 3d32d93 | 176 lines, bash -n OK |
 | 2 | systemd unit template | done | b0b97cb | unit 64L, env 146L; %h not $HOME |
-| 3 | HAProxy config generator | done | (pending) | 575L; 9 directive assertions + 6 validation tests pass |
-| 4 | Drain automation | pending | — | |
+| 3 | HAProxy config generator | done | 6e57260 | 575L; 9 directive assertions + 6 validation tests pass |
+| 4 | Drain automation | done | (pending) | 456L + 3 fixtures; all exit codes verified |
 | 5 | Local smoke test | pending | — | |
 | 6 | Rewrite DEPLOYMENT.md for single-proc | pending | — | |
 | 7 | Hand-deploy runbook + deploy/README.md | pending | — | |
