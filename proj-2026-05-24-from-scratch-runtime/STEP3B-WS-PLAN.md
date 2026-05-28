@@ -1,5 +1,23 @@
 # Plan: Step 3b — Production WS+HTTP Server for the Native Runtime
 
+**v3 2026-05-28** — supersedes v2 (committed `b5e4bd0`) after Round 2 paired adversarial review:
+- `reviews/codex-Step3b-plan-review-round2.md` (verdict: GO-with-1-must-fold-to-v3 —
+  StatsCollector ownership/order).
+- `reviews/opus-Step3b-plan-review-round2.md` (verdict: MINOR_ONLY → CONVERGED).
+
+v3 folds Codex's single must-fold + 3 minor cleanups:
+1. **StatsCollector ownership/order pinned** (Codex Round 2): `SessionRuntime::finalize_now()`
+   produces `WireEvent` + `SessionTiming` (accessible via `last_timing()`) but does **NOT** call
+   `StatsCollector::record()`. The WS worker owns the call sequence: stale-gen check → final
+   send/drop/timeout decision → stamp `was_suppressed` + `emitted` flag → call `record(timing,
+   emitted)` exactly once. Step 5 builds/tests StatsCollector in isolation; Step 9 owns the
+   production recording integration.
+2. Bars-additive header exempts Step 1 (markdown-only, no build target affected).
+3. Step 6 / Step 9 explicitly: odd-length binary PCM payloads close WS-1003 BEFORE constructing
+   PCMFrame (per v4 §VIII).
+4. Step 11 ports allocated free / configurable (default 8080/8081; allow override to avoid local
+   test flake).
+
 **v2 2026-05-28** — supersedes v1 (committed `c266771`) after Round 1 paired adversarial review:
 - `reviews/codex-Step3b-plan-review-round1.md` (verdict: GO-with-1-2-must-folds-to-v2).
 - `reviews/opus-Step3b-plan-review-round1.md` (verdict: GO-with-3-must-folds-to-v2).
@@ -212,9 +230,14 @@ bars; Step 11 stays `[!]` until the integration passes.
   mapped from DensityAdmission's native counters** — v2 fold per Codex Round 1 #2). `snapshot_json`
   + future `snapshot_prometheus` serializers. Lock semantics: copy deque under mutex (~µs), sort/
   serialize outside mutex. Env: `NEMOTRON_STATS_ENABLED` (default 1), `NEMOTRON_STATS_WINDOW`
-  (default 2048). Quantile formula: `round(p * (n-1))` clamped to `[0, n-1]`. Wire
-  `StatsCollector::record(timing, emitted)` into `SessionRuntime::finalize_now()` (caller passes
-  timing + emit-decision flag).
+  (default 2048). Quantile formula: `round(p * (n-1))` clamped to `[0, n-1]`.
+  **Ownership (v3 fold per Codex Round 2 must-fold)**: `StatsCollector` is built/tested in
+  ISOLATION in this step. **`SessionRuntime::finalize_now()` does NOT call `record()`** — it
+  populates `SessionTiming` (accessible via `last_timing()`) and returns the `WireEvent`. The WS
+  worker (Step 9) owns the call sequence after the emit decision: stale-gen check → send/drop/
+  timeout decision → stamp `was_suppressed` + `emitted` flag → `StatsCollector::record(timing,
+  emitted)` exactly once. Step 5's bar tests StatsCollector directly via `--mode stats-smoke`; the
+  production-integration recording is Step 9's bar.
   Bar: `--mode stats-smoke` (50 synthetic finalizes; assert p50/p95/max behave; `last=N` narrowing;
   missing-field tolerance; `enabled=false` short-circuits).
   Key files: `runtime/cpp/lib/telemetry/session_timing.h` (NEW),
@@ -307,10 +330,15 @@ bars; Step 11 stays `[!]` until the integration passes.
   `SessionRuntime` → send `{"type":"ready"}` → recv-loop (binary PCM → `append_pcm_and_drain`
   with stale-gen check; emit interim `WireEvent`s as JSON text frames with stale-gen check) →
   control messages (`reset`/`end`/`vad_start`/`vad_stop`) → `finalize_now()` (triggered by Silero
-  OR client control) → `StatsCollector::record(timing, emitted)` → emit final WireEvent with
-  stale-gen check → close WS-1000. Generation bumps on reset/close/shed. **Stale-gen emit-point
-  enumeration** (v4 §V table): drops_at_event_emit (interim suppressed); drops_at_finalize_output
-  (final suppressed); StatsCollector record sees `was_suppressed=true`.
+  OR client control; returns `WireEvent` + populates `last_timing()`) → **stale-gen check** →
+  emit final WireEvent (or drop silently if stale) → **stamp `was_suppressed` + `emitted` flag** →
+  **`StatsCollector::record(timing, emitted)` exactly once** (v3 fold per Codex Round 2 must-fold —
+  WS worker owns the record() call AFTER the emit decision; SessionRuntime never calls record()) →
+  close WS-1000. Generation bumps on reset/close/shed. **Stale-gen emit-point enumeration**
+  (v4 §V table): drops_at_event_emit (interim suppressed); drops_at_finalize_output (final
+  suppressed); StatsCollector record sees `was_suppressed=true`.
+  **Binary PCM frame validation** (v3 fold per Codex Round 2 minor): odd-length binary payloads
+  close WS-1003 BEFORE constructing `PCMFrame` (per v4 §VIII).
   Bar (v2 fold per both reviewers — concrete oracle, not "asserts the correct event sequence"):
   `--mode ws-lifecycle-smoke` runs a Python client driving 1 WS connection through full lifecycle
   + asserts: (handshake) ready frame EXACTLY `{"type":"ready"}`; (binary PCM) server accepts +
