@@ -1,4 +1,36 @@
-# Step 3b — production WS server architecture (design v3)
+# Step 3b — production WS server architecture (design v4)
+
+**v4 2026-05-28** — supersedes v3 (committed `5e83a44`) after Round 3 paired adversarial review.
+Codex Round 3: GO-with-1-2-must-folds-to-v4 (NOT converged); Opus Round 3: MINOR_ONLY → effectively
+converged + 1 clarification.
+
+**v4 folds the 2 Codex must-folds (public-contract-affecting) + the 9 minor items** woven into the
+relevant sections:
+- (§II) `WireEvent` gets explicit `finalize` field; `finalize_timing` becomes flexible-shape
+  (JSON-object/map-of-variant) rather than `map<string,double>` until Part A's audit pins exact keys.
+- (§IV) StatsCollector completion predicate pinned: `!was_suppressed && vad_stop_to_sent_ms.has_value()`
+  is the deque-append gate; `fork_flush_wall_ms` and the other metrics are optional + per-metric
+  `count`.
+- (§VI) Silero execution budget pinned: CPU inference matching Python; warm at startup; bounded
+  thread pool; selftest covers VAD-load failure.
+- (§IX) Shutdown step 5 default pinned: enqueue server-side `finalize_now(close_reason="shutdown")`
+  on existing sessions; alt mode `natural_wait_only` deferred.
+- (§IX) Scheduler-close fence pinned: workers MUST stop enqueueing before being "joined"; close()
+  drains/broadcasts if outstanding work + timeout hit.
+- (§VII) /health enum unified: `loading|healthy|draining|degraded`.
+- (§VII) Admin endpoint exposure: trusted-network single-listener default; production multi-tenant
+  notes added.
+- (§II) PCM endianness: compile-time LE assertion + odd-length payload rejection.
+- (§VII) picohttpparser edge-case ownership: case-insensitive headers, comma-token Connection,
+  duplicate headers, partial-request returns, body-on-GET rejection.
+- (§XIV) Test oracle: port allocation explicit; volatile-strip list pinned; Part B pre-merge gate.
+- (§XVI) Config sprawl: add operator-facing grouped summary table.
+
+**v3 → v4 is a targeted edit; structure unchanged.**
+
+---
+
+# Step 3b — production WS server architecture (was v3, now v4)
 
 **v3 2026-05-28** — supersedes v2 (committed `0e58e46`) after Round 2 paired adversarial review:
 - `reviews/codex-Step3b-design-round2.md` (verdict: GO-with-substantive-revisions-to-v3, NOT converged).
@@ -29,13 +61,23 @@ struct PCMFrame {
 };
 
 // Wire-shaped event sent to the WS client; matches Python server.py format.
+// v4 fold (Codex Round 3 must-fold #1): add `finalize` field; finalize_timing flexible-shape
+// (JSON object) since exact keys/types depend on Part A's server.py audit.
 struct WireEvent {
   std::string type;                                              // "ready"|"transcript"|"error"
   std::optional<std::string> text;                               // transcript text
   std::optional<bool> is_final;                                  // transcript-only
-  std::optional<std::map<std::string, double>> finalize_timing;  // on final only; keys per V.4 audit
+  std::optional<bool> finalize;                                  // on transcript reset/end responses
+                                                                  // (matches Python's {"finalize":...} flag)
+  std::optional<nlohmann::json> finalize_timing;                 // on final only; flexible JSON object
+                                                                  // (likely subset of 5 SLO metrics + emit_unix_ts;
+                                                                  // exact keys confirmed by Part A audit, see §III)
   std::optional<std::string> message;                            // on "error" only
 };
+// Note: ws_server's WireEvent → JSON serializer uses field-by-field optional check, so omitting
+// any optional field produces the same wire byte stream Python emits (compatibility-by-omission).
+// nlohmann::json (or repo-local equivalent) chosen for `finalize_timing` to avoid premature
+// schema-freezing before the audit.
 
 // Per-finalize timing record (passed to StatsCollector).
 struct SessionTiming {
@@ -242,10 +284,18 @@ class StatsCollector {
  public:
   explicit StatsCollector(size_t window_size = 2048, bool enabled = true);
 
-  // Called per finalize from emit path. If timing.was_suppressed=true OR
-  // !timing.vad_stop_to_sent_ms OR !timing.fork_flush_wall_ms (the two required-for-completion
-  // fields per Python): increment lifetime_suppressed only; do NOT append to deque.
-  // Else: append complete sample with emit flag (true if final was sent, false if send failed).
+  // Called per finalize from emit path. Completion predicate (v4 fold per Codex Round 3 must-fold
+  // #2 — fork_flush_wall_ms is OPTIONAL + per-metric, NOT a completion gate):
+  //   COMPLETE = !timing.was_suppressed && timing.vad_stop_to_sent_ms.has_value()
+  // (vad_stop_to_sent_ms is the TTFS signal — only metric required for record to count as a
+  // "sample"; others contribute only via their per-metric `count`.)
+  //
+  // Behavior:
+  //   if !COMPLETE: increment lifetime_suppressed only; do NOT append to deque.
+  //   if COMPLETE: append sample (with `emitted` flag — true if final sent, false if send failed
+  //                or stale-gen suppressed at emit time). lifetime_emitted++ if emitted,
+  //                lifetime_suppressed++ if !emitted. Per-metric `count` in snapshot computed
+  //                from samples where THAT metric is populated.
   void record(SessionTiming timing, bool emitted);
 
   struct Snapshot { /* same fields as JSON above */ };
