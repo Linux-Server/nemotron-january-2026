@@ -1,0 +1,99 @@
+{
+  "started": "2026-05-28T16:16:44+00:00",
+  "lb_url": "ws://16.147.220.55:8080",
+  "backends": {
+    "box1": "35.89.23.14",
+    "box2": "54.185.112.230",
+    "box3": "54.212.183.230",
+    "box4": "44.251.189.250"
+  },
+  "poll_interval_s": 30.0,
+  "plan_kind": "FULL",
+  "plan": [
+    {
+      "name": "A_warmup_5",
+      "concurrency": 5,
+      "limit": 20,
+      "budget_s": 60,
+      "loop": true
+    },
+    {
+      "name": "A_warmup_10",
+      "concurrency": 10,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "A_warmup_20",
+      "concurrency": 20,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "B_sustained_50_a",
+      "concurrency": 50,
+      "limit": 50,
+      "budget_s": 3000,
+      "loop": true
+    },
+    {
+      "name": "C_burst_50",
+      "concurrency": 50,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "C_burst_5",
+      "concurrency": 5,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "C_burst_50_b",
+      "concurrency": 50,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "C_burst_5_b",
+      "concurrency": 5,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "C_burst_50_c",
+      "concurrency": 50,
+      "limit": 20,
+      "budget_s": 120,
+      "loop": true
+    },
+    {
+      "name": "D_sustained_50_b",
+      "concurrency": 50,
+      "limit": 50,
+      "budget_s": 2700,
+      "loop": true
+    },
+    {
+      "name": "E_full_stt",
+      "concurrency": 50,
+      "limit": 0,
+      "budget_s": 900,
+      "loop": false
+    },
+    {
+      "name": "F_cooldown",
+      "concurrency": 5,
+      "limit": 20,
+      "budget_s": 300,
+      "loop": true
+    }
+  ],
+  "bench_client": "proj-2026-05-19-eou-endpointing/run_full1000_conc12.py"
+}
