@@ -43,9 +43,12 @@ static void cuda_check(cudaError_t err, const char* expr, const char* file, int 
 
 #define CUDA_CHECK(expr) cuda_check((expr), #expr, __FILE__, __LINE__)
 
+#include "steady_batch_primitive.h"
+
 struct DensityArgs {
   std::string mode = "step0";
   std::string dir = "../artifacts";
+  std::string steady_batch_dir;
   std::vector<int> n_values{1, 2, 4};
   bool n_values_set = false;
   bool target_n_set = false;
@@ -74,6 +77,7 @@ struct DensityArgs {
   double density_chunk_period_ms = 160.0;
   double density_start_stagger_ms = 0.0;  // spread per-worker first-session starts over [0,this]; 0 = barrier (synchronized)
   bool density_warmup = true;
+  int b1_batch_size = 3;
 };
 
 static double elapsed_ms(Clock::time_point start, Clock::time_point end) {
@@ -150,6 +154,11 @@ static bool density_fill_trace_enabled() {
   return enabled;
 }
 
+static bool density_batch_steady_enabled() {
+  static const bool enabled = read_density_env_int("NEMOTRON_DENSITY_BATCH_STEADY", 0) != 0;
+  return enabled;
+}
+
 static int64_t density_clock_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
 }
@@ -176,6 +185,8 @@ static DensityArgs parse_density_args(int argc, char** argv) {
     };
     if (arg == "--mode") {
       args.mode = need_value("--mode");
+    } else if (arg == "--steady-batch-dir") {
+      args.steady_batch_dir = need_value("--steady-batch-dir");
     } else if (arg == "--n-values") {
       args.n_values = parse_int_list(need_value("--n-values"));
       args.n_values_set = true;
@@ -232,6 +243,8 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       args.density_start_stagger_ms = std::stod(need_value("--density-start-stagger-ms"));
     } else if (arg == "--no-density-warmup") {
       args.density_warmup = false;
+    } else if (arg == "--b1-batch-size") {
+      args.b1_batch_size = std::stoi(need_value("--b1-batch-size"));
     } else if (!dir_set) {
       args.dir = arg;
       dir_set = true;
@@ -239,8 +252,8 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  if (args.mode != "step0" && args.mode != "density-sweep") {
-    throw std::runtime_error("--mode must be step0 or density-sweep");
+  if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1") {
+    throw std::runtime_error("--mode must be step0, density-sweep, or b1-t1");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -276,6 +289,9 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   }
   if (args.density_chunk_period_ms <= 0.0) {
     throw std::runtime_error("--density-chunk-period-ms must be positive");
+  }
+  if (args.b1_batch_size <= 0 || args.b1_batch_size > 4) {
+    throw std::runtime_error("--b1-batch-size must be in [1,4]");
   }
   return args;
 }
@@ -1523,6 +1539,7 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
 }
 
 struct RowReplayResult {
+  std::vector<int64_t> steady_tokens;
   std::vector<int64_t> final_tokens;
   std::vector<EmittedEvent> events;
   bool ok = false;
@@ -1571,6 +1588,7 @@ static RowReplayResult replay_row_density(int utt,
       auto steady_gold = tensor_to_vec(utt_tensor(ctx.bundle, utt, "steady_tokens"));
       steady_ok = equal_tokens(session.hyp, steady_gold, "steady cumulative", label);
     }
+    result.steady_tokens = session.hyp;
     session.mode = SessionMode::PENDING_FINALIZE;
     auto finalize = run_finalize_density(session,
                                          ctx.bundle,
@@ -1677,6 +1695,568 @@ static std::vector<RowReplayResult> build_serial_reference(const DensityArgs& ar
               "(finals + steady-cumulative strictly matched gold for ALL utts, else this would have thrown) ===\n",
               (int)refs.size(), gold_event_divergences);
   return refs;
+}
+
+static bool steady_batch_dir_has_packages(const std::string& dir) {
+  for (int bucket : {1, 2, 4}) {
+    if (!file_exists((fs::path(dir) / ("enc_steady_aoti_b" + std::to_string(bucket) + ".pt2")).string())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static std::string resolve_steady_batch_dir(const DensityArgs& args) {
+  if (!args.steady_batch_dir.empty()) {
+    if (!steady_batch_dir_has_packages(args.steady_batch_dir)) {
+      throw std::runtime_error("--steady-batch-dir does not contain enc_steady_aoti_b{1,2,4}.pt2: " +
+                               args.steady_batch_dir);
+    }
+    return args.steady_batch_dir;
+  }
+
+  std::vector<std::string> candidates;
+  fs::path dir_path(args.dir);
+  if (dir_path.has_parent_path()) {
+    candidates.push_back((dir_path.parent_path() / "steady_b_artifacts").string());
+  }
+  candidates.push_back("steady_b_artifacts");
+  candidates.push_back("../steady_b_artifacts");
+  candidates.push_back("runtime/steady_b_artifacts");
+  for (const auto& candidate : candidates) {
+    if (steady_batch_dir_has_packages(candidate)) return candidate;
+  }
+  std::ostringstream oss;
+  oss << "could not resolve steady batch artifacts; pass --steady-batch-dir. tried:";
+  for (const auto& candidate : candidates) oss << " " << candidate;
+  throw std::runtime_error(oss.str());
+}
+
+struct B1RowSpec {
+  int utt = 0;
+  int chunk = 1;
+  std::string label;
+};
+
+struct B1PreparedRow {
+  B1RowSpec spec;
+  SessionState session;
+  std::vector<EmittedEvent> events;
+  torch::Tensor new_mel;
+  torch::Tensor chunk;
+  std::vector<at::Tensor> alone_out;
+};
+
+struct B1T1Stats {
+  int cases = 0;
+  int rows = 0;
+  int skipped_no_steady = 0;
+  int token_divergences = 0;
+  int event_divergences = 0;
+  int enc_len_mismatches = 0;
+  int cache_len_mismatches = 0;
+  double max_enc_out_diff = 0.0;
+  double max_cache_ch_diff = 0.0;
+  double max_cache_t_diff = 0.0;
+};
+
+static std::string tensor_sizes_string(const at::Tensor& tensor) {
+  std::ostringstream oss;
+  oss << "(";
+  for (int64_t i = 0; i < tensor.dim(); ++i) {
+    if (i > 0) oss << ",";
+    oss << tensor.size(i);
+  }
+  oss << ")";
+  return oss.str();
+}
+
+static double max_abs_tensor_diff(const at::Tensor& a, const at::Tensor& b) {
+  if (a.sizes() != b.sizes()) {
+    throw std::runtime_error("B1 diff shape mismatch got=" + tensor_sizes_string(a) +
+                             " ref=" + tensor_sizes_string(b));
+  }
+  auto diff = (a.to(torch::kFloat32) - b.to(torch::kFloat32)).abs();
+  return diff.numel() > 0 ? diff.max().item<double>() : 0.0;
+}
+
+static int first_token_diff_pos(const std::vector<int64_t>& got, const std::vector<int64_t>& ref) {
+  size_t n = std::min(got.size(), ref.size());
+  for (size_t i = 0; i < n; ++i) {
+    if (got[i] != ref[i]) return static_cast<int>(i);
+  }
+  return got.size() == ref.size() ? -1 : static_cast<int>(n);
+}
+
+static bool compare_token_vector_with_location(const std::vector<int64_t>& got,
+                                               const std::vector<int64_t>& ref,
+                                               const std::string& label,
+                                               int utt,
+                                               int chunk) {
+  if (got == ref) return true;
+  int pos = first_token_diff_pos(got, ref);
+  std::printf("B1_T1_TOKEN_DIVERGENCE label=%s utt=%d chunk=%d pos=%d got_len=%zu ref_len=%zu",
+              label.c_str(),
+              utt,
+              chunk,
+              pos,
+              got.size(),
+              ref.size());
+  if (pos >= 0 && pos < static_cast<int>(got.size())) {
+    std::printf(" got=%lld", static_cast<long long>(got[static_cast<size_t>(pos)]));
+  }
+  if (pos >= 0 && pos < static_cast<int>(ref.size())) {
+    std::printf(" ref=%lld", static_cast<long long>(ref[static_cast<size_t>(pos)]));
+  }
+  std::printf("\n");
+  return false;
+}
+
+static void update_b1_tensor_diffs(B1T1Stats& stats,
+                                   const std::vector<at::Tensor>& got,
+                                   const std::vector<at::Tensor>& ref,
+                                   const B1RowSpec& spec,
+                                   const std::string& case_name) {
+  if (got.size() < 5 || ref.size() < 5) throw std::runtime_error("B1 tensor diff needs 5 steady outputs");
+  stats.max_enc_out_diff = std::max(stats.max_enc_out_diff, max_abs_tensor_diff(got[0], ref[0]));
+  stats.max_cache_ch_diff = std::max(stats.max_cache_ch_diff, max_abs_tensor_diff(got[2], ref[2]));
+  stats.max_cache_t_diff = std::max(stats.max_cache_t_diff, max_abs_tensor_diff(got[3], ref[3]));
+  if (!at::equal(got[1], ref[1])) {
+    ++stats.enc_len_mismatches;
+    std::printf("B1_T1_ENC_LEN_MISMATCH case=%s label=%s utt=%d chunk=%d got=%lld ref=%lld\n",
+                case_name.c_str(),
+                spec.label.c_str(),
+                spec.utt,
+                spec.chunk,
+                static_cast<long long>(scalar_i64(got[1])),
+                static_cast<long long>(scalar_i64(ref[1])));
+  }
+  if (!at::equal(got[4], ref[4])) {
+    ++stats.cache_len_mismatches;
+    std::printf("B1_T1_CACHE_LEN_MISMATCH case=%s label=%s utt=%d chunk=%d got=%lld ref=%lld\n",
+                case_name.c_str(),
+                spec.label.c_str(),
+                spec.utt,
+                spec.chunk,
+                static_cast<long long>(scalar_i64(got[4])),
+                static_cast<long long>(scalar_i64(ref[4])));
+  }
+}
+
+static void apply_b1_target_chunk(SessionState& state,
+                                  const torch::Tensor& new_mel,
+                                  const torch::Tensor& chunk,
+                                  const std::vector<at::Tensor>& out,
+                                  torch::jit::Module& joint,
+                                  torch::jit::Module& predict,
+                                  const Tokenizer& tokenizer,
+                                  std::vector<EmittedEvent>& events,
+                                  const std::string& label) {
+  if (state.mode != SessionMode::STREAMING) throw std::runtime_error("B1 target chunk outside STREAMING");
+  (void)apply_encoder_outputs_density(state, out, joint, predict, chunk.size(2), DROP, label + ".encoder");
+  auto cum = state.ring.defined() ? torch::cat({state.ring, new_mel}, 2) : new_mel;
+  state.ring = cum.slice(2, std::max<int64_t>(0, cum.size(2) - PRE), cum.size(2)).contiguous();
+  state.emitted += new_mel.size(2);
+  std::string current_text = tokenizer.ids_to_text(state.hyp);
+  if (current_text != state.last_interim_text) {
+    emit_event(events,
+               EVENT_INTERIM,
+               state.hyp,
+               state.continuous_emitted_tokens,
+               current_text,
+               state.continuous_emitted_text);
+    state.last_interim_tokens = state.hyp;
+    state.last_interim_text = current_text;
+  }
+}
+
+static B1PreparedRow prepare_b1_row_until_target(const B1RowSpec& spec,
+                                                 WorkerContext& ctx,
+                                                 AOTIModelPackageLoader& enc_steady,
+                                                 torch::Device device,
+                                                 const Tokenizer& tokenizer) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  B1PreparedRow row;
+  row.spec = spec;
+  reset_session(row.session, ctx.bundle, device);
+  std::string prefix = "utt" + std::to_string(spec.utt);
+  int64_t num_steady = scalar_i64(utt_tensor(ctx.bundle, spec.utt, "num_steady"));
+  if (spec.chunk <= 0 || spec.chunk >= num_steady) {
+    throw std::runtime_error("B1 target must be a continuation steady chunk: label=" + spec.label +
+                             " num_steady=" + std::to_string(num_steady));
+  }
+  for (int chunk = 0; chunk < spec.chunk; ++chunk) {
+    run_steady_chunk_density(row.session,
+                             ctx.bundle,
+                             prefix,
+                             chunk,
+                             *ctx.enc_first,
+                             enc_steady,
+                             ctx.joint,
+                             ctx.predict,
+                             device,
+                             tokenizer,
+                             row.events,
+                             ctx.stream,
+                             true,
+                             false,
+                             nullptr,
+                             "b1.prepare." + spec.label + ".chunk" + std::to_string(chunk));
+  }
+  row.new_mel = prefix_chunk_tensor(ctx.bundle, prefix, spec.chunk, "new_mel").to(device).contiguous();
+  int64_t drop_extra = scalar_i64(prefix_chunk_tensor(ctx.bundle, prefix, spec.chunk, "drop_extra"));
+  int64_t chunk_T = scalar_i64(prefix_chunk_tensor(ctx.bundle, prefix, spec.chunk, "chunk_T"));
+  int64_t emitted_before = scalar_i64(prefix_chunk_tensor(ctx.bundle, prefix, spec.chunk, "emitted_before"));
+  if (drop_extra != DROP) throw std::runtime_error("B1 target chunk drop_extra is not steady DROP");
+  if (!row.session.ring.defined()) throw std::runtime_error("B1 target chunk missing pre-encode ring");
+  if (chunk_T != row.session.ring.size(2) + row.new_mel.size(2)) {
+    throw std::runtime_error("B1 target chunk_T mismatch");
+  }
+  if (emitted_before != row.session.emitted) throw std::runtime_error("B1 target emitted_before mismatch");
+  row.chunk = torch::cat({row.session.ring, row.new_mel}, 2).contiguous();
+  row.alone_out = run_steady_encoder_stream(enc_steady,
+                                            row.chunk,
+                                            row.session,
+                                            ctx.stream,
+                                            true,
+                                            false,
+                                            nullptr);
+  return row;
+}
+
+static RowReplayResult finish_b1_row_from_target(B1PreparedRow& prepared,
+                                                 const std::vector<at::Tensor>& target_out,
+                                                 WorkerContext& ctx,
+                                                 AOTIModelPackageLoader& enc_steady,
+                                                 FinalizeBucketLoaderPool& finalize_loaders,
+                                                 torch::Device device,
+                                                 const Tokenizer& tokenizer,
+                                                 const std::string& case_name) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  RowReplayResult result;
+  try {
+    std::string prefix = "utt" + std::to_string(prepared.spec.utt);
+    apply_b1_target_chunk(prepared.session,
+                          prepared.new_mel,
+                          prepared.chunk,
+                          target_out,
+                          ctx.joint,
+                          ctx.predict,
+                          tokenizer,
+                          prepared.events,
+                          "b1." + case_name + "." + prepared.spec.label + ".chunk" +
+                              std::to_string(prepared.spec.chunk));
+    int64_t num_steady = scalar_i64(utt_tensor(ctx.bundle, prepared.spec.utt, "num_steady"));
+    for (int chunk = prepared.spec.chunk + 1; chunk < num_steady; ++chunk) {
+      run_steady_chunk_density(prepared.session,
+                               ctx.bundle,
+                               prefix,
+                               chunk,
+                               *ctx.enc_first,
+                               enc_steady,
+                               ctx.joint,
+                               ctx.predict,
+                               device,
+                               tokenizer,
+                               prepared.events,
+                               ctx.stream,
+                               true,
+                               false,
+                               nullptr,
+                               "b1." + case_name + "." + prepared.spec.label + ".chunk" +
+                                   std::to_string(chunk));
+    }
+    result.steady_tokens = prepared.session.hyp;
+    prepared.session.mode = SessionMode::PENDING_FINALIZE;
+    auto finalize = run_finalize_density(prepared.session,
+                                         ctx.bundle,
+                                         prefix,
+                                         "b1." + case_name + "." + prepared.spec.label,
+                                         finalize_loaders,
+                                         ctx.joint,
+                                         ctx.predict,
+                                         device,
+                                         tokenizer,
+                                         prepared.events,
+                                         FinalizeFinish::SPECULATIVE_KEEP,
+                                         ctx.stream,
+                                         true,
+                                         false,
+                                         nullptr);
+    result.final_tokens = std::move(finalize.final_tokens);
+    result.events = std::move(prepared.events);
+    result.ok = finalize.token_ok && finalize.fork_ok;
+  } catch (const std::exception& e) {
+    result.error = e.what();
+    result.ok = false;
+  }
+  return result;
+}
+
+static bool run_b1_batched_case(const std::string& case_name,
+                                const std::vector<B1RowSpec>& specs,
+                                WorkerContext& ctx,
+                                AOTIModelPackageLoader& enc_steady,
+                                BatchedSteadyLoaderSet& batched_steady,
+                                FinalizeBucketLoaderPool& finalize_loaders,
+                                torch::Device device,
+                                const Tokenizer& tokenizer,
+                                const std::vector<RowReplayResult>& reference,
+                                B1T1Stats& stats) {
+  if (specs.empty()) throw std::runtime_error("B1 case has no specs: " + case_name);
+  ++stats.cases;
+  stats.rows += static_cast<int>(specs.size());
+
+  std::vector<B1PreparedRow> prepared;
+  prepared.reserve(specs.size());
+  std::vector<BatchedSteadyInput> ready;
+  ready.reserve(specs.size());
+  for (const auto& spec : specs) {
+    prepared.push_back(prepare_b1_row_until_target(spec, ctx, enc_steady, device, tokenizer));
+    const auto& row = prepared.back();
+    ready.push_back({
+        row.chunk,
+        row.session.clc,
+        row.session.clt,
+        row.session.clcl,
+        row.spec.label,
+    });
+  }
+
+  auto batched_out = batched_steady.run(ready, ctx.stream);
+  CUDA_CHECK(cudaStreamSynchronize(ctx.stream.stream()));
+  if (batched_out.size() != prepared.size()) throw std::runtime_error("B1 batched output row count mismatch");
+
+  bool ok = true;
+  for (size_t i = 0; i < prepared.size(); ++i) {
+    const auto& spec = prepared[i].spec;
+    update_b1_tensor_diffs(stats, batched_out[i].tensors, prepared[i].alone_out, spec, case_name);
+    auto replay = finish_b1_row_from_target(prepared[i],
+                                            batched_out[i].tensors,
+                                            ctx,
+                                            enc_steady,
+                                            finalize_loaders,
+                                            device,
+                                            tokenizer,
+                                            case_name);
+    bool row_ok = replay.ok;
+    if (!replay.error.empty()) {
+      std::printf("B1_T1_ROW_ERROR case=%s label=%s utt=%d chunk=%d error=%s\n",
+                  case_name.c_str(), spec.label.c_str(), spec.utt, spec.chunk, replay.error.c_str());
+      row_ok = false;
+    }
+    if (spec.utt >= static_cast<int>(reference.size())) {
+      throw std::runtime_error("B1 reference missing utt" + std::to_string(spec.utt));
+    }
+    bool steady_tokens_ok = compare_token_vector_with_location(replay.steady_tokens,
+                                                               reference[static_cast<size_t>(spec.utt)].steady_tokens,
+                                                               case_name + "." + spec.label + ".steady",
+                                                               spec.utt,
+                                                               spec.chunk);
+    bool final_tokens_ok = compare_token_vector_with_location(replay.final_tokens,
+                                                              reference[static_cast<size_t>(spec.utt)].final_tokens,
+                                                              case_name + "." + spec.label + ".final",
+                                                              spec.utt,
+                                                              spec.chunk);
+    if (!steady_tokens_ok || !final_tokens_ok) {
+      ++stats.token_divergences;
+      row_ok = false;
+    }
+    bool events_ok = strict_events_equal(replay.events,
+                                         reference[static_cast<size_t>(spec.utt)].events,
+                                         "b1." + case_name + "." + spec.label + ".events");
+    if (!events_ok) {
+      ++stats.event_divergences;
+      row_ok = false;
+      std::printf("B1_T1_EVENT_DIVERGENCE case=%s label=%s utt=%d chunk=%d\n",
+                  case_name.c_str(), spec.label.c_str(), spec.utt, spec.chunk);
+    }
+    ok = ok && row_ok;
+  }
+
+  std::printf("B1_T1_CASE case=%s rows=%zu bucket_count_loaded=%d pass=%s\n",
+              case_name.c_str(),
+              specs.size(),
+              batched_steady.loaded_bucket_count(),
+              ok ? "PASS" : "FAIL");
+  return ok;
+}
+
+static int pick_first_continuation_utt(torch::jit::Module& bundle, int rows) {
+  for (int utt = 0; utt < rows; ++utt) {
+    if (scalar_i64(utt_tensor(bundle, utt, "num_steady")) > 1) return utt;
+  }
+  throw std::runtime_error("B1 T1 found no utterance with a steady continuation chunk");
+}
+
+static std::vector<B1RowSpec> pick_identical_b1_specs(torch::jit::Module& bundle, int rows) {
+  int utt = pick_first_continuation_utt(bundle, rows);
+  std::vector<B1RowSpec> specs;
+  specs.reserve(4);
+  for (int i = 0; i < 4; ++i) {
+    specs.push_back({utt, 1, "identical.row" + std::to_string(i) + ".utt" + std::to_string(utt) + ".chunk1"});
+  }
+  return specs;
+}
+
+static std::vector<B1RowSpec> pick_mixed_b1_specs(torch::jit::Module& bundle, int rows) {
+  std::vector<B1RowSpec> specs;
+  std::set<int> used_utts;
+  for (int desired_chunk : {1, 2, 3}) {
+    bool found = false;
+    for (int utt = 0; utt < rows; ++utt) {
+      if (used_utts.find(utt) != used_utts.end()) continue;
+      int64_t num_steady = scalar_i64(utt_tensor(bundle, utt, "num_steady"));
+      if (num_steady > desired_chunk) {
+        used_utts.insert(utt);
+        specs.push_back({utt,
+                         desired_chunk,
+                         "mixed.utt" + std::to_string(utt) + ".chunk" + std::to_string(desired_chunk)});
+        found = true;
+        break;
+      }
+    }
+    if (!found) break;
+  }
+  if (specs.size() < 2) {
+    throw std::runtime_error("B1 T1 could not find at least two distinct mixed continuation rows");
+  }
+  return specs;
+}
+
+static std::vector<B1RowSpec> build_b1_coverage_specs(torch::jit::Module& bundle,
+                                                      int rows,
+                                                      B1T1Stats& stats) {
+  std::vector<B1RowSpec> specs;
+  specs.reserve(static_cast<size_t>(rows));
+  for (int utt = 0; utt < rows; ++utt) {
+    int64_t num_steady = scalar_i64(utt_tensor(bundle, utt, "num_steady"));
+    if (num_steady <= 1) {
+      ++stats.skipped_no_steady;
+      continue;
+    }
+    int chunk = 1 + (utt % static_cast<int>(num_steady - 1));
+    specs.push_back({utt, chunk, "coverage.utt" + std::to_string(utt) + ".chunk" + std::to_string(chunk)});
+  }
+  return specs;
+}
+
+static bool run_b1_t1_gate(const DensityArgs& args,
+                           torch::Device device,
+                           const std::string& stamp,
+                           const std::shared_ptr<torch::jit::Module>& shared_bundle,
+                           int rows_total) {
+  int rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;
+  std::string steady_batch_dir = resolve_steady_batch_dir(args);
+  std::printf("=== B1_T1 START dir=%s steady_batch_dir=%s rows=%d/%d flag_NEMOTRON_DENSITY_BATCH_STEADY=%s "
+              "b1_batch_size=%d pad_policy=duplicate_row0_discard_pads ===\n",
+              args.dir.c_str(),
+              steady_batch_dir.c_str(),
+              rows,
+              rows_total,
+              density_batch_steady_enabled() ? "ON" : "OFF",
+              args.b1_batch_size);
+
+  auto stream = stream_for_worker(true, 0);
+  auto ctx = make_worker_context(args.dir, device, stream, shared_bundle);
+  auto tokenizer = tokenizer_from_bundle(ctx->bundle);
+  verify_tokenizer_selftest(ctx->bundle, tokenizer);
+
+  TimingBuckets ref_timings;
+  auto reference = build_serial_reference(args, device, shared_bundle, rows, &ref_timings);
+  cleanup_cuda_cache();
+
+  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, 1, device.index());
+  BatchedSteadyLoaderSet batched_steady(steady_batch_dir,
+                                        args.dir + "/finalize_shared_weights.ts",
+                                        device,
+                                        1,
+                                        "b1_t1_shared_constants_buckets_1_2_4");
+  batched_steady.preload_all();
+  FinalizeBucketLoaderPool finalize_loaders(args.dir, device, 1, "b1_t1_finalize_one_runner");
+
+  B1T1Stats stats;
+  bool ok = true;
+  ok = run_b1_batched_case("identical_rows_B4",
+                           pick_identical_b1_specs(ctx->bundle, rows),
+                           *ctx,
+                           enc_steady,
+                           batched_steady,
+                           finalize_loaders,
+                           device,
+                           tokenizer,
+                           reference,
+                           stats) && ok;
+  ok = run_b1_batched_case("ragged_mixed_K3_padded_to_B4",
+                           pick_mixed_b1_specs(ctx->bundle, rows),
+                           *ctx,
+                           enc_steady,
+                           batched_steady,
+                           finalize_loaders,
+                           device,
+                           tokenizer,
+                           reference,
+                           stats) && ok;
+
+  auto coverage = build_b1_coverage_specs(ctx->bundle, rows, stats);
+  for (size_t pos = 0; pos < coverage.size(); pos += static_cast<size_t>(args.b1_batch_size)) {
+    size_t end = std::min(coverage.size(), pos + static_cast<size_t>(args.b1_batch_size));
+    std::vector<B1RowSpec> group(coverage.begin() + static_cast<long>(pos),
+                                 coverage.begin() + static_cast<long>(end));
+    ok = run_b1_batched_case("coverage_group_" + std::to_string(pos / static_cast<size_t>(args.b1_batch_size)),
+                             group,
+                             *ctx,
+                             enc_steady,
+                             batched_steady,
+                             finalize_loaders,
+                             device,
+                             tokenizer,
+                             reference,
+                             stats) && ok;
+  }
+
+  ok = ok &&
+       stats.token_divergences == 0 &&
+       stats.event_divergences == 0 &&
+       stats.enc_len_mismatches == 0 &&
+       stats.cache_len_mismatches == 0;
+  std::ostringstream json;
+  json << "{\"check\":\"b1_batched_steady_t1\""
+       << ",\"rows_reference\":" << rows
+       << ",\"rows_batched\":" << stats.rows
+       << ",\"cases\":" << stats.cases
+       << ",\"skipped_no_steady\":" << stats.skipped_no_steady
+       << ",\"steady_batch_dir\":" << json_quote(steady_batch_dir)
+       << ",\"flag_NEMOTRON_DENSITY_BATCH_STEADY\":" << json_bool(density_batch_steady_enabled())
+       << ",\"pad_policy\":\"duplicate_row0_discard_pads\""
+       << ",\"token_divergences\":" << stats.token_divergences
+       << ",\"event_divergences\":" << stats.event_divergences
+       << ",\"enc_len_mismatches\":" << stats.enc_len_mismatches
+       << ",\"cache_len_mismatches\":" << stats.cache_len_mismatches
+       << ",\"max_enc_out_diff\":" << stats.max_enc_out_diff
+       << ",\"max_cache_ch_diff\":" << stats.max_cache_ch_diff
+       << ",\"max_cache_t_diff\":" << stats.max_cache_t_diff
+       << ",\"pass\":" << json_bool(ok)
+       << "}";
+  emit_telemetry(args.dir, stamp, 1, "explicit", "b1_batched_steady_t1", json.str());
+  std::printf("=== B1_T1 RESULT %s: reference_rows=%d batched_rows=%d cases=%d skipped_no_steady=%d "
+              "max_enc_out=%.3e max_cache_ch=%.3e max_cache_t=%.3e "
+              "enc_len_mismatches=%d cache_len_mismatches=%d token_divergences=%d event_divergences=%d ===\n",
+              ok ? "PASS" : "FAIL",
+              rows,
+              stats.rows,
+              stats.cases,
+              stats.skipped_no_steady,
+              stats.max_enc_out_diff,
+              stats.max_cache_ch_diff,
+              stats.max_cache_t_diff,
+              stats.enc_len_mismatches,
+              stats.cache_len_mismatches,
+              stats.token_divergences,
+              stats.event_divergences);
+  return ok;
 }
 
 static std::string stream_mode_label(bool explicit_stream, bool mutex_serialize_run) {
@@ -4008,6 +4588,10 @@ int main(int argc, char** argv) {
     auto shared_bundle = load_shared_session_bundle(args.dir);
     int rows_total = static_cast<int>(scalar_i64(attr_tensor(*shared_bundle, "num_utts")));
     int requested_rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;
+    if (args.mode == "b1-t1") {
+      bool ok = run_b1_t1_gate(args, device, stamp, shared_bundle, rows_total);
+      return ok ? 0 : 1;
+    }
     if (args.mode == "density-sweep") {
       std::printf("=== DENSITY 1a START: dir=%s stamp=%s n_values=",
                   args.dir.c_str(), stamp.c_str());
