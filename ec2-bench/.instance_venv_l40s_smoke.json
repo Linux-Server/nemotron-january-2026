@@ -1,0 +1,15 @@
+{
+  "instance_id": "i-0696ea37b2507dc95",
+  "ip": "44.244.44.178",
+  "region": "us-west-2",
+  "key": "ec2-bench/nemotron-bench-key.pem",
+  "itype": "g6e.4xlarge",
+  "user": "ubuntu",
+  "name": "nemotron-bench-venv-l40s-smoke-20260528T225136Z",
+  "state": "terminated",
+  "launch_timestamp_utc": "2026-05-28T22:51:42+00:00",
+  "terminate_timestamp_utc": "2026-05-28T22:59:43Z",
+  "terminate_method": "aws-cli-fallback",
+  "ami_id": "ami-0ad0f6da3aabae4c6",
+  "ami_name": "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04) 20260526"
+}
