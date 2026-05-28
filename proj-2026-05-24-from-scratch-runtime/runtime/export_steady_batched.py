@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Iterable
@@ -35,6 +37,14 @@ MELS = 128
 EP_NAME = "enc_steady_t2a_b{b}.pt2"
 PKG_NAME = "enc_steady_aoti_b{b}.pt2"
 NAMES = ["enc_out", "enc_len", "cache_ch", "cache_t", "cache_ch_len"]
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def parse_batches(text: str) -> list[int]:
@@ -103,6 +113,72 @@ def compile_configs() -> dict[str, object]:
         "max_autotune_pointwise": False,
         "coordinate_descent_tuning": False,
     }
+
+
+def emit_manifest(
+    out_dir: Path,
+    batches: list[int],
+    shared_weights: Path,
+    production_b1: Path,
+) -> None:
+    if not shared_weights.exists():
+        raise FileNotFoundError(f"missing shared weights for manifest: {shared_weights}")
+    shared_sha = sha256_file(shared_weights)
+    buckets = []
+    for batch in batches:
+        pkg = out_dir / PKG_NAME.format(b=batch)
+        ep = out_dir / EP_NAME.format(b=batch)
+        if not pkg.exists():
+            raise FileNotFoundError(f"missing AOTI package for manifest B={batch}: {pkg}")
+        if not ep.exists() and batch == 1 and (out_dir / "enc_steady_t2a.pt2").exists():
+            ep = out_dir / "enc_steady_t2a.pt2"
+        bucket = {
+            "B": batch,
+            "package": pkg.name,
+            "package_sha256": sha256_file(pkg),
+            "ep": ep.name if ep.exists() else "",
+            "ep_sha256": sha256_file(ep) if ep.exists() else "",
+            "shared_weight": str(shared_weights),
+            "shared_weight_sha256": shared_sha,
+            "torch_version": torch.__version__,
+            "cuda_arch": ".".join(map(str, torch.cuda.get_device_capability()))
+            if torch.cuda.is_available()
+            else "NA",
+            "inductor_configs": compile_configs(),
+            "byte_sizes": {
+                "package": pkg.stat().st_size,
+                "ep": ep.stat().st_size if ep.exists() else 0,
+                "shared_weight": shared_weights.stat().st_size,
+            },
+        }
+        buckets.append(bucket)
+
+    prod_sha = sha256_file(production_b1) if production_b1.exists() else ""
+    new_b1 = out_dir / PKG_NAME.format(b=1)
+    manifest = {
+        "CONTRACT": {
+            "schema": 1,
+            "model_id": MODEL_ID,
+            "shift": SHIFT,
+            "pre_encode_cache": PRE,
+            "drop_extra": DROP,
+            "bucket_set": batches,
+        },
+        "buckets": buckets,
+        "a1_b1_parity": {
+            "production_package": str(production_b1),
+            "production_package_sha256": prod_sha,
+            "new_b1_package": str(new_b1),
+            "new_b1_package_sha256": sha256_file(new_b1) if new_b1.exists() else "",
+            "package_sha256_equal": bool(prod_sha and new_b1.exists() and prod_sha == sha256_file(new_b1)),
+            "tensor_parity": "not_run_by_exporter",
+        },
+    }
+    tmp = out_dir / "MANIFEST.json.tmp"
+    final = out_dir / "MANIFEST.json"
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(final)
+    print(f"wrote steady batch manifest: {final}", flush=True)
 
 
 def make_mel(batch: int, frames: int, device: torch.device, *, offset: float) -> torch.Tensor:
@@ -254,7 +330,10 @@ def main() -> None:
     parser.add_argument("--batches", default="1,2,4")
     parser.add_argument("--compile-only", action="store_true", help="compile saved enc_steady_t2a_bB.pt2 files; skip NeMo export")
     parser.add_argument("--export-only", action="store_true", help="save ExportedPrograms but do not AOTI-compile")
+    parser.add_argument("--manifest-only", action="store_true", help="only write MANIFEST.json for existing AOTI packages")
     parser.add_argument("--no-self-check", action="store_true", help="skip post-compile AOTI vs eager check")
+    parser.add_argument("--shared-weights", default="./artifacts/finalize_shared_weights.ts")
+    parser.add_argument("--production-b1", default="./artifacts/enc_steady_aoti.pt2")
     parser.add_argument("--atol", type=float, default=5e-2)
     parser.add_argument("--rtol", type=float, default=1e-3)
     args = parser.parse_args()
@@ -265,6 +344,10 @@ def main() -> None:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     batches = parse_batches(args.batches)
+
+    if args.manifest_only:
+        emit_manifest(out_dir, batches, Path(args.shared_weights), Path(args.production_b1))
+        return
 
     print(
         "torch",
@@ -310,6 +393,8 @@ def main() -> None:
 
     if not args.export_only and not noexec_seen["flagged"]:
         raise RuntimeError("noexecstack shim never fired on a shared-lib link")
+    if not args.export_only:
+        emit_manifest(out_dir, batches, Path(args.shared_weights), Path(args.production_b1))
     print("=== steady batched export/compile complete ===", flush=True)
 
 

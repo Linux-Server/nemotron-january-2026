@@ -56,7 +56,7 @@ set_target_properties(session_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${C
 add_custom_target(session DEPENDS session_main)
 
 # Phase 2 Step 0: native density/concurrency kill-gates over the validated session path.
-add_executable(density_main density_main.cpp)
+add_executable(density_main density_main.cpp batched_steady_scheduler.cpp)
 target_include_directories(density_main PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
 target_compile_definitions(density_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(density_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)

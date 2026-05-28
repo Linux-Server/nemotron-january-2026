@@ -44,6 +44,7 @@ static void cuda_check(cudaError_t err, const char* expr, const char* file, int 
 #define CUDA_CHECK(expr) cuda_check((expr), #expr, __FILE__, __LINE__)
 
 #include "steady_batch_primitive.h"
+#include "batched_steady_scheduler.h"
 
 struct DensityArgs {
   std::string mode = "step0";
@@ -78,6 +79,11 @@ struct DensityArgs {
   double density_start_stagger_ms = 0.0;  // spread per-worker first-session starts over [0,this]; 0 = barrier (synchronized)
   bool density_warmup = true;
   int b1_batch_size = 3;
+  std::string batch_steady = "env";
+  int batch_b_max = -1;
+  int batch_window_ms = -1;
+  int batch_lone_timeout_ms = -1;
+  int batch_queue_capacity = 0;
 };
 
 static double elapsed_ms(Clock::time_point start, Clock::time_point end) {
@@ -86,6 +92,10 @@ static double elapsed_ms(Clock::time_point start, Clock::time_point end) {
 
 static double elapsed_ms_since(Clock::time_point start) {
   return elapsed_ms(start, Clock::now());
+}
+
+static double elapsed_us(Clock::time_point start, Clock::time_point end) {
+  return std::chrono::duration<double, std::micro>(end - start).count();
 }
 
 static void log_density_phase_timing(int n,
@@ -157,6 +167,29 @@ static bool density_fill_trace_enabled() {
 static bool density_batch_steady_enabled() {
   static const bool enabled = read_density_env_int("NEMOTRON_DENSITY_BATCH_STEADY", 0) != 0;
   return enabled;
+}
+
+static bool density_batch_steady_enabled_effective(const DensityArgs& args) {
+  if (args.batch_steady == "on") return true;
+  if (args.batch_steady == "off") return false;
+  return read_density_env_int("NEMOTRON_DENSITY_BATCH_STEADY", 0) != 0;
+}
+
+static BatchedSteadySchedulerPolicy density_batch_policy_effective(const DensityArgs& args, int workers) {
+  BatchedSteadySchedulerPolicy policy;
+  policy.B_max = args.batch_b_max > 0
+                     ? args.batch_b_max
+                     : read_density_env_int("NEMOTRON_DENSITY_BATCH_MAX", 4);
+  policy.window_ms = args.batch_window_ms >= 0
+                         ? args.batch_window_ms
+                         : read_density_env_int("NEMOTRON_DENSITY_BATCH_WINDOW_MS", 10);
+  policy.lone_timeout_ms = args.batch_lone_timeout_ms >= 0
+                               ? args.batch_lone_timeout_ms
+                               : read_density_env_int("NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS", 0);
+  policy.queue_capacity = args.batch_queue_capacity > 0
+                              ? args.batch_queue_capacity
+                              : std::max(4 * std::max(workers, 1), policy.B_max);
+  return policy;
 }
 
 static int64_t density_clock_ns() {
@@ -245,6 +278,16 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       args.density_warmup = false;
     } else if (arg == "--b1-batch-size") {
       args.b1_batch_size = std::stoi(need_value("--b1-batch-size"));
+    } else if (arg == "--batch-steady") {
+      args.batch_steady = need_value("--batch-steady");
+    } else if (arg == "--batch-b-max") {
+      args.batch_b_max = std::stoi(need_value("--batch-b-max"));
+    } else if (arg == "--batch-window-ms") {
+      args.batch_window_ms = std::stoi(need_value("--batch-window-ms"));
+    } else if (arg == "--batch-lone-timeout-ms") {
+      args.batch_lone_timeout_ms = std::stoi(need_value("--batch-lone-timeout-ms"));
+    } else if (arg == "--batch-queue-capacity") {
+      args.batch_queue_capacity = std::stoi(need_value("--batch-queue-capacity"));
     } else if (!dir_set) {
       args.dir = arg;
       dir_set = true;
@@ -252,8 +295,8 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1") {
-    throw std::runtime_error("--mode must be step0, density-sweep, or b1-t1");
+  if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" && args.mode != "b2-t1") {
+    throw std::runtime_error("--mode must be step0, density-sweep, b1-t1, or b2-t1");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -293,6 +336,15 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   if (args.b1_batch_size <= 0 || args.b1_batch_size > 4) {
     throw std::runtime_error("--b1-batch-size must be in [1,4]");
   }
+  if (args.batch_steady != "env" && args.batch_steady != "on" && args.batch_steady != "off") {
+    throw std::runtime_error("--batch-steady must be on, off, or env");
+  }
+  if (args.batch_b_max != -1 && args.batch_b_max != 1 && args.batch_b_max != 2 && args.batch_b_max != 4) {
+    throw std::runtime_error("--batch-b-max must be one of 1,2,4");
+  }
+  if (args.batch_window_ms < -1) throw std::runtime_error("--batch-window-ms must be non-negative");
+  if (args.batch_lone_timeout_ms < -1) throw std::runtime_error("--batch-lone-timeout-ms must be non-negative");
+  if (args.batch_queue_capacity < 0) throw std::runtime_error("--batch-queue-capacity must be non-negative");
   return args;
 }
 
@@ -898,6 +950,76 @@ static std::vector<at::Tensor> run_steady_encoder_stream(AOTIModelPackageLoader&
   return out;
 }
 
+class B2ReusableBarrier {
+ public:
+  explicit B2ReusableBarrier(int expected) : expected_(expected) {
+    if (expected_ <= 0) throw std::runtime_error("B2 barrier expected count must be positive");
+  }
+
+  void arrive_and_wait() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    int generation = generation_;
+    ++arrived_;
+    if (arrived_ == expected_) {
+      arrived_ = 0;
+      ++generation_;
+      cv_.notify_all();
+      return;
+    }
+    cv_.wait(lock, [&] { return generation_ != generation; });
+  }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  int expected_ = 0;
+  int arrived_ = 0;
+  int generation_ = 0;
+};
+
+static double b2_max_abs_tensor_diff(const at::Tensor& a, const at::Tensor& b) {
+  if (a.sizes() != b.sizes()) {
+    std::ostringstream oss;
+    oss << "B2 tensor diff shape mismatch got=(";
+    for (int64_t i = 0; i < a.dim(); ++i) oss << (i ? "," : "") << a.size(i);
+    oss << ") ref=(";
+    for (int64_t i = 0; i < b.dim(); ++i) oss << (i ? "," : "") << b.size(i);
+    oss << ")";
+    throw std::runtime_error(oss.str());
+  }
+  auto diff = (a.to(torch::kFloat32) - b.to(torch::kFloat32)).abs();
+  return diff.numel() > 0 ? diff.max().item<double>() : 0.0;
+}
+
+struct B2TensorDiffStats {
+  std::mutex mutex;
+  int compares = 0;
+  int enc_len_mismatches = 0;
+  int cache_len_mismatches = 0;
+  double max_enc_out_diff = 0.0;
+  double max_cache_ch_diff = 0.0;
+  double max_cache_t_diff = 0.0;
+
+  void update(const std::vector<at::Tensor>& got,
+              const std::vector<at::Tensor>& ref,
+              const std::string& label) {
+    if (got.size() < 5 || ref.size() < 5) throw std::runtime_error("B2 tensor diff needs 5 steady outputs");
+    std::lock_guard<std::mutex> lock(mutex);
+    ++compares;
+    max_enc_out_diff = std::max(max_enc_out_diff, b2_max_abs_tensor_diff(got[0], ref[0]));
+    max_cache_ch_diff = std::max(max_cache_ch_diff, b2_max_abs_tensor_diff(got[2], ref[2]));
+    max_cache_t_diff = std::max(max_cache_t_diff, b2_max_abs_tensor_diff(got[3], ref[3]));
+    if (!at::equal(got[1], ref[1])) {
+      ++enc_len_mismatches;
+      std::printf("B2_T1_ENC_LEN_MISMATCH label=%s\n", label.c_str());
+    }
+    if (!at::equal(got[4], ref[4])) {
+      ++cache_len_mismatches;
+      std::printf("B2_T1_CACHE_LEN_MISMATCH label=%s\n", label.c_str());
+    }
+  }
+};
+
 static int64_t scalar_i64_timed(torch::Tensor tensor, double* item_wait_ms) {
   auto start = Clock::now();
   int64_t value = tensor.to(torch::kCPU).reshape({-1})[0].item<int64_t>();
@@ -1064,6 +1186,10 @@ static void run_steady_chunk_density(SessionState& state,
                                      bool mutex_serialize_run,
                                      TimingBuckets* timings,
                                      const std::string& label,
+                                     BatchedSteadyScheduler* scheduler,
+                                     B2ReusableBarrier* continuation_barrier,
+                                     B2TensorDiffStats* scheduler_diff_stats,
+                                     AOTIModelPackageLoader* scheduler_diff_loader,
                                      std::vector<int64_t>* fill_trace_ready_ns = nullptr) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(stream);
@@ -1108,12 +1234,60 @@ static void run_steady_chunk_density(SessionState& state,
     if (fill_trace_ready_ns != nullptr) {
       fill_trace_ready_ns->push_back(density_clock_ns());
     }
-    CUDA_CHECK(cudaEventCreate(&ev_start));
-    CUDA_CHECK(cudaEventCreate(&ev_stop));
-    CUDA_CHECK(cudaEventRecord(ev_start, stream.stream()));
-    out = run_steady_encoder_stream(enc_steady, chunk, state, stream, explicit_stream, mutex_serialize_run, &runner_wait);
-    CUDA_CHECK(cudaEventRecord(ev_stop, stream.stream()));
-    has_aoti_event = true;
+    if (scheduler != nullptr) {
+      BatchedSteadyInput scheduler_input{
+          chunk.contiguous(),
+          state.clc.contiguous(),
+          state.clt.contiguous(),
+          state.clcl.contiguous(),
+          label,
+      };
+      if (continuation_barrier != nullptr) {
+        continuation_barrier->arrive_and_wait();
+      }
+      cudaEvent_t producer_event{};
+      CUDA_CHECK(cudaEventCreateWithFlags(&producer_event, cudaEventDisableTiming));
+      CUDA_CHECK(cudaEventRecord(producer_event, stream.stream()));
+      auto enqueue_start = Clock::now();
+      std::future<DispatchResult> future;
+      try {
+        future = scheduler->enqueue({std::move(scheduler_input), stream, producer_event});
+      } catch (...) {
+        CUDA_CHECK(cudaEventDestroy(producer_event));
+        throw;
+      }
+      auto wait_status = future.wait_for(std::chrono::milliseconds(scheduler->future_timeout_ms()));
+      if (wait_status != std::future_status::ready) {
+        throw std::runtime_error("batch steady scheduler future timeout for " + label);
+      }
+      auto result = future.get();
+      auto sync_start = Clock::now();
+      CUDA_CHECK(cudaStreamWaitEvent(stream.stream(), result.completion, 0));
+      auto sync_end = Clock::now();
+      CUDA_CHECK(cudaEventDestroy(result.completion));
+      out = std::move(result.row_tensors);
+      gpu_ms = result.cuda_run_us / 1000.0;
+      runner_wait = elapsed_us(enqueue_start, sync_end) / 1000.0;
+      scheduler->record_worker_wait(elapsed_us(sync_start, sync_end), elapsed_us(enqueue_start, sync_end));
+      if (scheduler_diff_stats != nullptr && scheduler_diff_loader != nullptr) {
+        auto ref = run_steady_encoder_stream(*scheduler_diff_loader,
+                                             chunk,
+                                             state,
+                                             stream,
+                                             explicit_stream,
+                                             mutex_serialize_run,
+                                             nullptr);
+        CUDA_CHECK(cudaStreamSynchronize(stream.stream()));
+        scheduler_diff_stats->update(out, ref, label);
+      }
+    } else {
+      CUDA_CHECK(cudaEventCreate(&ev_start));
+      CUDA_CHECK(cudaEventCreate(&ev_stop));
+      CUDA_CHECK(cudaEventRecord(ev_start, stream.stream()));
+      out = run_steady_encoder_stream(enc_steady, chunk, state, stream, explicit_stream, mutex_serialize_run, &runner_wait);
+      CUDA_CHECK(cudaEventRecord(ev_stop, stream.stream()));
+      has_aoti_event = true;
+    }
   }
 
   double scalar_wait_ms = apply_encoder_outputs_density(state,
@@ -1556,7 +1730,11 @@ static RowReplayResult replay_row_density(int utt,
                                           bool explicit_stream,
                                           bool mutex_serialize_run,
                                           TimingBuckets* timings,
-                                          bool check_gold) {
+                                          bool check_gold,
+                                          BatchedSteadyScheduler* scheduler = nullptr,
+                                          B2ReusableBarrier* continuation_barrier = nullptr,
+                                          B2TensorDiffStats* scheduler_diff_stats = nullptr,
+                                          AOTIModelPackageLoader* scheduler_diff_loader = nullptr) {
   RowReplayResult result;
   try {
     SessionState session;
@@ -1581,7 +1759,11 @@ static RowReplayResult replay_row_density(int utt,
                                explicit_stream,
                                mutex_serialize_run,
                                timings,
-                               label + ".chunk" + std::to_string(chunk));
+                               label + ".chunk" + std::to_string(chunk),
+                               scheduler,
+                               continuation_barrier,
+                               scheduler_diff_stats,
+                               scheduler_diff_loader);
     }
     bool steady_ok = true;
     if (check_gold) {
@@ -1681,7 +1863,11 @@ static std::vector<RowReplayResult> build_serial_reference(const DensityArgs& ar
                                      true,
                                      false,
                                      ref_timings,
-                                     true);
+                                     true,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr);
     if (!result.ok) {
       throw std::runtime_error("serial reference failed for utt" + std::to_string(utt) +
                                (result.error.empty() ? "" : ": " + result.error));
@@ -1902,7 +2088,11 @@ static B1PreparedRow prepare_b1_row_until_target(const B1RowSpec& spec,
                              true,
                              false,
                              nullptr,
-                             "b1.prepare." + spec.label + ".chunk" + std::to_string(chunk));
+                             "b1.prepare." + spec.label + ".chunk" + std::to_string(chunk),
+                             nullptr,
+                             nullptr,
+                             nullptr,
+                             nullptr);
   }
   row.new_mel = prefix_chunk_tensor(ctx.bundle, prefix, spec.chunk, "new_mel").to(device).contiguous();
   int64_t drop_extra = scalar_i64(prefix_chunk_tensor(ctx.bundle, prefix, spec.chunk, "drop_extra"));
@@ -1966,7 +2156,11 @@ static RowReplayResult finish_b1_row_from_target(B1PreparedRow& prepared,
                                false,
                                nullptr,
                                "b1." + case_name + "." + prepared.spec.label + ".chunk" +
-                                   std::to_string(chunk));
+                                   std::to_string(chunk),
+                               nullptr,
+                               nullptr,
+                               nullptr,
+                               nullptr);
     }
     result.steady_tokens = prepared.session.hyp;
     prepared.session.mode = SessionMode::PENDING_FINALIZE;
@@ -2143,6 +2337,91 @@ static std::vector<B1RowSpec> build_b1_coverage_specs(torch::jit::Module& bundle
   return specs;
 }
 
+struct B2A1ParityResult {
+  std::string outcome = "C";
+  std::string production_sha;
+  std::string new_b1_sha;
+  bool tensor_ok = false;
+  double max_enc_out_diff = 0.0;
+  double max_cache_ch_diff = 0.0;
+  double max_cache_t_diff = 0.0;
+  int enc_len_mismatches = 0;
+  int cache_len_mismatches = 0;
+};
+
+static B2A1ParityResult run_b2_a1_parity_check(const DensityArgs& args,
+                                               torch::Device device,
+                                               const std::string& steady_batch_dir,
+                                               const std::shared_ptr<torch::jit::Module>& shared_bundle,
+                                               int rows_total) {
+  B2A1ParityResult result;
+  std::string production_path = args.dir + "/enc_steady_aoti.pt2";
+  std::string new_b1_path = (fs::path(steady_batch_dir) / "enc_steady_aoti_b1.pt2").string();
+  result.production_sha = sha256_file(production_path);
+  result.new_b1_sha = sha256_file(new_b1_path);
+
+  auto stream = stream_for_worker(true, 0);
+  auto ctx = make_worker_context(args.dir, device, stream, shared_bundle);
+  auto tokenizer = tokenizer_from_bundle(ctx->bundle);
+  verify_tokenizer_selftest(ctx->bundle, tokenizer);
+  AOTIModelPackageLoader enc_steady(production_path, "model", false, 1, device.index());
+  int utt = pick_first_continuation_utt(ctx->bundle, rows_total);
+  B1RowSpec spec{utt, 1, "a1_parity.utt" + std::to_string(utt) + ".chunk1"};
+  auto prepared = prepare_b1_row_until_target(spec, *ctx, enc_steady, device, tokenizer);
+
+  BatchedSteadyLoaderSet new_b1(steady_batch_dir,
+                                args.dir + "/finalize_shared_weights.ts",
+                                device,
+                                1,
+                                "b2_a1_new_b1_tensor_parity");
+  new_b1.preload_all();
+  std::vector<BatchedSteadyInput> ready{{
+      prepared.chunk,
+      prepared.session.clc,
+      prepared.session.clt,
+      prepared.session.clcl,
+      spec.label,
+  }};
+  auto got = new_b1.run(ready, stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream.stream()));
+  if (got.size() != 1) throw std::runtime_error("B2 A1 new B=1 returned wrong row count");
+  result.max_enc_out_diff = b2_max_abs_tensor_diff(got[0].tensors[0], prepared.alone_out[0]);
+  result.max_cache_ch_diff = b2_max_abs_tensor_diff(got[0].tensors[2], prepared.alone_out[2]);
+  result.max_cache_t_diff = b2_max_abs_tensor_diff(got[0].tensors[3], prepared.alone_out[3]);
+  if (!at::equal(got[0].tensors[1], prepared.alone_out[1])) ++result.enc_len_mismatches;
+  if (!at::equal(got[0].tensors[4], prepared.alone_out[4])) ++result.cache_len_mismatches;
+  constexpr double kA1Atol = 5.0e-2;
+  result.tensor_ok = result.max_enc_out_diff <= kA1Atol &&
+                     result.max_cache_ch_diff <= kA1Atol &&
+                     result.max_cache_t_diff <= kA1Atol &&
+                     result.enc_len_mismatches == 0 &&
+                     result.cache_len_mismatches == 0;
+  if (result.production_sha == result.new_b1_sha) {
+    result.outcome = "A";
+  } else if (result.tensor_ok) {
+    result.outcome = "B";
+  } else {
+    result.outcome = "C";
+  }
+  std::printf("B2_A1_PARITY outcome=%s production_sha=%s new_b1_sha=%s tensor_ok=%s "
+              "max_enc_out=%.3e max_cache_ch=%.3e max_cache_t=%.3e "
+              "enc_len_mismatches=%d cache_len_mismatches=%d\n",
+              result.outcome.c_str(),
+              result.production_sha.c_str(),
+              result.new_b1_sha.c_str(),
+              result.tensor_ok ? "true" : "false",
+              result.max_enc_out_diff,
+              result.max_cache_ch_diff,
+              result.max_cache_t_diff,
+              result.enc_len_mismatches,
+              result.cache_len_mismatches);
+  if (result.outcome == "C") {
+    throw std::runtime_error("B2 A1 parity failed: NEW B=1 tensor parity does not match production B=1");
+  }
+  cleanup_cuda_cache();
+  return result;
+}
+
 static bool run_b1_t1_gate(const DensityArgs& args,
                            torch::Device device,
                            const std::string& stamp,
@@ -2259,6 +2538,426 @@ static bool run_b1_t1_gate(const DensityArgs& args,
   return ok;
 }
 
+struct B2T1CaseResult {
+  std::string name;
+  bool pass = false;
+  int workers = 0;
+  int rows = 0;
+  int errors = 0;
+  int token_divergences = 0;
+  int event_divergences = 0;
+  int enc_len_mismatches = 0;
+  int cache_len_mismatches = 0;
+  double max_enc_out_diff = 0.0;
+  double max_cache_ch_diff = 0.0;
+  double max_cache_t_diff = 0.0;
+  BatchedSteadySchedulerTelemetry telemetry;
+};
+
+static bool b2_events_tolerant_enabled() {
+  const char* e = std::getenv("DENSITY_GOLD_EVENTS_TOLERANT");
+  return e != nullptr && std::string(e) == "1";
+}
+
+static bool compare_b2_token_vector(const std::vector<int64_t>& got,
+                                    const std::vector<int64_t>& ref,
+                                    const std::string& label,
+                                    int worker,
+                                    int utt) {
+  if (got == ref) return true;
+  int pos = first_token_diff_pos(got, ref);
+  std::printf("B2_T1_TOKEN_DIVERGENCE label=%s worker=%d utt=%d pos=%d got_len=%zu ref_len=%zu",
+              label.c_str(),
+              worker,
+              utt,
+              pos,
+              got.size(),
+              ref.size());
+  if (pos >= 0 && pos < static_cast<int>(got.size())) {
+    std::printf(" got=%lld", static_cast<long long>(got[static_cast<size_t>(pos)]));
+  }
+  if (pos >= 0 && pos < static_cast<int>(ref.size())) {
+    std::printf(" ref=%lld", static_cast<long long>(ref[static_cast<size_t>(pos)]));
+  }
+  std::printf("\n");
+  return false;
+}
+
+static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
+                                     torch::Device device,
+                                     const std::shared_ptr<torch::jit::Module>& shared_bundle,
+                                     BatchedSteadyLoaderSet& batched_steady,
+                                     AOTIModelPackageLoader& enc_steady,
+                                     FinalizeBucketLoaderPool& finalize_loaders,
+                                     const std::shared_ptr<SharedEncFirst>& shared_enc_first,
+                                     const std::vector<RowReplayResult>& reference,
+                                     const std::string& case_name,
+                                     const std::vector<std::vector<int>>& assignments,
+                                     BatchedSteadySchedulerPolicy policy,
+                                     bool forced_barrier,
+                                     double stagger_ms,
+                                     bool require_b1,
+                                     bool require_b2,
+                                     bool require_k3_padded,
+                                     bool require_bmax_full_batches) {
+  B2T1CaseResult result;
+  result.name = case_name;
+  result.workers = static_cast<int>(assignments.size());
+  for (const auto& v : assignments) result.rows += static_cast<int>(v.size());
+  if (result.workers <= 0 || result.rows <= 0) throw std::runtime_error("B2 T1 case has no work: " + case_name);
+  std::printf("B2_T1_CASE case=%s START workers=%d rows=%d forced_barrier=%s stagger_ms=%.3f "
+              "policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d}\n",
+              case_name.c_str(),
+              result.workers,
+              result.rows,
+              forced_barrier ? "true" : "false",
+              stagger_ms,
+              policy.B_max,
+              policy.window_ms,
+              policy.lone_timeout_ms,
+              policy.queue_capacity);
+
+  BatchedSteadyScheduler scheduler(batched_steady, device, policy);
+  scheduler.warmup_buckets();
+  scheduler.start();
+
+  std::vector<std::unique_ptr<WorkerContext>> contexts;
+  contexts.reserve(static_cast<size_t>(result.workers));
+  for (int worker = 0; worker < result.workers; ++worker) {
+    auto stream = stream_for_worker(true, worker);
+    contexts.push_back(make_worker_context(args.dir, device, stream, shared_bundle, shared_enc_first));
+  }
+  auto tokenizer = tokenizer_from_bundle(contexts[0]->bundle);
+  B2ReusableBarrier continuation_barrier(result.workers);
+  B2TensorDiffStats diff_stats;
+  StartGate gate(result.workers);
+  std::mutex stats_mutex;
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<size_t>(result.workers));
+  for (int worker = 0; worker < result.workers; ++worker) {
+    threads.emplace_back([&, worker] {
+      try {
+        c10::cuda::CUDAGuard device_guard(device.index());
+        gate.arrive_and_wait();
+        if (stagger_ms > 0.0 && result.workers > 1) {
+          double frac = static_cast<double>(worker) / static_cast<double>(result.workers - 1);
+          std::this_thread::sleep_for(ms_duration(stagger_ms * frac));
+        }
+        TimingBuckets ignored;
+        for (int utt : assignments[static_cast<size_t>(worker)]) {
+          auto row = replay_row_density(utt,
+                                        *contexts[worker],
+                                        enc_steady,
+                                        finalize_loaders,
+                                        device,
+                                        tokenizer,
+                                        true,
+                                        false,
+                                        &ignored,
+                                        false,
+                                        &scheduler,
+                                        forced_barrier ? &continuation_barrier : nullptr,
+                                        &diff_stats,
+                                        &enc_steady);
+          bool steady_ok = false;
+          bool final_ok = false;
+          bool events_ok = false;
+          if (!row.error.empty()) {
+            std::lock_guard<std::mutex> lock(stats_mutex);
+            ++result.errors;
+            std::printf("B2_T1_ROW_ERROR case=%s worker=%d utt=%d error=%s\n",
+                        case_name.c_str(), worker, utt, row.error.c_str());
+            continue;
+          }
+          if (utt >= static_cast<int>(reference.size())) {
+            throw std::runtime_error("B2 reference missing utt" + std::to_string(utt));
+          }
+          steady_ok = compare_b2_token_vector(row.steady_tokens,
+                                              reference[static_cast<size_t>(utt)].steady_tokens,
+                                              case_name + ".steady",
+                                              worker,
+                                              utt);
+          final_ok = compare_b2_token_vector(row.final_tokens,
+                                             reference[static_cast<size_t>(utt)].final_tokens,
+                                             case_name + ".final",
+                                             worker,
+                                             utt);
+          events_ok = strict_events_equal(row.events,
+                                          reference[static_cast<size_t>(utt)].events,
+                                          "b2." + case_name + ".worker" + std::to_string(worker) +
+                                              ".utt" + std::to_string(utt) + ".events");
+          std::lock_guard<std::mutex> lock(stats_mutex);
+          if (!steady_ok) ++result.token_divergences;
+          if (!final_ok) ++result.token_divergences;
+          if (!events_ok) ++result.event_divergences;
+        }
+      } catch (const std::exception& e) {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+        ++result.errors;
+        std::printf("B2_T1_WORKER_ERROR case=%s worker=%d error=%s\n",
+                    case_name.c_str(), worker, e.what());
+      }
+    });
+  }
+  gate.wait_until_ready_and_start();
+  for (auto& thread : threads) thread.join();
+  CUDA_CHECK(cudaDeviceSynchronize());
+  scheduler.close();
+  result.telemetry = scheduler.telemetry_snapshot();
+  {
+    std::lock_guard<std::mutex> lock(diff_stats.mutex);
+    result.enc_len_mismatches = diff_stats.enc_len_mismatches;
+    result.cache_len_mismatches = diff_stats.cache_len_mismatches;
+    result.max_enc_out_diff = diff_stats.max_enc_out_diff;
+    result.max_cache_ch_diff = diff_stats.max_cache_ch_diff;
+    result.max_cache_t_diff = diff_stats.max_cache_t_diff;
+  }
+
+  bool buckets_ok = result.telemetry.warmup_runs == 3;
+  if (require_b1) buckets_ok = buckets_ok && result.telemetry.bucket_b1 > 0;
+  if (require_b2) buckets_ok = buckets_ok && result.telemetry.bucket_b2 > 0;
+  if (require_k3_padded) buckets_ok = buckets_ok && result.telemetry.k3_padded_to_b4 > 0;
+  if (require_bmax_full_batches) {
+    int expected_full = std::max(1, result.workers / std::max(1, policy.B_max));
+    if (policy.B_max == 4) {
+      buckets_ok = buckets_ok && result.telemetry.k4 >= expected_full;
+    } else if (policy.B_max == 2) {
+      buckets_ok = buckets_ok && result.telemetry.bucket_b2 >= expected_full;
+    } else {
+      buckets_ok = buckets_ok && result.telemetry.bucket_b1 >= expected_full;
+    }
+  }
+  bool events_pass = result.event_divergences == 0 || b2_events_tolerant_enabled();
+  result.pass = result.errors == 0 &&
+                result.token_divergences == 0 &&
+                events_pass &&
+                result.enc_len_mismatches == 0 &&
+                result.cache_len_mismatches == 0 &&
+                buckets_ok;
+  std::printf("B2_T1_BUCKET case=%s warmup_runs=%lld B1=%lld B2=%lld B4=%lld "
+              "K3_padded_to_B4=%lld K4=%lld backlog_gt_bmax=%lld enqueued=%lld completed=%lld buckets_ok=%s\n",
+              case_name.c_str(),
+              static_cast<long long>(result.telemetry.warmup_runs),
+              static_cast<long long>(result.telemetry.bucket_b1),
+              static_cast<long long>(result.telemetry.bucket_b2),
+              static_cast<long long>(result.telemetry.bucket_b4),
+              static_cast<long long>(result.telemetry.k3_padded_to_b4),
+              static_cast<long long>(result.telemetry.k4),
+              static_cast<long long>(result.telemetry.backlog_gt_bmax),
+              static_cast<long long>(result.telemetry.enqueued),
+              static_cast<long long>(result.telemetry.completed),
+              buckets_ok ? "true" : "false");
+  std::printf("B2_T1_CASE case=%s RESULT %s rows=%d errors=%d token_divergences=%d event_divergences=%d "
+              "max_enc_out=%.3e max_cache_ch=%.3e max_cache_t=%.3e "
+              "enc_len_mismatches=%d cache_len_mismatches=%d\n",
+              case_name.c_str(),
+              result.pass ? "PASS" : "FAIL",
+              result.rows,
+              result.errors,
+              result.token_divergences,
+              result.event_divergences,
+              result.max_enc_out_diff,
+              result.max_cache_ch_diff,
+              result.max_cache_t_diff,
+              result.enc_len_mismatches,
+              result.cache_len_mismatches);
+  cleanup_cuda_cache();
+  return result;
+}
+
+static bool run_b2_t1_gate(const DensityArgs& args,
+                           torch::Device device,
+                           const std::string& stamp,
+                           const std::shared_ptr<torch::jit::Module>& shared_bundle,
+                           int rows_total) {
+  int rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;
+  std::string steady_batch_dir = resolve_steady_batch_dir(args);
+  std::printf("B2_T1 START dir=%s steady_batch_dir=%s rows=%d/%d batch_steady_effective=%s\n",
+              args.dir.c_str(),
+              steady_batch_dir.c_str(),
+              rows,
+              rows_total,
+              density_batch_steady_enabled_effective(args) ? "ON" : "OFF");
+  TimingBuckets ref_timings;
+  auto reference = build_serial_reference(args, device, shared_bundle, rows, &ref_timings);
+  auto a1 = run_b2_a1_parity_check(args, device, steady_batch_dir, shared_bundle, rows);
+  int forced_utt = pick_first_continuation_utt(*shared_bundle, rows);
+  BatchedSteadyLoaderSet b2_batched_steady(steady_batch_dir,
+                                           args.dir + "/finalize_shared_weights.ts",
+                                           device,
+                                           1,
+                                           "b2_t1_shared_preloaded_buckets");
+  b2_batched_steady.preload_all();
+  AOTIModelPackageLoader b2_enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, 4, -1);
+  FinalizeBucketLoaderPool b2_finalize_loaders(args.dir,
+                                               device,
+                                               capped_general_finalize_runners(4),
+                                               "b2_t1_shared_finalize_pool");
+  b2_finalize_loaders.preload_all();
+  auto b2_shared_enc_first = load_shared_enc_first(args.dir,
+                                                   device,
+                                                   "b2_t1_shared_locked_enc_first_all_cases");
+  BatchedSteadySchedulerPolicy base_policy = density_batch_policy_effective(args, 4);
+  base_policy.B_max = 4;
+  base_policy.queue_capacity = std::max(base_policy.queue_capacity, 16);
+
+  std::vector<B2T1CaseResult> cases;
+  auto add_case = [&](B2T1CaseResult&& c) {
+    cases.push_back(std::move(c));
+    cleanup_cuda_cache();
+  };
+  std::vector<int> single_utts;
+  for (int utt = 0; utt < rows; ++utt) single_utts.push_back(utt);
+  add_case(run_b2_t1_case(args,
+                          device,
+                          shared_bundle,
+                          b2_batched_steady,
+                          b2_enc_steady,
+                          b2_finalize_loaders,
+                          b2_shared_enc_first,
+                          reference,
+                          "single_stream_scheduler_on",
+                          {single_utts},
+                          base_policy,
+                          false,
+                          0.0,
+                          true,
+                          false,
+                          false,
+                          false));
+  add_case(run_b2_t1_case(args,
+                          device,
+                          shared_bundle,
+                          b2_batched_steady,
+                          b2_enc_steady,
+                          b2_finalize_loaders,
+                          b2_shared_enc_first,
+                          reference,
+                          "multi_stream_forced_K2_B2",
+                          {{forced_utt}, {forced_utt}},
+                          base_policy,
+                          true,
+                          0.0,
+                          false,
+                          true,
+                          false,
+                          false));
+  add_case(run_b2_t1_case(args,
+                          device,
+                          shared_bundle,
+                          b2_batched_steady,
+                          b2_enc_steady,
+                          b2_finalize_loaders,
+                          b2_shared_enc_first,
+                          reference,
+                          "multi_stream_forced_K3_padded_B4",
+                          {{forced_utt}, {forced_utt}, {forced_utt}},
+                          base_policy,
+                          true,
+                          0.0,
+                          false,
+                          false,
+                          true,
+                          false));
+  add_case(run_b2_t1_case(args,
+                          device,
+                          shared_bundle,
+                          b2_batched_steady,
+                          b2_enc_steady,
+                          b2_finalize_loaders,
+                          b2_shared_enc_first,
+                          reference,
+                          "multi_stream_forced_concurrency_B4",
+                          {{forced_utt}, {forced_utt}, {forced_utt}, {forced_utt}},
+                          base_policy,
+                          true,
+                          0.0,
+                          false,
+                          false,
+                          false,
+                          true));
+  add_case(run_b2_t1_case(args,
+                          device,
+                          shared_bundle,
+                          b2_batched_steady,
+                          b2_enc_steady,
+                          b2_finalize_loaders,
+                          b2_shared_enc_first,
+                          reference,
+                          "multi_stream_staggered",
+                          {{forced_utt}, {forced_utt}, {forced_utt}, {forced_utt}},
+                          base_policy,
+                          false,
+                          10000.0,
+                          false,
+                          false,
+                          false,
+                          false));
+  auto bmax1_policy = base_policy;
+  bmax1_policy.B_max = 1;
+  add_case(run_b2_t1_case(args,
+                          device,
+                          shared_bundle,
+                          b2_batched_steady,
+                          b2_enc_steady,
+                          b2_finalize_loaders,
+                          b2_shared_enc_first,
+                          reference,
+                          "scheduler_on_Bmax1_control",
+                          {{forced_utt}, {forced_utt}, {forced_utt}, {forced_utt}},
+                          bmax1_policy,
+                          true,
+                          0.0,
+                          true,
+                          false,
+                          false,
+                          true));
+
+  bool ok = true;
+  int token_divergences = 0;
+  int event_divergences = 0;
+  int errors = 0;
+  double max_enc_out = 0.0;
+  double max_cache_ch = 0.0;
+  double max_cache_t = 0.0;
+  for (const auto& c : cases) {
+    ok = ok && c.pass;
+    token_divergences += c.token_divergences;
+    event_divergences += c.event_divergences;
+    errors += c.errors;
+    max_enc_out = std::max(max_enc_out, c.max_enc_out_diff);
+    max_cache_ch = std::max(max_cache_ch, c.max_cache_ch_diff);
+    max_cache_t = std::max(max_cache_t, c.max_cache_t_diff);
+  }
+  std::ostringstream json;
+  json << "{\"check\":\"b2_batched_scheduler_t1\""
+       << ",\"rows_reference\":" << rows
+       << ",\"steady_batch_dir\":" << json_quote(steady_batch_dir)
+       << ",\"a1_outcome\":\"" << a1.outcome << "\""
+       << ",\"token_divergences\":" << token_divergences
+       << ",\"event_divergences\":" << event_divergences
+       << ",\"errors\":" << errors
+       << ",\"max_enc_out_diff\":" << max_enc_out
+       << ",\"max_cache_ch_diff\":" << max_cache_ch
+       << ",\"max_cache_t_diff\":" << max_cache_t
+       << ",\"pass\":" << json_bool(ok)
+       << "}";
+  emit_telemetry(args.dir, stamp, 1, "explicit", "b2_batched_scheduler_t1", json.str());
+  std::printf("B2_T1_RESULT %s rows_reference=%d cases=%zu token_divergences=%d event_divergences=%d "
+              "errors=%d A1_outcome=%s max_enc_out=%.3e max_cache_ch=%.3e max_cache_t=%.3e\n",
+              ok ? "PASS" : "FAIL",
+              rows,
+              cases.size(),
+              token_divergences,
+              event_divergences,
+              errors,
+              a1.outcome.c_str(),
+              max_enc_out,
+              max_cache_ch,
+              max_cache_t);
+  return ok;
+}
+
 static std::string stream_mode_label(bool explicit_stream, bool mutex_serialize_run) {
   std::string mode = explicit_stream ? "explicit" : "default";
   if (mutex_serialize_run) mode += "+mutex";
@@ -2333,7 +3032,11 @@ static CorrectnessResult run_correctness_gate_mode(const DensityArgs& args,
                                         explicit_stream,
                                         mutex_serialize_run,
                                         &worker_timings[worker],
-                                        true);
+                                        true,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr);
           bool same = row.ok &&
                       row.final_tokens == reference[utt].final_tokens &&
                       strict_events_equal(row.events,
@@ -3370,7 +4073,11 @@ static void prepare_finalize_parent(const FinalizeCase& fc,
                              explicit_stream,
                              mutex_serialize_run,
                              &ignored,
-                             "density.finalize_prep.utt" + std::to_string(fc.utt) + ".chunk" + std::to_string(chunk));
+                             "density.finalize_prep.utt" + std::to_string(fc.utt) + ".chunk" + std::to_string(chunk),
+                             nullptr,
+                             nullptr,
+                             nullptr,
+                             nullptr);
   }
   session.mode = SessionMode::PENDING_FINALIZE;
 }
@@ -3762,7 +4469,11 @@ static void warm_steady_encoder_once_density(int utt,
                              explicit_stream,
                              mutex_serialize_run,
                              nullptr,
-                             label + ".chunk" + std::to_string(chunk));
+                             label + ".chunk" + std::to_string(chunk),
+                             nullptr,
+                             nullptr,
+                             nullptr,
+                             nullptr);
   }
 }
 
@@ -3847,6 +4558,36 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   auto enc_steady_load_start = Clock::now();
   AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, result.num_runners, -1);
   log_density_phase_timing(n, "enc_steady-load", enc_steady_load_start);
+
+  std::unique_ptr<BatchedSteadyLoaderSet> batched_steady_loader;
+  std::unique_ptr<BatchedSteadyScheduler> scheduler_owner;
+  BatchedSteadyScheduler* scheduler = nullptr;
+  const bool batch_steady_on = density_batch_steady_enabled_effective(args);
+  if (batch_steady_on) {
+    std::string steady_batch_dir = resolve_steady_batch_dir(args);
+    auto policy = density_batch_policy_effective(args, result.workers);
+    (void)run_b2_a1_parity_check(args, device, steady_batch_dir, shared_bundle, rows_total);
+    batched_steady_loader = std::make_unique<BatchedSteadyLoaderSet>(
+        steady_batch_dir,
+        args.dir + "/finalize_shared_weights.ts",
+        device,
+        1,
+        "b2_density_sweep_scheduler_on");
+    scheduler_owner = std::make_unique<BatchedSteadyScheduler>(*batched_steady_loader, device, policy);
+    scheduler_owner->warmup_buckets();
+    scheduler_owner->start();
+    scheduler = scheduler_owner.get();
+    auto telem = scheduler->telemetry_snapshot();
+    std::printf("B2_SCHEDULER_ON density-sweep N=%d warmup_runs=%lld policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d}\n",
+                n,
+                static_cast<long long>(telem.warmup_runs),
+                policy.B_max,
+                policy.window_ms,
+                policy.lone_timeout_ms,
+                policy.queue_capacity);
+  } else {
+    if (scheduler != nullptr) throw std::runtime_error("batch steady OFF but scheduler pointer is non-null");
+  }
 
   auto finalize_preload_start = Clock::now();
   FinalizeBucketLoaderPool finalize_loaders(args.dir,
@@ -4028,6 +4769,10 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                      args.mutex_serialize_run,
                                      &out.timings,
                                      label + ".chunk" + std::to_string(chunk),
+                                     scheduler,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr,
                                      fill_trace_worker);
             auto finish = Clock::now();
             auto deadline = session_start + ms_duration(args.density_chunk_period_ms * static_cast<double>(chunk + 1));
@@ -4133,6 +4878,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   auto finalize_aoti = summarize(result.timings.finalize_aoti_run_cuda_ms);
   auto finalize_total = summarize(result.timings.finalize_total_ms);
   const char* cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");
+  BatchedSteadySchedulerTelemetry batch_telemetry;
+  if (scheduler != nullptr) batch_telemetry = scheduler->telemetry_snapshot();
 
   std::ostringstream json;
   json << "{\"check\":\"1a_density_sweep_full_session\""
@@ -4143,6 +4890,18 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"cuda_module_loading\":" << json_quote(cuda_module_loading ? cuda_module_loading : "")
        << ",\"stream_mode\":\"" << stream_mode_label(result.explicit_stream, args.mutex_serialize_run) << "\""
        << ",\"topology\":\"shared_steady_loader_shared_locked_enc_first_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
+       << ",\"batch_steady_on\":" << json_bool(scheduler != nullptr)
+       << ",\"batch_policy\":{\"B_max\":" << (scheduler != nullptr ? scheduler->policy().B_max : 0)
+       << ",\"window_ms\":" << (scheduler != nullptr ? scheduler->policy().window_ms : 0)
+       << ",\"lone_timeout_ms\":" << (scheduler != nullptr ? scheduler->policy().lone_timeout_ms : 0)
+       << ",\"queue_capacity\":" << (scheduler != nullptr ? scheduler->policy().queue_capacity : 0) << "}"
+       << ",\"batch_telemetry\":{\"warmup_runs\":" << batch_telemetry.warmup_runs
+       << ",\"B1\":" << batch_telemetry.bucket_b1
+       << ",\"B2\":" << batch_telemetry.bucket_b2
+       << ",\"B4\":" << batch_telemetry.bucket_b4
+       << ",\"K3_padded_to_B4\":" << batch_telemetry.k3_padded_to_b4
+       << ",\"K4\":" << batch_telemetry.k4
+       << ",\"backlog_gt_bmax\":" << batch_telemetry.backlog_gt_bmax << "}"
        << ",\"cadence_ms\":" << args.density_chunk_period_ms
        << ",\"rows_total\":" << rows_total
        << ",\"requested_sessions\":" << result.requested_sessions
@@ -4590,6 +5349,10 @@ int main(int argc, char** argv) {
     int requested_rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;
     if (args.mode == "b1-t1") {
       bool ok = run_b1_t1_gate(args, device, stamp, shared_bundle, rows_total);
+      return ok ? 0 : 1;
+    }
+    if (args.mode == "b2-t1") {
+      bool ok = run_b2_t1_gate(args, device, stamp, shared_bundle, rows_total);
       return ok ? 0 : 1;
     }
     if (args.mode == "density-sweep") {
