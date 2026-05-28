@@ -965,7 +965,6 @@ class ASRServer:
         self.stats_window_size = _env_int(
             "NEMOTRON_STATS_WINDOW",
             _STATS_WINDOW_DEFAULT,
-            "NEMOTRON_STATS_WINDOW",
         )
         if self.stats_window_size <= 0:
             raise ValueError("NEMOTRON_STATS_WINDOW must be > 0")
