@@ -194,7 +194,7 @@ system can deploy it from the docs without reading code. Every step must produce
   NeMo install failed) with one-line diagnostics each.
   Key files: `deploy/nemotron-asr.service`, `deploy/asr.env.example`
 
-- [ ] **3. HAProxy config generator (`deploy/gen_haproxy.py`)**
+- [x] **3. HAProxy config generator (`deploy/gen_haproxy.py`)**
   A small Python (stdlib-only) generator. CLI: `--boxes ip1,ip2,…` or `--boxes-file PATH` (one IP per
   line, accepts `ip` or `name=ip`), `--maxconn` default 20 (with `--maxconn-conservative` flag mapping
   to 12 — the safer pre-sustained-multi-turn-validation value), `--front-port` default 8080,
@@ -632,8 +632,8 @@ system can deploy it from the docs without reading code. Every step must produce
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
 | 1 | Single-proc launcher | done | 3d32d93 | 176 lines, bash -n OK |
-| 2 | systemd unit template | done | (pending) | unit 64L, env 146L; %h not $HOME |
-| 3 | HAProxy config generator | pending | — | |
+| 2 | systemd unit template | done | b0b97cb | unit 64L, env 146L; %h not $HOME |
+| 3 | HAProxy config generator | done | (pending) | 575L; 9 directive assertions + 6 validation tests pass |
 | 4 | Drain automation | pending | — | |
 | 5 | Local smoke test | pending | — | |
 | 6 | Rewrite DEPLOYMENT.md for single-proc | pending | — | |
