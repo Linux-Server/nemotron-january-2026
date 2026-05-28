@@ -1,12 +1,10 @@
 // Phase-2 Step-0 density kill-gates.
 //
-// This file deliberately reuses the validated session implementation by
-// compiling session_main.cpp into this translation unit with its standalone
-// main symbol renamed. The harness glue below only adds concurrency,
+// The validated session implementation now lives behind lib/session/session.h
+// and libnemotron_runtime.a. The harness glue below only adds concurrency,
 // explicit-stream AOTI calls, timing, and telemetry.
-#define main session_main_cpp_entrypoint_disabled
-#include "session_main.cpp"
-#undef main
+#include "lib/session/session.h"
+#include "lib/telemetry/stats_collector.h"
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -320,9 +318,10 @@ static DensityArgs parse_density_args(int argc, char** argv) {
     }
   }
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
-      args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke") {
+      args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
+      args.mode != "stats-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, or stalegen-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, or stats-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -1947,7 +1946,8 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
                                             bool explicit_stream,
                                             bool mutex_serialize_run,
                                             TimingBuckets* timings,
-                                            StaleGenTelemetry* stale_gen = nullptr) {
+                                            StaleGenTelemetry* stale_gen = nullptr,
+                                            StatsCollector* stats_collector = nullptr) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(stream);
   auto total_start = Clock::now();
@@ -2098,6 +2098,16 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     timings->finalize_decode_item_wait_ms.push_back(decode_item_wait_ms);
     timings->finalize_decode_tokens.push_back(decode_tokens);
     timings->finalize_glue_ms.push_back(glue_ms);
+  }
+  if (stats_collector != nullptr) {
+    static std::atomic<uint64_t> finalize_seq{0};
+    SessionTiming timing;
+    timing.fork_flush_wall_ms = elapsed_ms_since(total_start);
+    timing.lock_wait_ms = std::max(0.0, runner_host_ms - gpu_ms);
+    timing.vad_stop_to_finalize_start_ms = 0.0;
+    timing.finalize_seq = finalize_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+    timing.active_sessions_at_emit = 0;
+    stats_collector->record(timing);
   }
   return outcome;
 }
@@ -6053,6 +6063,66 @@ static bool run_stalegen_smoke() {
   return ok;
 }
 
+static bool json_contains(const std::string& json, const std::string& needle) {
+  return json.find(needle) != std::string::npos;
+}
+
+static bool run_stats_smoke() {
+  unsetenv("NEMOTRON_STATS_ENABLED");
+  unsetenv("NEMOTRON_STATS_WINDOW");
+
+  StatsCollector collector(16, true);
+  for (int i = 0; i < 50; ++i) {
+    SessionTiming timing;
+    if (i % 5 != 0) timing.vad_stop_to_sent_ms = 10.0 + static_cast<double>(i);
+    timing.fork_flush_wall_ms = 20.0 + static_cast<double>(i);
+    timing.vad_stop_recv_to_process_ms = 30.0 + static_cast<double>(i % 7);
+    timing.lock_wait_ms = static_cast<double>(i % 3);
+    timing.vad_stop_to_finalize_start_ms = 40.0 + static_cast<double>(i);
+    timing.finalize_seq = static_cast<uint64_t>(i + 1);
+    timing.active_sessions_at_emit = i % 4;
+    collector.record(timing);
+  }
+
+  std::string last10 = collector.snapshot_json(10);
+  std::string full = collector.snapshot_json();
+  StatsCollector disabled(16, false);
+  SessionTiming disabled_timing;
+  disabled_timing.vad_stop_to_sent_ms = 1.0;
+  disabled.record(disabled_timing);
+  std::string disabled_json = disabled.snapshot_json();
+
+  bool last10_ok =
+      json_contains(last10, "\"samples\":10") &&
+      json_contains(last10,
+                    "\"vad_stop_to_sent_ms\":{\"p50\":56,\"p90\":58,\"p95\":59,\"p99\":59,\"max\":59,\"count\":8}");
+  bool full_ok =
+      json_contains(full, "\"samples\":16") &&
+      json_contains(full,
+                    "\"vad_stop_to_sent_ms\":{\"p50\":52,\"p90\":58,\"p95\":58,\"p99\":59,\"max\":59,\"count\":13}");
+  bool disabled_ok =
+      json_contains(disabled_json, "\"enabled\":false") &&
+      json_contains(disabled_json, "\"samples\":0") &&
+      json_contains(disabled_json, "\"vad_stop_to_sent_ms\":{\"p50\":null");
+
+  bool ok = collector.enabled() &&
+            collector.window_size() == 16 &&
+            last10_ok &&
+            full_ok &&
+            disabled_ok;
+  std::printf("STATS_SMOKE pass=%s last10=%s full_window=%s disabled=%s\n",
+              ok ? "true" : "false",
+              last10_ok ? "PASS" : "FAIL",
+              full_ok ? "PASS" : "FAIL",
+              disabled_ok ? "PASS" : "FAIL");
+  if (!ok) {
+    std::printf("STATS_SMOKE last10=%s\n", last10.c_str());
+    std::printf("STATS_SMOKE full=%s\n", full.c_str());
+    std::printf("STATS_SMOKE disabled=%s\n", disabled_json.c_str());
+  }
+  return ok;
+}
+
 int main(int argc, char** argv) {
   try {
     DensityArgs args = parse_density_args(argc, argv);
@@ -6061,6 +6131,9 @@ int main(int argc, char** argv) {
     }
     if (args.mode == "stalegen-smoke") {
       return run_stalegen_smoke() ? 0 : 1;
+    }
+    if (args.mode == "stats-smoke") {
+      return run_stats_smoke() ? 0 : 1;
     }
     if (args.mode == "density-sweep") {
       const char* previous_cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");

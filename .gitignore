@@ -25,6 +25,11 @@ downloads/
 eggs/
 .eggs/
 lib/
+!proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/
+!proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/
+!proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/**
+!proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/telemetry/
+!proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/telemetry/**
 lib64/
 parts/
 sdist/

@@ -20,6 +20,27 @@ endif()
 if(NOT DEFINED CUDA_ROOT)
   set(CUDA_ROOT "/usr/local/cuda-12.8")
 endif()
+
+set(NEMOTRON_TORCH_INCLUDE_DIRS
+  ${TORCH_ROOT}/include
+  ${TORCH_ROOT}/include/torch/csrc/api/include
+  ${CUDA_ROOT}/targets/x86_64-linux/include)
+set(NEMOTRON_TORCH_LINK_DIRS
+  ${TORCH_ROOT}/lib
+  ${CUDA_ROOT}/lib64
+  ${CUDA_ROOT}/lib64/stubs)
+set(NEMOTRON_TORCH_LIBS torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+
+add_library(nemotron_runtime STATIC
+  lib/session/session.cpp
+  lib/telemetry/stats_collector.cpp)
+target_include_directories(nemotron_runtime PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${NEMOTRON_TORCH_INCLUDE_DIRS})
+target_compile_definitions(nemotron_runtime PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
+target_link_directories(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LINK_DIRS})
+target_link_libraries(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LIBS})
+
 add_executable(decode decode_main.cpp)
 target_include_directories(decode PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
 target_compile_definitions(decode PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
@@ -60,20 +81,18 @@ add_custom_target(aoti_finalize DEPENDS finalize)
 
 # 1.4: single-stream session composition gate, replaying session_bundle.ts through steady AOTI + finalize buckets.
 add_executable(session_main session_main.cpp)
-target_include_directories(session_main PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
-target_compile_definitions(session_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
-target_link_directories(session_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
-target_link_libraries(session_main torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(session_main PRIVATE nemotron_runtime)
 set_target_properties(session_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 add_custom_target(session DEPENDS session_main)
 
 # Phase 2 Step 0: native density/concurrency kill-gates over the validated session path.
 add_executable(density_main density_main.cpp batched_steady_scheduler.cpp density_admission.cpp)
-target_include_directories(density_main PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
-target_compile_definitions(density_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
-target_link_directories(density_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
-target_link_libraries(density_main torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(density_main PRIVATE nemotron_runtime)
 set_target_properties(density_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+
+# NOTE: ws_server target removed pending STEP3B-WS-PLAN v5 Step 7 (rewrite ws_server.cpp from
+# scratch per architecture v5 §VII + §XII; v1 ws_server.cpp was salvage-audited out — see
+# reviews/part-a-v1-salvage-audit.md).
 
 # STEADY-BATCH-0: fixed-B steady encoder AOTI per-row GPU-time microbench.
 add_executable(steady_batch_bench steady_batch_bench.cpp)
