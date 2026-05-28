@@ -27,6 +27,52 @@ Project directory: /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from
 > but still feeds the Step-4 apples-to-apples. Gate data: `reviews/profiling-paired-verdict.md`,
 > `reviews/{opus,codex}-l40s-profiling-analysis.md`; SPEEDUP bench `runtime/steady_b_artifacts/bench_out.log`.
 
+> **v4 (2026-05-28) — L40S knee sweep DECISIVELY confirmed the lift; 10 insights folded into ongoing
+> Step 2/3 + Tier 3 + B3-follow-up work.** B_max=4, W=0, L=0 reached the top of the registered N axis
+> (**N=64 SLO-robust, 0 token divergences**) on the L40S — the projected 47-64 ceiling was hit at the
+> upper bound; the **true knee is >64**. Realized ratio vs `S_python_high_end≈20`: 64/20 = **3.2×**; after
+> the 0.83× Step-4 haircut, **2.65× ≫ F1 thresholds (1.7× nominal / 1.5× pessimistic) — funding case
+> clears decisively pending the final B3 paired-verdict consolidation**. The 10 actionable insights from
+> the sweep:
+>
+> **Defaults that are now wrong (1-line code changes — bundle with B3 verdict commit):**
+> - **(1)** Admission `active_cap` default of 40 is stale (it was the OFF-baseline knee). Change to either
+>   a deploy-required-no-default OR 64+ (Step 2a `density_admission.h:42`).
+> - **(2)** Scheduler default `window_ms=10` should be **`0`** (Step 2a `batched_steady_scheduler.h:25`).
+>   W=0 L=0 won on the L40S — at the knee the queue is structurally full, the gather wait adds nothing.
+>   W/L stay configurable for diagnostic sweeps but their production setpoint is "off."
+>
+> **Lift shape (informs production setpoints):**
+> - **(3)** B_max=2 barely lifts (L40S knee=40, only +4 over OFF=36); B_max=4 lifts heavily (≥+28). The
+>   crossover is sharp (per the microbench's 0.62× vs 0.38× per-row ratios). B_max=4 is the right
+>   production default (already is); B_max=2 is debug-only — don't burn sweep cycles on it going forward.
+> - **(4)** **Known ceiling at ~N=80-100** = the dispatcher single-thread saturates. Not urgent (≥64
+>   clears F1 by huge margin); the multi-dispatcher / per-stream-pool architecture is the lever when this
+>   becomes binding — **deferred to Tier-4 future-work** (post-Phase-2).
+>
+> **Step 3 sizing rules (when Step 3b builds the real WS server):**
+> - **(5)** Worker thread pool must support **64+ concurrent streams** (size for ~80-100, not 40). On
+>   g6e.8xlarge (32 vCPU) we're at 2:1 oversubscribe — fine for I/O-bound workers.
+> - **(6)** **WS-tail microbench (Step 3a) should be exercised up to N=128** to characterize WS overhead
+>   at and above the actual knee. The realized operating point ≥64; testing 128 covers the headroom +
+>   the projected future-lift regime (post-multi-dispatcher).
+>
+> **Measurement debt — B3 follow-ups (bracket the true knee + close §II.13):**
+> - **(7)** True knee is >64 (sweep capped). A follow-up L40S sweep at N ∈ **{72, 80, 88, 96, 112, 128}**
+>   should bracket the actual ceiling. NOT BLOCKING the B3 verdict (funding case is settled regardless);
+>   informs production sizing.
+> - **(8)** Burst-injection at N=64 (synchronized starts) per §II.13 hasn't completed yet — pathological
+>   arrival pattern surfaces worst-case HOL the staggered-start sweep hides. Either Codex's in-flight L40S
+>   sweep covers it, or it's a small B3 follow-up.
+>
+> **Things that the lift CONFIRMS (no action needed):**
+> - **(9)** Tier 3 memory shrink (+11.8 GiB → +~5 GiB) is comfortably under L40S budget: at N=64 ON ≈ 22
+>   GiB peak; 26 GiB headroom. The stretch <4 GiB miss doesn't matter for L40S deployment (mattered more
+>   for the 5090 dev cycle, still tight there).
+> - **(10)** W=0 L=0 + B_max=4 = the simplest possible config is the production winner. The complexity
+>   (window/lone tuning, configurable buckets) is justified for diagnostic + low-load preserve purposes
+>   but the production setpoint is the boring one. Validates the design didn't over-tune.
+
 ## Why / the bet's open conjunct
 Phase 1 proved the single native stream is correct (token/event-exact to the server's final transcript;
 preproc→AOTI steady→decode→finalize-bucket→state-machine→emit). It did NOT measure DENSITY, and that compute
@@ -293,25 +339,43 @@ before `[x]` (the implement-loop contract). The build is the concrete realizatio
   (~2-2.5× → both thresholds met IF the knee realizes ~47-64); Step B3's measured `S_native_batched` is the binding
   re-check — if B3 lands <47 the multiplier re-tightens and F1 re-fires.**
 
-- [ ] **Step 2 — scheduler design + admission (blocked on Step-1 telemetry).** **(MF-6 split: Step 2a — invariant
-  work [admission close-shed + admitted-vs-offered accounting, stale-generation harness, WS-tail microbench
-  scaffolding, telemetry schema] may proceed in PARALLEL once Step 1b.5 starts; Step 2b — the final scheduler
-  topology (B=1-threaded vs B>1-batched vs priority-finalize partitioning) WAITS on the 1c-A selection.)** From the
-  Step-1 **telemetry schema** (not a scalar knee): one **box-global active/admitted cap** + one **box-global backlog-COUNT cap**
-  (ready-age is dead; sweep ~8/10/12), shed = **close** (count admitted, not offered; two curves). A declared
-  numeric **priority-finalize-lane policy over the `num_runners=N` pool** — either partitioned
-  (`N_finalize_reserved≥1`, steady-starvation p95 ≤2× no-finalize) or weighted (finalize runner-wait ≤25% TTFS,
-  steady queue-wait ≤2× no-finalize). Faithful to the Python shed/priority behavior re-derived for one process.
-  PAIRED REVIEW of the design before building.
+- [~] **Step 2 — scheduler design + admission.** **(MF-6 split: Step 2a — invariant work was implemented as
+  commit `7035d01` 2026-05-28 [`density_admission.{h,cpp}`, stale-gen generation tokens, telemetry blocks,
+  `--mode admission-smoke` + `--mode stalegen-smoke`]. Step 2b — topology RESOLVED to B>1-batched central
+  dispatcher per B2 verdict.)** Original spec: From the Step-1 **telemetry schema** (not a scalar knee): one
+  **box-global active/admitted cap** + one **box-global backlog-COUNT cap** (ready-age is dead; sweep
+  ~8/10/12), shed = **close** (count admitted, not offered; two curves). A declared numeric
+  **priority-finalize-lane policy over the `num_runners=N` pool** — either partitioned
+  (`N_finalize_reserved≥1`, steady-starvation p95 ≤2× no-finalize) or weighted (finalize runner-wait ≤25%
+  TTFS, steady queue-wait ≤2× no-finalize). Faithful to the Python shed/priority behavior re-derived for one
+  process. PAIRED REVIEW of the design before building.
+  **v4 follow-ups from L40S ≥64 lift (insights 1+2 — bundle with B3 verdict commit, 2 one-line code
+  changes):** **(i)** `density_admission.h:42` `active_cap` default 40 is stale; change to either
+  deploy-required-no-default OR 64+. **(ii)** `batched_steady_scheduler.h:25-26` default `window_ms=10`
+  → `0` (matches L40S production winner W=0 L=0; W/L stay configurable for diagnostic sweeps but the
+  production setpoint is "off"). **Priority-finalize-lane** still pending: the F2-T telemetry separates
+  finalize_wait from steady_wait per the Step 2a-invariant-design.md §V, so the decision can be made
+  empirically post-Step-3b production load testing — not blocking pre-B3.
 
-- [ ] **Step 3 — multi-session runtime + real WS server.** Wrap the session core in the scheduler + a real WS
-  server (also closes the 1.4b interim-cadence residual). **Required before Step 4:** a **WS-tail microbench**
-  (accept→ready, send→recv, recv→queue, queue→scheduler, serialize/send, client-recv, event-loop lag under N idle
-  + N streaming sockets; WS overhead p95 ≤10% of TTFS or decompose, don't claim as runtime tail) — production
-  needed a cooperative-yield to avoid socket starvation, so this is not a rounding error. **Stale-generation
-  suppression is a Step-3 gate** (per-session generation tokens; close-while-inflight, reset-while-queued,
-  reset-while-finalizer-owns-runner, final-after-shed; 0 stale/mismatch) — so a Step-4 tail "win" can't be a
-  dropped-final artifact.
+- [~] **Step 3 — multi-session runtime + real WS server.** **(SPLIT: Step 3a — WS-tail microbench standalone
+  is IN FLIGHT [Codex job `bcmhesbv0`, fills the `ws_tail_microbench.cpp` stub Step 2a created]; Step 3c —
+  stale-gen validation via injection is COVERED by Step 2a's `--mode stalegen-smoke` [all 4 scenarios PASS,
+  0 stale events]; Step 3b — the real WS server is DEFERRED per `reviews/Step3-scoping.md` — 2-3 days of
+  focused work, not bounded local smoke; revisit post-B3 verdict.)** Original spec: Wrap the session core
+  in the scheduler + a real WS server (also closes the 1.4b interim-cadence residual). **Required before
+  Step 4:** a **WS-tail microbench** (accept→ready, send→recv, recv→queue, queue→scheduler, serialize/send,
+  client-recv, event-loop lag under N idle + N streaming sockets; WS overhead p95 ≤10% of TTFS or decompose,
+  don't claim as runtime tail) — production needed a cooperative-yield to avoid socket starvation, so this
+  is not a rounding error. **Stale-generation suppression is a Step-3 gate** (per-session generation tokens;
+  close-while-inflight, reset-while-queued, reset-while-finalizer-owns-runner, final-after-shed; 0
+  stale/mismatch) — so a Step-4 tail "win" can't be a dropped-final artifact.
+  **v4 follow-ups from L40S ≥64 lift (insights 5+6):** **Step 3b sizing rule** — worker thread pool MUST
+  support 64+ concurrent streams (size for ~80-100, not 40); on g6e.8xlarge (32 vCPU) we're at 2:1
+  oversubscribe — fine for I/O-bound workers. **Step 3a smoke-and-sweep** — the microbench (once Step 3a
+  lands) should be exercised up to **N=128** to characterize WS overhead at + above the actual knee
+  (realized ≥64; testing 128 covers headroom + the projected post-multi-dispatcher regime). Add a
+  `n_idle ∈ {0, 64, 96, 128}` × `m_streaming ∈ {1, 8, 32, 64}` follow-up matrix as a Step 3a-RUN task once
+  Step 3a-BUILD commits.
 
 - [ ] **Step 4 — realized density vs the Python stack (apples-to-apples) — the binding TECHNICAL GO.** The
   stt-benchmark / `ec2_loadgen.py` network harness driving the native WS server. **TECHNICAL GO (density-only):**
@@ -334,6 +398,26 @@ before `[x]` (the implement-loop contract). The build is the concrete realizatio
   re-decision. **Spark aarch64 preflight is mandatory** (the AOTI container has an aarch64-specific
   runner-reclamation branch, `model_container.h:718-731`): build/load + Step-0-equivalent micro-gates before any
   density sweep; budget for build-from-source. EC2 for L40S/L4.
+
+### B3 measurement follow-ups (v4 insights 7+8 — bracket the true knee + close §II.13)
+
+These do NOT block the B3 verdict (the realized N≥64 clears F1 decisively per v4 banner), but inform
+production sizing + close the §II.13 measurement spec:
+
+- [ ] **B3-FU-1 (insight 7): bracket the true L40S knee.** Follow-up sweep at N ∈ **{72, 80, 88, 96, 112,
+  128}** with `B_max=4, W=0, L=0` (the L40S-validated winner). The realized ceiling is somewhere in this
+  range (dispatcher single-thread saturates at ~80-100 per insight 4 + 5090 CPU%-extrapolation). Inform
+  production sizing (active_cap default per insight 1) + the multi-dispatcher decision (Tier-4 lever per
+  insight 4). EC2 ~$2.50-4/hr × ~1-2hr = $5-10. Run after the in-flight L40S sweep terminates.
+- [ ] **B3-FU-2 (insight 8): burst-injection at N=64.** §II.13 spec'd a synchronized-start variant to
+  surface worst-case HOL the staggered-start sweep hides. Either Codex's in-flight L40S sweep covers it
+  (verify in the B3-L40S-result.md), or queue as a small follow-up. Bounded.
+- [ ] **B3-FU-3 (v4 insight 9): L40S Tier-3-impact baseline measurement.** Tier 3 memory shrink was
+  measured on 5090 (+11.8 → +5 GiB overhead). L40S has plenty of headroom (insight 9 estimate ~22 GiB at
+  N=64) but the absolute number isn't measured. Capture during B3-FU-1 (the higher-N sweep). Informs
+  multi-process MPS density planning (Tier-5).
+- [ ] **B3-FU-4 (v4 insights 1+2 follow-through): apply the defaults updates.** 2 one-line code changes
+  bundled with the B3 verdict commit (see Step 2 v4 follow-ups (i) and (ii)). Single Opus review post-impl.
 
 ## Rules
 See PLAN_RULES.md. Step 0, 1b, 2, 3, 5 are decision-critical → PAIRED adversarial review (Codex + Opus), folded to
@@ -447,7 +531,7 @@ in Step 1b.5/MF-1). >36 is load-bearing for Step-4 *if* S_py_lock ≥19.
 | B2 batching scheduler+integration (5090) | done (PASS-with-followup) | 0925fa6 | Central dispatcher built per binding spec §II.1-II.14. Spec faithful: §II.2 bidirectional CUDA sync ✓; §II.4 explicit nullable integration (no globals) ✓; §II.10 sealed loader fail-closed ✓; §II.11 scratch + index_copy_ ✓; §II.12 manifest fail-closed (with built-in SHA256+JSON parser) ✓; §II.8 fault tolerance + process exit ✓. b2-t1: 6/6 cases PASS, 0 token + 0 event divergences (1007 rows from 4 ref over forced K2/K3-padded/B4/staggered/Bmax1-control); A1 outcome B (SHAs differ but tensors bit-identical → OFF stays on PRODUCTION B=1 per §II.9). OFF-path smoke 20 sessions N=4 mismatches=0. Scope reductions (4 ref rows, 20 OFF sessions) flagged as B3 pre-conditions (F1, full-corpus b2-t1). Codex F2-T telemetry hardening + Opus F2-M memory headroom both pre-knee-remeasure. PAIRED REVIEW (design fork + build) → reviews/B2-design-paired-verdict.md + reviews/B2-build-paired-verdict.md. |
 | B3 L40S batched-density sweep | todo | | sm_89 B∈{1,2,4} buckets; fresh-proc-per-N N=36..72; SLO-robust knee + stagger-robust; confirms ~47-64 → sets S_native_batched for the F1 re-check. PAIRED (decisive). |
 | F1 funding recheck | provisional CLEAR | | **MF-2** — GO-to-build only if nominal 0.83·S_native/S_py≥**1.70×** AND pessimistic 0.75·…≥**1.50×** + p99 guardrail. **STEADY-BATCH-0 projection (~47-64 → ~2-2.5×) provisionally clears both; Step B3's realized knee is the binding re-check (re-fires if B3 <47).** User authorized building on the projection (2026-05-27). |
-| 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design). **2a invariant work (admission/stale-gen/WS-tail/telemetry) parallel after 1b.5; 2b topology waits on 1c-A.** |
-| 3 multi-session + real WS | todo | | WS-tail microbench + stale-gen gate; closes 1.4b interim-cadence |
+| 2 scheduler+admission design | partial (2a done, 2b resolved) | 7035d01 | **Step 2a invariant work committed `7035d01`** — `density_admission.{h,cpp}`, stale-gen generation tokens, telemetry blocks (`admission`+`stale_gen`+`ws_tail` schema), `--mode admission-smoke` + `--mode stalegen-smoke` (all 4 scenarios PASS). **Step 2b topology RESOLVED** = B>1-batched central dispatcher per B2 verdict. **v4 follow-ups**: 2 one-line default updates (active_cap=40 stale → 64+; window_ms=10 → 0). Priority-finalize-lane: telemetry separates finalize_wait from steady_wait per design §V; empirical decision post-Step-3b. |
+| 3 multi-session + real WS | partial (3a in flight, 3c done, 3b deferred) | 7035d01 (3c via Step 2a) | **Step 3c stale-gen validation COVERED by Step 2a's `--mode stalegen-smoke`** (4/4 scenarios PASS, 0 stale events, drops counted exactly: 3 encode + 3 finalize_output = 6 total). **Step 3a WS-tail microbench IN FLIGHT** (codex job `bcmhesbv0` — fills the stub Step 2a created; boost::beast standalone echo server + loadgen + per-stage timing). **Step 3b real WS server DEFERRED** per `reviews/Step3-scoping.md` (2-3 days focused work; revisit post-B3 verdict). **v4 sizing rule**: worker thread pool sized for ~80-100 concurrent (not 40). WS-tail microbench RUN should sweep N up to 128. |
 | 4 realized density (apples) | todo | | TECHNICAL GO ≥G1_floor; G2 TTFS_spread reported; manifest + re-measured baseline. **AT-RISK (2026-05-27): S_py≈20 → 1.8× at-bar; after the 0.83 haircut 0.83·36≈30 vs 1.5·20=30 = at-bar → push knee >36 (Step 1c) for a robust GO.** |
 | 5 per-target confirmation | todo | | confirm Step-1 attribution; Spark aarch64 preflight; EC2 |
