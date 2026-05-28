@@ -2,8 +2,20 @@ cmake_minimum_required(VERSION 3.18)
 project(decode LANGUAGES CXX)   # pure C++; link prebuilt libtorch, no nvcc (glibc-2.41 workaround, as 0.1b)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+
+# Step 3a: standalone localhost WebSocket tail-latency microbench. Keep this
+# target independent from Torch/CUDA so it can be built as a bounded local tool.
+add_executable(ws_tail_microbench ws_tail_microbench.cpp)
+target_link_libraries(ws_tail_microbench Threads::Threads OpenSSL::Crypto)
+
+add_executable(ws_tail_microbench_client ws_tail_microbench_client.cpp)
+target_link_libraries(ws_tail_microbench_client Threads::Threads OpenSSL::Crypto)
+
 if(NOT DEFINED TORCH_ROOT)
-  message(FATAL_ERROR "pass -DTORCH_ROOT=<site-packages>/torch")
+  message(STATUS "TORCH_ROOT not set; configured standalone ws_tail targets only")
+  return()
 endif()
 if(NOT DEFINED CUDA_ROOT)
   set(CUDA_ROOT "/usr/local/cuda-12.8")
@@ -62,8 +74,6 @@ target_compile_definitions(density_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(density_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(density_main torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 set_target_properties(density_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
-
-add_executable(ws_tail_microbench ws_tail_microbench.cpp)
 
 # STEADY-BATCH-0: fixed-B steady encoder AOTI per-row GPU-time microbench.
 add_executable(steady_batch_bench steady_batch_bench.cpp)
