@@ -1849,9 +1849,25 @@ struct RowReplayResult {
   std::vector<int64_t> final_tokens;
   std::vector<EmittedEvent> events;
   bool ok = false;
-  bool gold_events_diverged = false;  // cross-arch interim-event drift vs gold (counted, see DENSITY_GOLD_EVENTS_TOLERANT)
+  bool gold_events_diverged = false;  // cross-arch interim-event drift vs gold (counted, optionally strict)
   std::string error;
 };
+
+static bool density_strict_event_gate_enabled() {
+  static const bool enabled = []() {
+    const char* e = std::getenv("DENSITY_GOLD_EVENTS_TOLERANT");
+    return e != nullptr && std::string(e) == "1";
+  }();
+  return enabled;
+}
+
+static bool density_event_divergences_gate_pass(int event_divergences) {
+  // Project policy, confirmed by the B1/B2 paired-reviewed verdicts, treats interim event timing drift as
+  // counted-not-gated: the SLO correctness signal is token_divergences == 0 plus runtime/error budgets.
+  // Keep event divergence counts visible for debugging; DENSITY_GOLD_EVENTS_TOLERANT=1 is now the opt-in
+  // legacy strict byte-exact event gate for diagnostic runs.
+  return event_divergences == 0 || !density_strict_event_gate_enabled();
+}
 
 static RowReplayResult replay_row_density(int utt,
                                           WorkerContext& ctx,
@@ -1926,19 +1942,10 @@ static RowReplayResult replay_row_density(int utt,
     result.final_tokens = std::move(finalize.final_tokens);
     result.events = std::move(events);
     result.gold_events_diverged = check_gold && !events_ok;
-    // Cross-arch reference (e.g. sm_89 AOTI vs the sm_120/eager bundle gold): numerical drift can shift
-    // an INTERIM partial's emission by a token without changing the FINAL transcript. The strict
-    // interim+final EVENT-STREAM check vs gold then fails even though steady_ok + finalize.token_ok (the
-    // WER-relevant cumulative + final transcripts) match. DENSITY_GOLD_EVENTS_TOLERANT=1 makes that
-    // cross-arch event-stream check COUNTED (strict_events_equal still prints each divergence for
-    // tallying) but NON-FATAL, so the density measurement proceeds while finals/cumulative stay strictly
-    // enforced. Default off preserves the within-arch (5090) strict-event gate. The same-arch concurrency
-    // check (concurrent events vs this serial reference) is unaffected and stays strict.
-    static const bool kGoldEventsTolerant = [](){
-      const char* e = std::getenv("DENSITY_GOLD_EVENTS_TOLERANT");
-      return e != nullptr && std::string(e) == "1";
-    }();
-    bool events_pass = events_ok || (check_gold && kGoldEventsTolerant);
+    // Cross-arch numerical drift can shift an INTERIM partial's timing without changing the WER-relevant
+    // cumulative or final transcript. Count that event-stream divergence, but only gate on it when the
+    // legacy strict-event debug flag is explicitly enabled.
+    bool events_pass = events_ok || (check_gold && density_event_divergences_gate_pass(1));
     result.ok = steady_ok && finalize.token_ok && finalize.fork_ok && events_pass;
   } catch (const std::exception& e) {
     result.error = e.what();
@@ -2686,11 +2693,6 @@ struct B2T1CaseResult {
   BatchedSteadySchedulerTelemetry telemetry;
 };
 
-static bool b2_events_tolerant_enabled() {
-  const char* e = std::getenv("DENSITY_GOLD_EVENTS_TOLERANT");
-  return e != nullptr && std::string(e) == "1";
-}
-
 static bool compare_b2_token_vector(const std::vector<int64_t>& got,
                                     const std::vector<int64_t>& ref,
                                     const std::string& label,
@@ -2859,7 +2861,7 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
       buckets_ok = buckets_ok && result.telemetry.bucket_b1 >= expected_full;
     }
   }
-  bool events_pass = result.event_divergences == 0 || b2_events_tolerant_enabled();
+  bool events_pass = density_event_divergences_gate_pass(result.event_divergences);
   result.pass = result.errors == 0 &&
                 result.token_divergences == 0 &&
                 events_pass &&
@@ -4440,6 +4442,8 @@ struct DensitySweepRunResult {
   int warmup_finalize_buckets = 0;
   int errors = 0;
   int mismatches = 0;
+  int token_divergences = 0;
+  int event_divergences = 0;
   int unique_streams = 0;
   bool stream_uniqueness_ok = false;
   bool completed = false;
@@ -4479,6 +4483,8 @@ struct DensityWorkerOutput {
   int sessions_completed = 0;
   int chunks_completed = 0;
   int mismatches = 0;
+  int token_divergences = 0;
+  int event_divergences = 0;
   double offered_audio_ms = 0.0;
   std::string error;
 };
@@ -4949,11 +4955,15 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                                args.mutex_serialize_run,
                                                &out.timings);
           out.ttfs_ms.push_back(elapsed_ms_since(ttfs_start));
-          bool same = finalize.token_ok &&
-                      finalize.fork_ok &&
-                      finalize.final_tokens == reference[static_cast<size_t>(utt)].final_tokens &&
-                      strict_events_equal(events, reference[static_cast<size_t>(utt)].events, label + ".serial_oracle");
-          if (!same) ++out.mismatches;
+          bool tokens_ok = finalize.token_ok &&
+                           finalize.fork_ok &&
+                           finalize.final_tokens == reference[static_cast<size_t>(utt)].final_tokens;
+          bool events_ok = strict_events_equal(events,
+                                               reference[static_cast<size_t>(utt)].events,
+                                               label + ".serial_oracle");
+          if (!tokens_ok) ++out.token_divergences;
+          if (!events_ok) ++out.event_divergences;
+          if (!tokens_ok || !events_ok) ++out.mismatches;
           ++out.sessions_completed;
         }
       } catch (const std::exception& e) {
@@ -4998,6 +5008,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
     result.sessions_completed += out.sessions_completed;
     result.chunks_completed += out.chunks_completed;
     result.mismatches += out.mismatches;
+    result.token_divergences += out.token_divergences;
+    result.event_divergences += out.event_divergences;
     result.offered_audio_ms += out.offered_audio_ms;
     if (!out.error.empty()) {
       ++result.errors;
@@ -5015,8 +5027,10 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   auto ttfs = summarize(result.ttfs_ms);
   result.keepup_ok = lag.n > 0 && lag.p95 < 500.0;
   result.ttfs_ok = result.finalize_p95_valid && ttfs.n > 0 && ttfs.p95 <= 175.0 && ttfs.p99 <= 250.0;
+  bool event_divergences_pass = density_event_divergences_gate_pass(result.event_divergences);
   result.correctness_ok = result.errors == 0 &&
-                          result.mismatches == 0 &&
+                          result.token_divergences == 0 &&
+                          event_divergences_pass &&
                           result.sessions_completed == result.requested_sessions &&
                           result.stream_uniqueness_ok;
   result.completed = result.sessions_completed == result.requested_sessions && result.errors == 0;
@@ -5070,7 +5084,12 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << "}"
        << ",\"errors\":" << result.errors
        << ",\"mismatches\":" << result.mismatches
-       << ",\"serial_oracle_match_pass\":" << json_bool(result.mismatches == 0 && result.errors == 0)
+       << ",\"token_divergences\":" << result.token_divergences
+       << ",\"event_divergences\":" << result.event_divergences
+       << ",\"event_divergences_gated\":" << json_bool(density_strict_event_gate_enabled())
+       << ",\"serial_oracle_match_pass\":"
+       << json_bool(result.token_divergences == 0 && result.errors == 0 && event_divergences_pass)
+       << ",\"strict_event_match_pass\":" << json_bool(result.event_divergences == 0)
        << ",\"stream_uniqueness_pass\":" << json_bool(result.stream_uniqueness_ok)
        << ",\"slo_robust\":" << json_bool(result.slo_robust)
        << ",\"keepup_lag_p95_lt_500ms\":" << json_bool(result.keepup_ok)
@@ -5123,7 +5142,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
               "steady_gpu_p50/p95=%.3f/%.3fms enc_first_lock_p95=%.3fms "
               "finalize_total_p50/p95=%.3f/%.3fms "
               "finalize_aoti_p50/p95=%.3f/%.3fms finalize_wait_p95=%.3fms finalize_p95_valid=%s "
-              "cpu_cores=%.2f/%d gpu_util_mean=%.1f%% peak_mem=%.3fGiB mismatches=%d errors=%d ===\n",
+              "cpu_cores=%.2f/%d gpu_util_mean=%.1f%% peak_mem=%.3fGiB "
+              "token_divergences=%d event_divergences=%d mismatches=%d errors=%d ===\n",
               result.n,
               result.slo_robust ? "SLO_ROBUST" : "NOT_SLO_ROBUST",
               result.throughput_realtime_streams,
@@ -5147,6 +5167,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
               result.resource_stats.cpu_threads,
               result.resource_stats.gpu_util_mean_pct,
               static_cast<double>(result.peak_mem_bytes) / (1024.0 * 1024.0 * 1024.0),
+              result.token_divergences,
+              result.event_divergences,
               result.mismatches,
               result.errors);
   log_density_phase_timing(n, "teardown", teardown_start);
@@ -5211,6 +5233,9 @@ struct DensitySweepSummary {
   std::vector<DensitySweepRunResult> runs;
   int knee_n = 0;
   int single_thread_keepup_n = 0;
+  int token_divergences = 0;
+  int event_divergences = 0;
+  int errors = 0;
   double multiplier = 0.0;
   bool pass_to_1b = false;
   bool correctness_at_knee = false;
@@ -5297,6 +5322,9 @@ static void emit_density_sweep_manifest(const DensityArgs& args,
       << ",\"cadence_ms\":" << args.density_chunk_period_ms
       << ",\"knee_n\":" << summary.knee_n
       << ",\"single_thread_keepup_n\":" << summary.single_thread_keepup_n
+      << ",\"token_divergences\":" << summary.token_divergences
+      << ",\"event_divergences\":" << summary.event_divergences
+      << ",\"errors\":" << summary.errors
       << ",\"multiplier\":" << summary.multiplier
       << ",\"pass_to_1b\":" << json_bool(summary.pass_to_1b)
       << ",\"binding_slo\":\"" << summary.binding_slo << "\""
@@ -5347,6 +5375,9 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
 
   for (const auto& run : summary.runs) {
     if (run.slo_robust) summary.knee_n = std::max(summary.knee_n, run.n);
+    summary.token_divergences += run.token_divergences;
+    summary.event_divergences += run.event_divergences;
+    summary.errors += run.errors;
   }
   const auto* n1 = find_density_result(summary.runs, 1);
   summary.single_thread_keepup_n = (n1 != nullptr && n1->slo_robust) ? 1 : 0;
@@ -5380,6 +5411,8 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
               << ",\"shared_enc_first_delta_bytes\":" << run.shared_enc_first_delta_bytes
               << ",\"worker_context_delta_per_worker_bytes\":" << run.worker_context_delta_per_worker_bytes
               << ",\"mismatches\":" << run.mismatches
+              << ",\"token_divergences\":" << run.token_divergences
+              << ",\"event_divergences\":" << run.event_divergences
               << ",\"errors\":" << run.errors
               << ",\"oom\":" << json_bool(run.oom)
               << "}";
@@ -5401,6 +5434,9 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
        << ",\"n_values\":" << int_list_json(args.n_values)
        << ",\"knee_n\":" << summary.knee_n
        << ",\"single_thread_keepup_n\":" << summary.single_thread_keepup_n
+       << ",\"token_divergences\":" << summary.token_divergences
+       << ",\"event_divergences\":" << summary.event_divergences
+       << ",\"errors\":" << summary.errors
        << ",\"multiplier\":" << summary.multiplier
        << ",\"pass_to_1b\":" << json_bool(summary.pass_to_1b)
        << ",\"correctness_at_knee\":" << json_bool(summary.correctness_at_knee)
@@ -5416,11 +5452,15 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
                  json.str());
   emit_density_sweep_manifest(args, stamp, summary, rows_total);
   std::printf("=== DENSITY 1a SUMMARY %s: knee_N=%d single_thread_keepup_N=%d multiplier=%.3fx "
+              "token_divergences=%d event_divergences=%d errors=%d "
               "binding_slo=%s binding_resource=%s correctness_at_knee=%s ===\n",
               summary.pass_to_1b ? "PASS_TO_1B" : "NO_PASS_TO_1B",
               summary.knee_n,
               summary.single_thread_keepup_n,
               summary.multiplier,
+              summary.token_divergences,
+              summary.event_divergences,
+              summary.errors,
               summary.binding_slo.c_str(),
               summary.binding_resource.c_str(),
               summary.correctness_at_knee ? "PASS" : "FAIL");

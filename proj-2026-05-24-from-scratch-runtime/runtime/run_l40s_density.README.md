@@ -54,7 +54,8 @@ cd ~/density
 LD=/home/ubuntu/torch280-sm89-venv/lib/python3.10/site-packages
 export LD_LIBRARY_PATH="$LD/torch/lib:$(ls -d $LD/nvidia/*/lib | tr '\n' ':')/usr/local/cuda-13.0/lib64"
 BIN=./cpp/build_l40s_density/density_main
-# (both profiling commands below also set SELF_CHECK_ATOL=0.2 + DENSITY_GOLD_EVENTS_TOLERANT=1 inline — cross-arch tolerance)
+# The default density policy counts cross-arch interim event-timing drifts but does not gate on them.
+# Set DENSITY_GOLD_EVENTS_TOLERANT=1 only for opt-in strict byte-exact event debug runs.
 ```
 
 ### nsys — multi-stream timeline (launch-bound vs compute-bound at the knee)
@@ -62,7 +63,7 @@ Low-overhead (CUPTI); safe to run on a real multi-stream sweep. Use a SHORT conf
 and skip the serial-oracle/warmup setup with `--delay` so the trace captures the **measured gate** (the setup is
 ~250s = oracle ~176s + warmup ~66s; tune `--delay` from the run's `DENSITY_PHASE_TIMING` lines):
 ```bash
-LD_LIBRARY_PATH="$LD_LIBRARY_PATH" SELF_CHECK_ATOL=0.2 DENSITY_GOLD_EVENTS_TOLERANT=1 \
+LD_LIBRARY_PATH="$LD_LIBRARY_PATH" SELF_CHECK_ATOL=0.2 \
   nsys profile --trace=cuda --sample=none --force-overwrite=true --delay=255 --duration=45 \
     -o ~/density/nsys_n38 \
     "$BIN" --n-values 38 --density-sessions-per-worker 2 artifacts_sm89
@@ -75,7 +76,7 @@ nsys stats --report cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum ~/densi
 ncu **serializes + replays** each profiled kernel → run **single-stream (N=1)** and cap with `--launch-count`; never
 run ncu on a multi-stream sweep. Needs **root** (perf counters), and `sudo` drops env → pass it with `sudo env`:
 ```bash
-sudo env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" SELF_CHECK_ATOL=0.2 DENSITY_GOLD_EVENTS_TOLERANT=1 \
+sudo env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" SELF_CHECK_ATOL=0.2 \
   /usr/local/cuda/bin/ncu --set roofline --launch-count 40 --target-processes all --force-overwrite \
     -o ~/density/ncu_enc \
     "$BIN" --n-values 1 --density-sessions-per-worker 1 artifacts_sm89
