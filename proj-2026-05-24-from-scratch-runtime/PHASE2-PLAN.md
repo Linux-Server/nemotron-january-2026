@@ -462,11 +462,20 @@ before `[x]` (the implement-loop contract). The build is the concrete realizatio
 These do NOT block the B3 verdict (the realized N≥64 clears F1 decisively per v4 banner), but inform
 production sizing + close the §II.13 measurement spec:
 
-- [ ] **B3-FU-1 (insight 7): bracket the true L40S knee.** Follow-up sweep at N ∈ **{72, 80, 88, 96, 112,
-  128}** with `B_max=4, W=0, L=0` (the L40S-validated winner). The realized ceiling is somewhere in this
-  range (dispatcher single-thread saturates at ~80-100 per insight 4 + 5090 CPU%-extrapolation). Inform
-  production sizing (active_cap default per insight 1) + the multi-dispatcher decision (Tier-4 lever per
-  insight 4). EC2 ~$2.50-4/hr × ~1-2hr = $5-10. Run after the in-flight L40S sweep terminates.
+- [x] **B3-FU-1 (insight 7): bracket the L40S knee — DONE 2026-05-28** (`reviews/B3-FU1-result.md`).
+  Sweep at N ∈ {72, 80, 88, 96, 112, 128} with `B_max=4, W=0, L=0`, `sessions_per_worker=2`,
+  staggered. **Knee-bracket high end = N=72 / first fail = N=80** against the 500ms contract ceiling
+  (N=72 lag p95 +347ms; N=80 lag p95 +1140ms). **Production operating point = N=64** — lag p95 −96ms,
+  deeply negative (keeping ahead of real-time with ~596ms slack). The 500ms-lag-budget is a contract
+  threshold, NOT the operating intent; the keep-up-negative regime (N≤64) is the safe envelope.
+  Funding math vs `S_py=20`: at N=64 (conservative cap) `0.83·64/20 = 2.66×`; at N=72 (ceiling)
+  `0.83·72/20 = 2.99×` — both ≫ F1 thresholds. N=88 and N=128 surfaced a separate finalize-bucket
+  warmup final-token mismatch (no admitted traffic); worth investigating but not knee-blocking.
+  N=80 failure mode is **keep-up lag with ttfs fine (~17ms)** = per-stream processing exceeds 160ms
+  cadence (worker per-stream cost ceiling, not dispatcher-CPU and not memory). Tier-3 memory shrink
+  validated on L40S at N=64: −4.65 GiB delta vs prior pre-Tier-3 ON; per-stream slope ~0.173 GiB/stream.
+  EC2 cost $5.80-$9.66 (g6e.8xlarge, 2h25m, AWS-confirmed terminated). **Production cap default = N=64**
+  for `NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP` (operator can push to 68-72 under direct lag-monitoring).
 - [ ] **B3-FU-2 (insight 8): burst-injection at N=64.** §II.13 spec'd a synchronized-start variant to
   surface worst-case HOL the staggered-start sweep hides. Either Codex's in-flight L40S sweep covers it
   (verify in the B3-L40S-result.md), or queue as a small follow-up. Bounded.

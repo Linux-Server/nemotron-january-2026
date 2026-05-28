@@ -1,5 +1,29 @@
 # Plan: Step 3b — Production WS+HTTP Server for the Native Runtime
 
+**v5 2026-05-28** — supersedes v4 after user-caught design error: v3/v4 incorrectly assumed Python
+`server.py` runs server-side Silero VAD. Verification (`grep -i silero src/nemotron_speech/server.py`
+= zero hits) confirms the Python server has **NO server-side Silero** — the client (Pipecat) runs
+Silero VAD and sends `vad_stop` control messages, which the server consumes with a debounce + a
+cancellation hold (the `silence0_warm200` config is a debounce-on-client-signal, not a server-side
+VAD). v5 corrections:
+- **Step 8 retitled + shrunk**: "Server-side Silero VAD integration" (PAIRED REVIEW, ~1-2 days)
+  → "Client vad_stop debounce + finalize trigger" (Opus review, hours). No torch::jit Silero load,
+  no per-frame CPU eval, no thread-pool sizing, no `NEMOTRON_VAD_MODE` enum. Step 8 is a state
+  machine + a timer (per-session) implemented in the existing recv-loop.
+- **Reference implementations** (Python server.py): the "Silero VAD integration (`silence0_warm200`
+  per `silence0-warm200-shippable` memory)" line is corrected to "client `vad_stop` consumed with
+  debounce + cancellation hold per `silence0_warm200` config — Python has NO server-side Silero;
+  Pipecat client runs the VAD."
+- **Step 7 selftest matrix**: drop the `vad_load_failure` row (no model load to fail).
+- **Rules — decision-critical list**: Step 8 moves from PAIRED to Opus review (the implementation is
+  small + obviously-correct enough to skip paired review).
+- **Architecture binding spec**: now `reviews/Step3b-WS-architecture.md` **v5** (was v4).
+
+**Process lesson logged**: when design depends on existing shipped behavior, audit the shipped code
+FIRST, not the project-memory summary. The `silence0-warm200-shippable` memory described the
+*configuration tuning* (0/200) without specifying that the VAD itself is client-side. v5 risk
+register adds this as risk #6.
+
 **v4 2026-05-28** — supersedes v3 (committed `85a73c7`) after Round 3 paired adversarial review.
 Codex Round 3: GO-with-1-fold (Step 5 key-files line contradicted the prose by instructing to
 wire `record()` in `runtime.cpp` — the exact Round 2 ownership/order hazard). Opus Round 3:
@@ -56,9 +80,12 @@ review.
   (`{"type":"transcript","text":...,"is_final":...,"finalize"?:bool,"finalize_timing"?:{...}}`),
   routes (`/health` returns `{"status":"healthy"|"loading","model_loaded":bool}`, `/stats`),
   query validation (`?model=`, `?language=`), close codes (1013 admission shed = HTTP 503
-  pre-handshake; WS-1009 message > 10 MiB; WS-1011 server fault), Silero VAD integration
-  (`silence0_warm200` per `silence0-warm200-shippable` memory). Step WS-A1 produces the
-  audit table.
+  pre-handshake; WS-1009 message > 10 MiB; WS-1011 server fault). **(v5 correction)** **NO
+  server-side Silero VAD** — the server consumes `vad_stop` control messages from the client
+  (Pipecat runs Silero) and applies the `silence0_warm200` debounce: `FINALIZE_SILENCE_MS=0` is
+  the wait-window after `vad_stop` before finalize_now() (default 0 = immediate),
+  `VAD_WARMUP_MS=200` is the cancellation hold during which a subsequent `vad_start` cancels the
+  pending finalize. Step WS-A1 produces the audit table (and double-confirms the no-Silero finding).
 - **Shipped Python /stats endpoint** (PRs `279f033` + `1257d47`) — defines the response shape
   (`enabled / window_size / samples / since_unix / until_unix / emitted_in_window /
   suppressed_in_window / lifetime_emitted / lifetime_suppressed / metrics{5 SLO} /
@@ -121,12 +148,12 @@ review.
 - **Environment**: Python (export/oracle): `HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python <script>` from `runtime/` (has nemo+torch 2.8+cu128). C++ build+run: in-container `nemotron-aoti:cu128` via `runtime/container/enter.sh`. Strip-validation + nemo-dependent steps: HOST only.
 - **Oracle + bars**: Per-step oracle = `finalize_ref.py` (extended); AOTI is NOT byte-exact (~1e-2 drift, F'); bar is TOKEN-exact + EVENT/DELTA-exact vs finalize_ref. Do NOT loosen token/event checks to WER except where Step 4 explicitly measures corpus WER.
 - **Test protocol (per step)**: (1) Build affected C++ target in-container (must compile clean); (2) run the step's harness — relevant equivalence assertion (token / event-delta / mel-hash / WER) MUST PASS vs finalize_ref + report real numbers (investigate divergence, don't loosen); (3) re-run existing N=200 session gate + the B2+Tier3 smoke set (b2-t1 4-row, density-sweep N=4 OFF, stalegen-smoke, admission-smoke, stats-smoke) to confirm no regression; (4) artifacts (.ts/.pt2/bundles) are gitignored, commit code + docs + logs (force-add logs under `runtime/artifacts/logs/`).
-- **Review intensity**: Steps WS-A1, A3, A6, B1, B2, B6 = decision-critical → PAIRED adversarial review (Codex `/cx-delegate` + independent Opus pass), folded to `reviews/`, before marking `[x]`. Steps WS-A2, A4, A5, B3, B4, B5 = Opus review + independent re-run.
+- **Review intensity**: Steps 1, 3, 6, 9, 11 = decision-critical → PAIRED adversarial review (Codex `/cx-delegate` + independent Opus pass), folded to `reviews/`, before marking `[x]`. Steps 2, 4, 5, 7, 8, 10 = Opus review + independent re-run. (v5: Step 8 demoted from PAIRED to Opus — Silero scope removed; remaining work is a small state machine.)
 - **Honesty**: if a step's full bar isn't met, mark the residual explicitly (no over-claim); correct any prior over-claim.
 
 ### Step 3b-specific rules
 
-- **Architecture v4 is the binding spec.** Each step below cites the v4 §; if implementation surfaces ambiguity, escalate (re-open the review, don't paper over).
+- **Architecture v5 is the binding spec** (v5 supersedes v4 with Silero correction; v4 §-references in step bodies remain accurate since §I-V, §VII-XVIII numbering is unchanged — only §VI rewritten, §XII Part B Silero bullet dropped, §XVI dropped NEMOTRON_VAD_MODE, §XVII risk register updated). Each step below cites the relevant §; if implementation surfaces ambiguity, escalate (re-open the review, don't paper over).
 - **Python compatibility canonicalized.** The test oracle (WS-B6) diffs wire JSON after stripping volatile fields (timestamps, sequence IDs, native scheduler counters) + sorting JSON keys. Byte-for-byte JSON is NOT the contract because Python's `json.dumps` order isn't stable.
 - **No silent loosening of close codes / control-message handling.** v4 §VIII pins the WS close-code table + §IV pins control messages. Audit (WS-A1) refines; deviations from the audit's findings need an explicit `reviews/` justification.
 - **Library has NO statics for resource state.** Per v4 §II step 1.5, `SharedRuntime` (binary-owned) holds all model loaders / tokenizer / scheduler / etc. Library functions/methods take `SharedRuntime&` references.
@@ -154,8 +181,11 @@ bars; Step 11 stays `[!]` until the integration passes.
   WS handshake header validation (`?model`, `?language` validation + invalid-value behavior — HTTP
   400 pre-upgrade vs WS error+close), WS control messages (`{"type":"reset|end|vad_start|vad_stop"}`
   with `finalize` flag default), WS frame conventions (text JSON + binary PCM int16 LE 16kHz mono,
-  10 MiB max), WS close codes (1000/1001/1003/1008/1009/1011/1013) per scenario, server-side
-  Silero VAD integration (when does the server trigger finalize vs the `vad_stop` control message),
+  10 MiB max), WS close codes (1000/1001/1003/1008/1009/1011/1013) per scenario, **(v5 corrected
+  audit scope)** the `vad_stop` debounce semantics — confirm there is NO server-side Silero (the
+  v5 correction predicts zero hits for `grep -i silero src/nemotron_speech/server.py`), document
+  the exact debounce state machine + the `silence0_warm200` config (FINALIZE_SILENCE_MS=0,
+  VAD_WARMUP_MS=200) semantics including what cancels a pending finalize,
   `finalize_timing` exact key set + value types, error frame format. Output drives all subsequent
   steps' contract decisions. This step is markdown-only (no code).
   Key files: `src/nemotron_speech/server.py` (read), `reviews/server-py-protocol-audit.md` (write).
@@ -307,30 +337,36 @@ bars; Step 11 stays `[!]` until the integration passes.
   Key files: `runtime/cpp/ws_server.cpp` (REWRITE; discard v1), `runtime/cpp/CMakeLists.txt`
   (ws_server target).
 
-- [ ] **8. Server-side Silero VAD integration** (PAIRED REVIEW)
-  Per v4 §VI. Add Silero VAD as a torch::jit model owned by `SharedRuntime` (loaded once at
-  startup; warmed). Per-session VAD state in `SessionRuntime` (running probability window). On
-  each `append_pcm_and_drain(PCMFrame)` call, run Silero per-frame on CPU (matches Python
-  `silence0_warm200`; bounded thread pool via `torch::set_num_threads(2)` to prevent
-  oversubscription at N=64). When silence exceeds `NEMOTRON_FINALIZE_SILENCE_MS` (default 0 per
-  shipped config) with the `NEMOTRON_VAD_WARMUP_MS` (default 200) cancellation hold, trigger
-  `finalize_now(close_reason="vad_stop")`. Client-sent `vad_stop` is a HINT (logged but Silero is
-  authoritative). Env: `NEMOTRON_VAD_MODE` (default `"server_authoritative"`; alt `"client_only"`
-  for debug). Bar (v2 fold per Codex Round 1 — Silero N=64 CPU probe is required, not optional):
-  - **(probe)** measure per-frame Silero eval cost on the target box; report p50/p95 µs.
-  - **(N=64 sim)** run an N=64-equivalent VAD loop with `torch::set_num_threads(2)` on synthetic
-    16kHz mono frames; report CPU% utilization + per-frame p95 latency; **FAIL** if VAD path
-    consumes enough CPU to threaten WS worker scheduling (e.g., > 50% of one core sustained).
-  - **(correctness)** `--mode vad-smoke` runs N=4 synthetic streams of silence + speech and
-    asserts Silero triggers finalize at the right boundaries (per oracle).
-  - **(matrix)** add `vad_load_failure` row to ws_server's `--selftest-and-exit` matrix
-    (Step 7's matrix).
+- [ ] **8. Client vad_stop debounce + finalize trigger** (Opus review — v5 demoted from PAIRED)
+  Per v5 §VI (correction). **NO Silero in the C++ server** — the Python server has no server-side
+  Silero either; client (Pipecat) runs the VAD and sends `vad_stop` control messages, which the
+  server consumes with a debounce + cancellation hold. Implement the per-session state machine:
+  - **State**: `IDLE | SPEAKING | PENDING_FINALIZE(deadline_ts)`.
+  - **`vad_start`** → `state=SPEAKING`; cancel any pending finalize timer.
+  - **`vad_stop`** → if `NEMOTRON_FINALIZE_SILENCE_MS == 0`: invoke `finalize_now()` immediately.
+    Else: `state=PENDING_FINALIZE(now + FINALIZE_SILENCE_MS)`, arm timer (cancellation-hold-aware).
+  - **`vad_start` while `PENDING_FINALIZE` within `NEMOTRON_VAD_WARMUP_MS`** → cancel pending,
+    `state=SPEAKING` (the bounce case).
+  - **Timer fires (no cancellation in WARMUP)** → invoke `finalize_now()`, `state=IDLE`.
+  - **`end` / `reset` with `finalize=true`** → invoke `finalize_now()` immediately (control-message
+    lifecycle takes precedence; no debounce).
+  Implementation: per-session deadline stored in `SessionRuntime`; the per-connection worker's
+  recv-loop uses `poll()` / `select()` with a deadline (no separate timer thread — keeps the
+  threading model unchanged from §XI). Env: `NEMOTRON_FINALIZE_SILENCE_MS` (default 0),
+  `NEMOTRON_VAD_WARMUP_MS` (default 200) — names per v5 §VI now precisely describe the debounce
+  semantics. `NEMOTRON_VAD_MODE` dropped (no server-side VAD to enable/disable).
+  Bar (v5 — Silero CPU probe + thread-pool sizing removed):
+  - **(state machine)** `--mode vad-smoke` runs synthetic event sequences exercising all 6
+    transitions (vad_start, vad_stop immediate, vad_stop debounced, vad_start cancels pending,
+    timer-fires-no-cancel, end/reset-bypasses-debounce); asserts `finalize_now()` invocation count
+    + timing match the state machine.
+  - **(default config parity)** confirm `FINALIZE_SILENCE_MS=0` invokes finalize immediately on
+    `vad_stop` (no debounce) — matches Python's default + the production silence0_warm200 config.
   - **(global)** re-run b2-t1 4-row + density-sweep N=4 OFF + stalegen-smoke + admission-smoke +
-    stats-smoke + N=200 session gate (per global rule; VAD is WS-server-only but the smoke set
-    must confirm no regression).
-  Key files: `runtime/cpp/lib/session/runtime.{h,cpp}` (add VAD wiring),
-  `runtime/cpp/lib/session/shared.cpp` (load Silero), `runtime/cpp/density_main.cpp` (add
-  `--mode vad-smoke`), `runtime/cpp/ws_server.cpp` (selftest matrix update).
+    stats-smoke + N=200 session gate (per global rule).
+  Key files: `runtime/cpp/lib/session/runtime.{h,cpp}` (state machine + timer hook),
+  `runtime/cpp/density_main.cpp` (add `--mode vad-smoke`). (No `shared.cpp` change — no Silero
+  model load. No selftest matrix change — no `vad_load_failure` row needed.)
 
 - [ ] **9. WS lifecycle wiring + stale-gen integration** (PAIRED REVIEW)
   Per v4 §V + the v3 lifecycle table. Wire `ws_server.cpp` per-connection worker: `accept` →
@@ -338,8 +374,10 @@ bars; Step 11 stays `[!]` until the integration passes.
   `SHED_*` → HTTP 503 with `{"error":"admission_backpressure"}` pre-upgrade) → construct
   `SessionRuntime` → send `{"type":"ready"}` → recv-loop (binary PCM → `append_pcm_and_drain`
   with stale-gen check; emit interim `WireEvent`s as JSON text frames with stale-gen check) →
-  control messages (`reset`/`end`/`vad_start`/`vad_stop`) → `finalize_now()` (triggered by Silero
-  OR client control; returns `WireEvent` + populates `last_timing()`) → **stale-gen check** →
+  control messages (`reset`/`end`/`vad_start`/`vad_stop`) → `finalize_now()` (triggered by the
+  Step 8 vad_stop debounce timer firing OR by `end`/`reset` control with `finalize=true`; v5: NO
+  server-side Silero — client sends `vad_stop` after its own VAD; server debounces; returns
+  `WireEvent` + populates `last_timing()`) → **stale-gen check** →
   emit final WireEvent (or drop silently if stale) → **stamp `was_suppressed` + `emitted` flag** →
   **`StatsCollector::record(timing, emitted)` exactly once** (v3 fold per Codex Round 2 must-fold —
   WS worker owns the record() call AFTER the emit decision; SessionRuntime never calls record()) →
@@ -427,7 +465,7 @@ bars; Step 11 stays `[!]` until the integration passes.
 | 5 | StatsCollector Python-exact | pending | — | Opus review. Per-metric count + completion predicate per v4 §IV. |
 | 6 | lib/ws handshake + framing + routes | pending | — | PAIRED. picohttpparser + server-owned edge cases. |
 | 7 | ws_server.cpp skeleton + --selftest-and-exit | pending | — | Opus review. v4 §XV smoke matrix; route stubs return Python-exact shapes. |
-| 8 | Server-side Silero VAD | pending | — | PAIRED. Adds substantive scope; CPU inference + thread cap. |
+| 8 | Client vad_stop debounce + finalize trigger | pending | — | Opus review (v5 demoted from PAIRED). Per-session state machine + timer in recv-loop. No Silero (Python server has none either; client/Pipecat runs VAD). |
 | 9 | WS lifecycle + stale-gen wiring | pending | — | PAIRED. The substantive integration. |
 | 10 | Graceful shutdown + backpressure | pending | — | Opus review. SIGTERM drain + frame-size header-first + ping/pong. |
 | 11 | Test oracle run_compat.py + canonicalized diff | pending | — | PAIRED. Part B pre-merge gate. |

@@ -1,0 +1,16 @@
+{
+  "instance_id": "i-0afb93e9eeb468b16",
+  "ip": "44.255.182.81",
+  "region": "us-west-2",
+  "key": "/home/khkramer/src/nemotron-january-2026/ec2-bench/nemotron-bench-key.pem",
+  "itype": "g6e.8xlarge",
+  "user": "ubuntu",
+  "state": "terminated",
+  "launch_time": "2026-05-28T18:30:10Z",
+  "termination_requested_at": "2026-05-28T20:49:15Z",
+  "terminated_confirmed_at": "2026-05-28T20:55:05Z",
+  "elapsed_hours_to_termination_request": 2.3181,
+  "elapsed_hours_to_termination_confirmed": 2.4153,
+  "estimated_cost_usd_at_2_50_to_4_00_per_hr_to_request": [5.80, 9.27],
+  "estimated_cost_usd_at_2_50_to_4_00_per_hr_to_confirmed": [6.04, 9.66]
+}

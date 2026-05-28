@@ -1,0 +1,21 @@
+{
+  "instance_id": "i-09641e4d0167eed3e",
+  "ip": "34.211.39.91",
+  "region": "us-west-2",
+  "key": "/home/khkramer/src/nemotron-january-2026/ec2-bench/nemotron-bench-key.pem",
+  "itype": "g6e.8xlarge",
+  "user": "ubuntu",
+  "state": "terminated",
+  "launch_time": "2026-05-28T18:43:44+00:00",
+  "terminated_at": "2026-05-28T21:22:48+00:00",
+  "elapsed_hours": 2.651,
+  "cost_rate_usd_per_hour_range": [
+    2.5,
+    4.0
+  ],
+  "estimated_cost_usd_range": [
+    6.63,
+    10.6
+  ],
+  "termination_method": "aws ec2 terminate-instances (ec2_down.py unavailable: boto3 missing)"
+}
