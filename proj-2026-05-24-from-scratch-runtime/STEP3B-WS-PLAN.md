@@ -1,5 +1,12 @@
 # Plan: Step 3b — Production WS+HTTP Server for the Native Runtime
 
+**v4 2026-05-28** — supersedes v3 (committed `85a73c7`) after Round 3 paired adversarial review.
+Codex Round 3: GO-with-1-fold (Step 5 key-files line contradicted the prose by instructing to
+wire `record()` in `runtime.cpp` — the exact Round 2 ownership/order hazard). Opus Round 3:
+MINOR_ONLY (missed Codex's specific). v4 = one-line fix to Step 5's "Key files" parenthetical
+("populate SessionTiming / last_timing() ONLY; no record() call"). Step 6 + Step 11 minor wording
+left for impl-fold.
+
 **v3 2026-05-28** — supersedes v2 (committed `b5e4bd0`) after Round 2 paired adversarial review:
 - `reviews/codex-Step3b-plan-review-round2.md` (verdict: GO-with-1-must-fold-to-v3 —
   StatsCollector ownership/order).
@@ -242,7 +249,9 @@ bars; Step 11 stays `[!]` until the integration passes.
   missing-field tolerance; `enabled=false` short-circuits).
   Key files: `runtime/cpp/lib/telemetry/session_timing.h` (NEW),
   `runtime/cpp/lib/telemetry/stats_collector.{h,cpp}` (NEW), `runtime/cpp/lib/session/runtime.cpp`
-  (wire `record` call), `runtime/cpp/density_main.cpp` (add `--mode stats-smoke`).
+  (populate `SessionTiming` / `last_timing()` ONLY; **no `StatsCollector::record()` call** — v4
+  fold per Codex Round 3: WS worker owns record() in Step 9), `runtime/cpp/density_main.cpp` (add
+  `--mode stats-smoke`).
 
 - [ ] **6. lib/ws: handshake + framing + route dispatch** (PAIRED REVIEW)
   Per v4 §VII. Add `runtime/cpp/lib/ws/{handshake,framing,routes}.{h,cpp}`.
