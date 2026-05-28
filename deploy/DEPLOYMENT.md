@@ -351,6 +351,43 @@ is the Phase 1 density path; L4 is a horizontal-scale/cost option only after a
 fresh single-proc measurement or an explicit K=2+MPS fallback decision. [memory
 pointer: pre-rewrite `deploy/DEPLOYMENT.md:111-117`; validation sources above]
 
+### Sizing caveat: discrete-burst vs continuous-arrival
+
+The `~20/box` SLO-robust number describes **discrete-burst** load: N concurrent
+WS sessions arrive in batches, each does one utterance, the batch finishes,
+then the next batch arrives with a brief drain in between. This pattern is
+typical of voice-agent traffic where conversation pauses naturally space
+session arrivals.
+
+A 2026-05-28 2-hour load test against a 4-backend cluster surfaced a distinct
+load pattern: **continuous-arrival** at the same wall concurrency. The
+`run_full1000_conc12.py --concurrency 50 --limit 0` bench keeps 50 sessions in
+flight by replenishing each finished session immediately from a 1000-sample
+queue. Same instantaneous concurrency (50), but the server's intake never
+drains. Result on 4 backends at `maxconn 20`:
+
+| Pattern              | Phase   | Sessions | 1013 sheds | OK rate |
+|----------------------|---------|---------:|-----------:|--------:|
+| Discrete-burst 50    | B + D   |    16,300|        ~480|   97.0% |
+| Continuous-arrival 50| E       |     1,000|         482|   51.8% |
+
+The cluster shed correctly in both patterns — admitted sessions held p95
+~32–36ms server-side throughout the 2h run. But the continuous-arrival
+pattern needs ~2× the box count of the discrete-burst pattern for the same
+client-visible OK rate. Operators sizing for high-throughput
+ASR-as-a-batch-job workloads (transcription pipelines, audio-import flows)
+should plan against arrival rate, not instantaneous concurrency:
+
+```text
+boxes_continuous = ceil(target_arrival_rate_per_sec × utterance_seconds /
+                        (maxconn × admission_cap_ratio × headroom))
+```
+
+where `admission_cap_ratio ≈ 0.6` (server admits 12 of HAProxy's 20). For
+voice-agent loads stick with the simpler discrete-burst formula in section
+"Per-GPU Config Matrix" above. Source: `proj-2026-05-27-l40s-cluster-deploy/
+LOAD-TEST-NOTES.md` "Phase E" + "RESULTS".
+
 ## Artifacts
 
 - [launch_single.sh](launch_single.sh) - Phase-1 launcher: one process, no MPS,
