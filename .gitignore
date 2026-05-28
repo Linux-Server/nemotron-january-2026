@@ -57,6 +57,11 @@ env/
 
 # Lock files (large and platform-specific)
 uv.lock
+# Exception: commit the native-runtime export venv's lockfile (the whole point
+# of the uv-native conversion in 230d370 is reproducible installs from a
+# committed lockfile; without uv.lock, `uv sync` re-resolves on every install
+# and reproducibility drifts as upstream packages release).
+!proj-2026-05-24-from-scratch-runtime/runtime/uv.lock
 
 # Planning/development notes
 PLANNING.md
