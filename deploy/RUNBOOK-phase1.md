@@ -415,36 +415,46 @@ confirm `nemotron-asr-backend-sg` has source-group ingress from
 
 ## (2) Bootstrap Each Box
 
-Rsync the repository to each backend at `$HOME/nemotron`. The `*.pem` and
-`*.key` exclusions are non-negotiable: `ec2_up.py` writes
-`ec2-bench/nemotron-bench-key.pem`, and a plain rsync would leak the cluster SSH
-key onto every backend.
+Rsync the repository to each backend at `$HOME/nemotron` using a **whitelist**
+of the files the backend actually needs. The whitelist idiom is safer than
+trying to maintain a complete blacklist — blacklist failure caught in the
+2026-05-28 load-test validation: with a `--exclude=`-only list, the operator's
+local `eou-collect/` (53 GB), `.cache/huggingface/` (multi-GB), and several
+other unlisted top-level dirs would have transferred and made the rsync run
+for an hour. The whitelist below sends ~1 MB, ~40 files.
+
+The included paths cover everything the backend needs to run
+`python -m nemotron_speech.server` (the package + pyproject.toml for the
+editable install + bootstrap.sh for the venv setup). `--exclude='*'` at the
+end is required by rsync's whitelist idiom — without it everything else
+slips through.
 
 ```bash
 KEY=ec2-bench/nemotron-bench-key.pem
 for s in $(ls ec2-bench/.instance_box*.json | sort -V); do
   pub_ip=$(jq -r .ip "$s")
   rsync -az \
-    --exclude='.git/' \
-    --exclude='.venv/' \
-    --exclude='stt-benchmark/.venv/' \
-    --exclude='stt-benchmark/' \
-    --exclude='proj-*/' \
-    --exclude='ec2-bench/prodsweep_*/' \
-    --exclude='ec2-bench/sweep_*/' \
-    --exclude='ec2-bench/prodmp_*/' \
-    --exclude='ec2-bench/lanes_*/' \
-    --exclude='ec2-bench/local_*/' \
-    --exclude='ec2-bench/.instance*.json' \
-    --exclude='ec2-bench/*.pem' \
-    --exclude='ec2-bench/*.key' \
-    --exclude='*.records' \
-    --exclude='*.srvlog' \
-    --exclude='__pycache__/' \
+    --include='/pyproject.toml' \
+    --include='/README.md' \
+    --include='/src/' \
+    --include='/src/nemotron_speech/' \
+    --include='/src/nemotron_speech/***' \
+    --include='/deploy/' \
+    --include='/deploy/***' \
+    --include='/ec2-bench/' \
+    --include='/ec2-bench/bootstrap.sh' \
+    --include='/ec2-bench/local_lb.py' \
+    --include='/ec2-bench/ec2_up.py' \
+    --include='/ec2-bench/ec2_down.py' \
+    --exclude='*' \
     -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
     ./ "ubuntu@${pub_ip}:~/nemotron/"
 done
 ```
+
+The whitelist deliberately excludes `ec2-bench/*.pem` and `ec2-bench/*.key`
+by default (they don't match any `--include`), so the cluster SSH key
+`ec2-bench/nemotron-bench-key.pem` cannot leak.
 
 Expected output: `rsync` is quiet on success. To confirm that secrets did not
 copy:
@@ -632,30 +642,28 @@ window (default 2048 samples; set via `NEMOTRON_STATS_WINDOW`).
 
 ## (4) Configure LB Host
 
-First copy deploy artifacts to the LB host. Use the same exclusion list,
-including `--exclude='ec2-bench/*.pem'` and `--exclude='ec2-bench/*.key'`.
-Do not copy the cluster SSH key to the LB.
+First copy deploy artifacts to the LB host using the same **whitelist**
+pattern as section (2) — the LB needs `deploy/` (gen_haproxy.py, drain.sh)
+and `ec2-bench/local_lb.py`, nothing else. The whitelist also keeps
+`ec2-bench/*.pem` out: the cluster SSH key must not land on the LB.
 
 ```bash
 LB_PUB_IP=$(jq -r .ip ec2-bench/.instance_lb.json)
 KEY=ec2-bench/nemotron-bench-key.pem
 rsync -az \
-  --exclude='.git/' \
-  --exclude='.venv/' \
-  --exclude='stt-benchmark/.venv/' \
-  --exclude='stt-benchmark/' \
-  --exclude='proj-*/' \
-  --exclude='ec2-bench/prodsweep_*/' \
-  --exclude='ec2-bench/sweep_*/' \
-  --exclude='ec2-bench/prodmp_*/' \
-  --exclude='ec2-bench/lanes_*/' \
-  --exclude='ec2-bench/local_*/' \
-  --exclude='ec2-bench/.instance*.json' \
-  --exclude='ec2-bench/*.pem' \
-  --exclude='ec2-bench/*.key' \
-  --exclude='*.records' \
-  --exclude='*.srvlog' \
-  --exclude='__pycache__/' \
+  --include='/pyproject.toml' \
+  --include='/README.md' \
+  --include='/src/' \
+  --include='/src/nemotron_speech/' \
+  --include='/src/nemotron_speech/***' \
+  --include='/deploy/' \
+  --include='/deploy/***' \
+  --include='/ec2-bench/' \
+  --include='/ec2-bench/bootstrap.sh' \
+  --include='/ec2-bench/local_lb.py' \
+  --include='/ec2-bench/ec2_up.py' \
+  --include='/ec2-bench/ec2_down.py' \
+  --exclude='*' \
   -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
   ./ "ubuntu@${LB_PUB_IP}:~/nemotron/"
 scp -i "$KEY" -o StrictHostKeyChecking=accept-new /tmp/asr-backends.ips "ubuntu@${LB_PUB_IP}:~/asr-backends.ips"
