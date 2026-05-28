@@ -56,12 +56,14 @@ set_target_properties(session_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${C
 add_custom_target(session DEPENDS session_main)
 
 # Phase 2 Step 0: native density/concurrency kill-gates over the validated session path.
-add_executable(density_main density_main.cpp batched_steady_scheduler.cpp)
+add_executable(density_main density_main.cpp batched_steady_scheduler.cpp density_admission.cpp)
 target_include_directories(density_main PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
 target_compile_definitions(density_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(density_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(density_main torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 set_target_properties(density_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+
+add_executable(ws_tail_microbench ws_tail_microbench.cpp)
 
 # STEADY-BATCH-0: fixed-B steady encoder AOTI per-row GPU-time microbench.
 add_executable(steady_batch_bench steady_batch_bench.cpp)

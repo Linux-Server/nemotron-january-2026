@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -80,6 +81,7 @@ struct Tokenizer {
 };
 
 struct SessionState {
+  std::atomic<uint64_t> generation{0};
   torch::Tensor clc;
   torch::Tensor clt;
   torch::Tensor clcl;
@@ -99,6 +101,66 @@ struct SessionState {
   SessionMode mode = SessionMode::STREAMING;
   int64_t total_audio_samples = 0;
   int64_t synthetic_prefix_samples = 0;
+
+  SessionState() = default;
+
+  SessionState(const SessionState& other) {
+    *this = other;
+  }
+
+  SessionState& operator=(const SessionState& other) {
+    if (this == &other) return *this;
+    generation.store(other.generation.load(std::memory_order_acquire), std::memory_order_release);
+    clc = other.clc;
+    clt = other.clt;
+    clcl = other.clcl;
+    g = other.g;
+    h = other.h;
+    c = other.c;
+    ring = other.ring;
+    emitted = other.emitted;
+    hyp = other.hyp;
+    last_interim_tokens = other.last_interim_tokens;
+    continuous_emitted_tokens = other.continuous_emitted_tokens;
+    pending_audio = other.pending_audio;
+    raw_audio_ring = other.raw_audio_ring;
+    post_stop_audio = other.post_stop_audio;
+    last_interim_text = other.last_interim_text;
+    continuous_emitted_text = other.continuous_emitted_text;
+    mode = other.mode;
+    total_audio_samples = other.total_audio_samples;
+    synthetic_prefix_samples = other.synthetic_prefix_samples;
+    return *this;
+  }
+
+  SessionState(SessionState&& other) noexcept {
+    *this = std::move(other);
+  }
+
+  SessionState& operator=(SessionState&& other) noexcept {
+    if (this == &other) return *this;
+    generation.store(other.generation.load(std::memory_order_acquire), std::memory_order_release);
+    clc = std::move(other.clc);
+    clt = std::move(other.clt);
+    clcl = std::move(other.clcl);
+    g = std::move(other.g);
+    h = std::move(other.h);
+    c = std::move(other.c);
+    ring = std::move(other.ring);
+    emitted = other.emitted;
+    hyp = std::move(other.hyp);
+    last_interim_tokens = std::move(other.last_interim_tokens);
+    continuous_emitted_tokens = std::move(other.continuous_emitted_tokens);
+    pending_audio = std::move(other.pending_audio);
+    raw_audio_ring = std::move(other.raw_audio_ring);
+    post_stop_audio = std::move(other.post_stop_audio);
+    last_interim_text = std::move(other.last_interim_text);
+    continuous_emitted_text = std::move(other.continuous_emitted_text);
+    mode = other.mode;
+    total_audio_samples = other.total_audio_samples;
+    synthetic_prefix_samples = other.synthetic_prefix_samples;
+    return *this;
+  }
 };
 
 struct AsrSnapshot {
@@ -952,6 +1014,7 @@ static bool int64_equal(const char* name, int64_t actual, int64_t expected, cons
 
 static SessionState clone_session(const SessionState& state) {
   SessionState out;
+  out.generation.store(state.generation.load(std::memory_order_acquire), std::memory_order_release);
   out.clc = state.clc.clone();
   out.clt = state.clt.clone();
   out.clcl = state.clcl.clone();
@@ -1033,6 +1096,7 @@ static bool fork_assert_parent_unchanged(const SessionState& parent, const AsrSn
 }
 
 static void reset_session(SessionState& state, torch::jit::Module& bundle, torch::Device device) {
+  state.generation.fetch_add(1, std::memory_order_acq_rel);
   state.clc = attr_tensor(bundle, "init_clc").to(device).clone();
   state.clt = attr_tensor(bundle, "init_clt").to(device).clone();
   state.clcl = attr_tensor(bundle, "init_clcl").to(device).clone();
@@ -2438,6 +2502,7 @@ static int append_audio_and_drain(SessionState& state,
 struct FinalizeOutcome {
   bool token_ok = false;
   bool fork_ok = false;
+  bool stale_dropped = false;
   size_t emitted_tokens = 0;
   std::vector<int64_t> final_tokens;
   std::string final_text;

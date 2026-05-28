@@ -62,6 +62,7 @@ struct ScopedCudaEvent {
 
 #include "steady_batch_primitive.h"
 #include "batched_steady_scheduler.h"
+#include "density_admission.h"
 
 struct DensityArgs {
   std::string mode = "step0";
@@ -101,6 +102,8 @@ struct DensityArgs {
   int batch_window_ms = -1;
   int batch_lone_timeout_ms = -1;
   int batch_queue_capacity = 0;
+  int admission_active_cap = -1;
+  int admission_backlog_cap = -1;
 };
 
 static double elapsed_ms(Clock::time_point start, Clock::time_point end) {
@@ -305,6 +308,10 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       args.batch_lone_timeout_ms = std::stoi(need_value("--batch-lone-timeout-ms"));
     } else if (arg == "--batch-queue-capacity") {
       args.batch_queue_capacity = std::stoi(need_value("--batch-queue-capacity"));
+    } else if (arg == "--admission-active-cap") {
+      args.admission_active_cap = std::stoi(need_value("--admission-active-cap"));
+    } else if (arg == "--admission-backlog-cap") {
+      args.admission_backlog_cap = std::stoi(need_value("--admission-backlog-cap"));
     } else if (!dir_set) {
       args.dir = arg;
       dir_set = true;
@@ -312,8 +319,10 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" && args.mode != "b2-t1") {
-    throw std::runtime_error("--mode must be step0, density-sweep, b1-t1, or b2-t1");
+  if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
+      args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke") {
+    throw std::runtime_error(
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, or stalegen-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -362,6 +371,16 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   if (args.batch_window_ms < -1) throw std::runtime_error("--batch-window-ms must be non-negative");
   if (args.batch_lone_timeout_ms < -1) throw std::runtime_error("--batch-lone-timeout-ms must be non-negative");
   if (args.batch_queue_capacity < 0) throw std::runtime_error("--batch-queue-capacity must be non-negative");
+  if (args.admission_active_cap < 0) {
+    args.admission_active_cap =
+        read_density_env_int("NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP", 40);
+  }
+  if (args.admission_backlog_cap < 0) {
+    args.admission_backlog_cap =
+        read_density_env_int("NEMOTRON_DENSITY_ADMISSION_BACKLOG_CAP", 12);
+  }
+  if (args.admission_active_cap < 0) throw std::runtime_error("--admission-active-cap must be non-negative");
+  if (args.admission_backlog_cap < 0) throw std::runtime_error("--admission-backlog-cap must be non-negative");
   return args;
 }
 
@@ -512,6 +531,184 @@ static std::string scheduler_telemetry_json(const BatchedSteadySchedulerTelemetr
       << scheduler_us_stats_json(telemetry.per_stream_fairness_spread_us)
       << "}";
   return oss.str();
+}
+
+static std::string admission_telemetry_json(const AdmissionTelemetry& telemetry) {
+  std::ostringstream oss;
+  oss << "{\"active_cap\":" << telemetry.active_cap
+      << ",\"backlog_cap\":" << telemetry.backlog_cap
+      << ",\"offered\":" << telemetry.offered
+      << ",\"admitted\":" << telemetry.admitted
+      << ",\"active_count\":" << telemetry.active_count
+      << ",\"backlog_count\":" << telemetry.backlog_count
+      << ",\"active_peak\":" << telemetry.active_peak
+      << ",\"backlog_peak\":" << telemetry.backlog_peak
+      << ",\"active_cap_hits\":" << telemetry.active_cap_hits
+      << ",\"backlog_cap_hits\":" << telemetry.backlog_cap_hits
+      << ",\"shed_close_count\":" << telemetry.shed_close_count
+      << ",\"shed_close_rate\":" << telemetry.shed_close_rate
+      << "}";
+  return oss.str();
+}
+
+static void merge_admission_telemetry(AdmissionTelemetry& dst, const AdmissionTelemetry& src) {
+  dst.active_cap = src.active_cap;
+  dst.backlog_cap = src.backlog_cap;
+  dst.offered += src.offered;
+  dst.admitted += src.admitted;
+  dst.active_count += src.active_count;
+  dst.backlog_count += src.backlog_count;
+  dst.active_peak = std::max(dst.active_peak, src.active_peak);
+  dst.backlog_peak = std::max(dst.backlog_peak, src.backlog_peak);
+  dst.active_cap_hits += src.active_cap_hits;
+  dst.backlog_cap_hits += src.backlog_cap_hits;
+  dst.shed_close_count += src.shed_close_count;
+  dst.shed_close_rate = dst.offered == 0
+                            ? 0.0
+                            : static_cast<double>(dst.shed_close_count) /
+                                  static_cast<double>(dst.offered);
+}
+
+static const char* admission_decision_name(AdmissionDecision decision) {
+  switch (decision) {
+    case AdmissionDecision::ADMITTED:
+      return "admitted";
+    case AdmissionDecision::QUEUED:
+      return "queued";
+    case AdmissionDecision::SHED_ACTIVE_CAP:
+      return "shed_active_cap";
+    case AdmissionDecision::SHED_BACKLOG_CAP:
+      return "shed_backlog_cap";
+  }
+  return "unknown";
+}
+
+class AdmissionCloseGuard {
+ public:
+  AdmissionCloseGuard(DensityAdmission& admission, std::string stream_id)
+      : admission_(&admission), stream_id_(std::move(stream_id)) {}
+  AdmissionCloseGuard(const AdmissionCloseGuard&) = delete;
+  AdmissionCloseGuard& operator=(const AdmissionCloseGuard&) = delete;
+  ~AdmissionCloseGuard() {
+    if (admission_ != nullptr) admission_->on_close(stream_id_);
+  }
+  void dismiss() { admission_ = nullptr; }
+
+ private:
+  DensityAdmission* admission_ = nullptr;
+  std::string stream_id_;
+};
+
+static bool wait_until_admission_active(DensityAdmission& admission,
+                                        const std::string& stream_id,
+                                        AdmissionDecision decision) {
+  if (decision == AdmissionDecision::ADMITTED) return true;
+  if (decision != AdmissionDecision::QUEUED) return false;
+  for (;;) {
+    AdmissionTelemetry snapshot = admission.telemetry_snapshot();
+    if (snapshot.active_cap == 0) {
+      admission.on_close(stream_id);
+      return false;
+    }
+    if (admission.try_admit_complete(stream_id)) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+struct StaleGenTelemetrySnapshot {
+  uint64_t drops_at_encode = 0;
+  uint64_t drops_at_decode = 0;
+  uint64_t drops_at_event_emit = 0;
+  uint64_t drops_at_finalize_output = 0;
+
+  uint64_t total_drops() const {
+    return drops_at_encode + drops_at_decode + drops_at_event_emit + drops_at_finalize_output;
+  }
+};
+
+enum class StaleGenStage {
+  ENCODE,
+  DECODE,
+  EVENT_EMIT,
+  FINALIZE_OUTPUT,
+};
+
+struct StaleGenTelemetry {
+  std::atomic<uint64_t> drops_at_encode{0};
+  std::atomic<uint64_t> drops_at_decode{0};
+  std::atomic<uint64_t> drops_at_event_emit{0};
+  std::atomic<uint64_t> drops_at_finalize_output{0};
+
+  void record(StaleGenStage stage) {
+    switch (stage) {
+      case StaleGenStage::ENCODE:
+        drops_at_encode.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case StaleGenStage::DECODE:
+        drops_at_decode.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case StaleGenStage::EVENT_EMIT:
+        drops_at_event_emit.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case StaleGenStage::FINALIZE_OUTPUT:
+        drops_at_finalize_output.fetch_add(1, std::memory_order_relaxed);
+        break;
+    }
+  }
+
+  StaleGenTelemetrySnapshot snapshot() const {
+    StaleGenTelemetrySnapshot out;
+    out.drops_at_encode = drops_at_encode.load(std::memory_order_acquire);
+    out.drops_at_decode = drops_at_decode.load(std::memory_order_acquire);
+    out.drops_at_event_emit = drops_at_event_emit.load(std::memory_order_acquire);
+    out.drops_at_finalize_output = drops_at_finalize_output.load(std::memory_order_acquire);
+    return out;
+  }
+};
+
+static std::string stale_gen_telemetry_json(const StaleGenTelemetrySnapshot& telemetry) {
+  std::ostringstream oss;
+  oss << "{\"drops_at_encode\":" << telemetry.drops_at_encode
+      << ",\"drops_at_decode\":" << telemetry.drops_at_decode
+      << ",\"drops_at_event_emit\":" << telemetry.drops_at_event_emit
+      << ",\"drops_at_finalize_output\":" << telemetry.drops_at_finalize_output
+      << ",\"total_drops\":" << telemetry.total_drops()
+      << "}";
+  return oss.str();
+}
+
+static void merge_stale_gen_telemetry(StaleGenTelemetrySnapshot& dst,
+                                      const StaleGenTelemetrySnapshot& src) {
+  dst.drops_at_encode += src.drops_at_encode;
+  dst.drops_at_decode += src.drops_at_decode;
+  dst.drops_at_event_emit += src.drops_at_event_emit;
+  dst.drops_at_finalize_output += src.drops_at_finalize_output;
+}
+
+static uint64_t density_capture_generation(const SessionState& state) {
+  return state.generation.load(std::memory_order_acquire);
+}
+
+static void density_bump_generation(SessionState& state, const char* reason) {
+  uint64_t next = state.generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+  std::printf("STALE_GEN_BUMP reason=%s generation=%llu\n",
+              reason,
+              static_cast<unsigned long long>(next));
+}
+
+static bool density_generation_live(const SessionState& state,
+                                    uint64_t work_generation,
+                                    StaleGenTelemetry* telemetry,
+                                    StaleGenStage stage,
+                                    const std::string& label) {
+  uint64_t current = density_capture_generation(state);
+  if (current == work_generation) return true;
+  if (telemetry != nullptr) telemetry->record(stage);
+  std::printf("STALE_GEN_DROP label=%s work_generation=%llu current_generation=%llu\n",
+              label.c_str(),
+              static_cast<unsigned long long>(work_generation),
+              static_cast<unsigned long long>(current));
+  return false;
 }
 
 static void merge_scheduler_telemetry(BatchedSteadySchedulerTelemetry& dst,
@@ -1301,10 +1498,20 @@ static void run_steady_chunk_density(SessionState& state,
                                      B2ReusableBarrier* continuation_barrier,
                                      B2TensorDiffStats* scheduler_diff_stats,
                                      AOTIModelPackageLoader* scheduler_diff_loader,
-                                     std::vector<int64_t>* fill_trace_ready_ns = nullptr) {
+                                     std::vector<int64_t>* fill_trace_ready_ns = nullptr,
+                                     StaleGenTelemetry* stale_gen = nullptr) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(stream);
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("density steady chunk outside STREAMING");
+
+  uint64_t work_generation = density_capture_generation(state);
+  if (!density_generation_live(state,
+                               work_generation,
+                               stale_gen,
+                               StaleGenStage::ENCODE,
+                               label + ".pre_encode")) {
+    return;
+  }
 
   auto call_start = Clock::now();
   auto new_mel = prefix_chunk_tensor(bundle, prefix, chunk_index, "new_mel").to(device).contiguous();
@@ -1436,6 +1643,13 @@ static void run_steady_chunk_density(SessionState& state,
     }
   }
 
+  if (!density_generation_live(state,
+                               work_generation,
+                               stale_gen,
+                               StaleGenStage::DECODE,
+                               label + ".pre_decode")) {
+    return;
+  }
   double scalar_wait_ms = apply_encoder_outputs_density(state,
                                                         out,
                                                         joint,
@@ -1468,6 +1682,13 @@ static void run_steady_chunk_density(SessionState& state,
   state.emitted += new_mel.size(2);
   std::string current_text = tokenizer.ids_to_text(state.hyp);
   if (current_text != state.last_interim_text) {
+    if (!density_generation_live(state,
+                                 work_generation,
+                                 stale_gen,
+                                 StaleGenStage::EVENT_EMIT,
+                                 label + ".event_emit")) {
+      return;
+    }
     emit_event(events,
                EVENT_INTERIM,
                state.hyp,
@@ -1725,10 +1946,12 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
                                             c10::cuda::CUDAStream stream,
                                             bool explicit_stream,
                                             bool mutex_serialize_run,
-                                            TimingBuckets* timings) {
+                                            TimingBuckets* timings,
+                                            StaleGenTelemetry* stale_gen = nullptr) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(stream);
   auto total_start = Clock::now();
+  uint64_t work_generation = density_capture_generation(parent);
 
   if (finish == FinalizeFinish::SPECULATIVE_KEEP && parent.mode != SessionMode::PENDING_FINALIZE) {
     throw std::runtime_error("density speculative finalize outside PENDING_FINALIZE");
@@ -1824,6 +2047,17 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
   std::string final_text = outcome.final_text;
   std::string delta_text = append_only_delta_text(final_text, parent.continuous_emitted_text);
   auto delta_tokens = append_only_delta_tokens(fork.hyp, parent.continuous_emitted_tokens);
+  bool generation_live = density_generation_live(parent,
+                                                 work_generation,
+                                                 stale_gen,
+                                                 StaleGenStage::FINALIZE_OUTPUT,
+                                                 label + ".finalize_output");
+  if (!generation_live) {
+    outcome.stale_dropped = true;
+    outcome.token_ok = true;
+    outcome.fork_ok = true;
+    return outcome;
+  }
   if (delta_text.empty()) {
     emit_event(events,
                EVENT_SUPPRESSED,
@@ -1873,6 +2107,7 @@ struct RowReplayResult {
   std::vector<int64_t> final_tokens;
   std::vector<EmittedEvent> events;
   bool ok = false;
+  bool stale_dropped = false;
   bool gold_events_diverged = false;  // cross-arch interim-event drift vs gold (counted, optionally strict)
   std::string error;
 };
@@ -1907,7 +2142,8 @@ static RowReplayResult replay_row_density(int utt,
                                           BatchedSteadyScheduler* scheduler = nullptr,
                                           B2ReusableBarrier* continuation_barrier = nullptr,
                                           B2TensorDiffStats* scheduler_diff_stats = nullptr,
-                                          AOTIModelPackageLoader* scheduler_diff_loader = nullptr) {
+                                          AOTIModelPackageLoader* scheduler_diff_loader = nullptr,
+                                          StaleGenTelemetry* stale_gen = nullptr) {
   RowReplayResult result;
   try {
     SessionState session;
@@ -1937,7 +2173,9 @@ static RowReplayResult replay_row_density(int utt,
                                scheduler,
                                continuation_barrier,
                                scheduler_diff_stats,
-                               scheduler_diff_loader);
+                               scheduler_diff_loader,
+                               nullptr,
+                               stale_gen);
     }
     bool steady_ok = true;
     if (check_gold) {
@@ -1960,19 +2198,22 @@ static RowReplayResult replay_row_density(int utt,
                                          ctx.stream,
                                          explicit_stream,
                                          mutex_serialize_run,
-                                         timings);
+                                         timings,
+                                         stale_gen);
     bool events_ok = true;
-    if (check_gold) {
+    if (check_gold && !finalize.stale_dropped) {
       events_ok = strict_events_equal(events, gold_events_from_bundle(ctx.bundle, utt), label + ".gold");
     }
     result.final_tokens = std::move(finalize.final_tokens);
     result.events = std::move(events);
+    result.stale_dropped = finalize.stale_dropped;
     result.gold_events_diverged = check_gold && !events_ok;
     // Cross-arch numerical drift can shift an INTERIM partial's timing without changing the WER-relevant
     // cumulative or final transcript. Count that event-stream divergence, but only gate on it when the
     // legacy strict-event debug flag is explicitly enabled.
     bool events_pass = events_ok || (check_gold && density_event_divergences_gate_pass(1));
-    result.ok = steady_ok && finalize.token_ok && finalize.fork_ok && events_pass;
+    bool finalize_pass = finalize.stale_dropped || (finalize.token_ok && finalize.fork_ok);
+    result.ok = steady_ok && finalize_pass && events_pass;
   } catch (const std::exception& e) {
     result.error = e.what();
     result.ok = false;
@@ -2349,7 +2590,8 @@ static RowReplayResult finish_b1_row_from_target(B1PreparedRow& prepared,
                                          nullptr);
     result.final_tokens = std::move(finalize.final_tokens);
     result.events = std::move(prepared.events);
-    result.ok = finalize.token_ok && finalize.fork_ok;
+    result.stale_dropped = finalize.stale_dropped;
+    result.ok = finalize.stale_dropped || (finalize.token_ok && finalize.fork_ok);
   } catch (const std::exception& e) {
     result.error = e.what();
     result.ok = false;
@@ -2719,6 +2961,8 @@ struct B2T1CaseResult {
   double max_enc_out_diff = 0.0;
   double max_cache_ch_diff = 0.0;
   double max_cache_t_diff = 0.0;
+  AdmissionTelemetry admission;
+  StaleGenTelemetrySnapshot stale_gen;
   BatchedSteadySchedulerTelemetry telemetry;
 };
 
@@ -2790,6 +3034,9 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
   BatchedSteadyScheduler scheduler(batched_steady, device, policy);
   scheduler.warmup_buckets();
   scheduler.start();
+  DensityAdmission admission(static_cast<uint64_t>(args.admission_active_cap),
+                             static_cast<uint64_t>(args.admission_backlog_cap));
+  StaleGenTelemetry stale_gen;
 
   std::vector<std::unique_ptr<WorkerContext>> contexts;
   contexts.reserve(static_cast<size_t>(result.workers));
@@ -2815,6 +3062,20 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
         }
         TimingBuckets ignored;
         for (int utt : assignments[static_cast<size_t>(worker)]) {
+          std::string stream_id = case_name + ".worker" + std::to_string(worker) +
+                                  ".utt" + std::to_string(utt);
+          AdmitResult admit = admission.try_admit(stream_id);
+          if (!wait_until_admission_active(admission, stream_id, admit.decision)) {
+            std::lock_guard<std::mutex> lock(stats_mutex);
+            if (admit.shed()) ++result.errors;
+            std::printf("B2_T1_ADMISSION_SHED case=%s worker=%d utt=%d decision=%s\n",
+                        case_name.c_str(),
+                        worker,
+                        utt,
+                        admission_decision_name(admit.decision));
+            continue;
+          }
+          AdmissionCloseGuard admission_guard(admission, stream_id);
           auto row = replay_row_density(utt,
                                         *contexts[worker],
                                         &enc_steady,
@@ -2829,7 +3090,8 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
                                         &scheduler,
                                         forced_barrier ? &continuation_barrier : nullptr,
                                         &diff_stats,
-                                        &enc_steady);
+                                        &enc_steady,
+                                        &stale_gen);
           bool steady_ok = false;
           bool final_ok = false;
           bool events_ok = false;
@@ -2842,6 +3104,9 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
           }
           if (utt >= static_cast<int>(reference.size())) {
             throw std::runtime_error("B2 reference missing utt" + std::to_string(utt));
+          }
+          if (row.stale_dropped) {
+            continue;
           }
           steady_ok = compare_b2_token_vector(row.steady_tokens,
                                               reference[static_cast<size_t>(utt)].steady_tokens,
@@ -2875,6 +3140,8 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
   CUDA_CHECK(cudaDeviceSynchronize());
   scheduler.close();
   result.telemetry = scheduler.telemetry_snapshot();
+  result.admission = admission.telemetry_snapshot();
+  result.stale_gen = stale_gen.snapshot();
   {
     std::lock_guard<std::mutex> lock(diff_stats.mutex);
     result.enc_len_mismatches = diff_stats.enc_len_mismatches;
@@ -3097,6 +3364,8 @@ static bool run_b2_t1_gate(const DensityArgs& args,
   double max_enc_out = 0.0;
   double max_cache_ch = 0.0;
   double max_cache_t = 0.0;
+  AdmissionTelemetry combined_admission;
+  StaleGenTelemetrySnapshot combined_stale_gen;
   BatchedSteadySchedulerTelemetry combined_scheduler_telemetry;
   for (const auto& c : cases) {
     ok = ok && c.pass;
@@ -3106,6 +3375,8 @@ static bool run_b2_t1_gate(const DensityArgs& args,
     max_enc_out = std::max(max_enc_out, c.max_enc_out_diff);
     max_cache_ch = std::max(max_cache_ch, c.max_cache_ch_diff);
     max_cache_t = std::max(max_cache_t, c.max_cache_t_diff);
+    merge_admission_telemetry(combined_admission, c.admission);
+    merge_stale_gen_telemetry(combined_stale_gen, c.stale_gen);
     merge_scheduler_telemetry(combined_scheduler_telemetry, c.telemetry);
   }
   std::ostringstream json;
@@ -3119,6 +3390,9 @@ static bool run_b2_t1_gate(const DensityArgs& args,
        << ",\"max_enc_out_diff\":" << max_enc_out
        << ",\"max_cache_ch_diff\":" << max_cache_ch
        << ",\"max_cache_t_diff\":" << max_cache_t
+       << ",\"admission\":" << admission_telemetry_json(combined_admission)
+       << ",\"stale_gen\":" << stale_gen_telemetry_json(combined_stale_gen)
+       << ",\"ws_tail\":null"
        << ",\"scheduler_telemetry\":" << scheduler_telemetry_json(combined_scheduler_telemetry)
        << ",\"cases\":[";
   for (size_t i = 0; i < cases.size(); ++i) {
@@ -3130,6 +3404,9 @@ static bool run_b2_t1_gate(const DensityArgs& args,
          << ",\"errors\":" << c.errors
          << ",\"token_divergences\":" << c.token_divergences
          << ",\"event_divergences\":" << c.event_divergences
+         << ",\"admission\":" << admission_telemetry_json(c.admission)
+         << ",\"stale_gen\":" << stale_gen_telemetry_json(c.stale_gen)
+         << ",\"ws_tail\":null"
          << ",\"scheduler_telemetry\":" << scheduler_telemetry_json(c.telemetry)
          << "}";
   }
@@ -4360,12 +4637,13 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
                                             true,
                                             args.mutex_serialize_run,
                                             &worker_timings[worker]);
-        bool same = outcome.token_ok &&
-                    outcome.fork_ok &&
-                    outcome.final_tokens == reference[cases[worker].utt].final_tokens &&
-                    strict_events_equal(events,
-                                        reference[cases[worker].utt].events,
-                                        "density.finalize_" + mode + ".worker" + std::to_string(worker));
+        bool same = outcome.stale_dropped ||
+                    (outcome.token_ok &&
+                     outcome.fork_ok &&
+                     outcome.final_tokens == reference[cases[worker].utt].final_tokens &&
+                     strict_events_equal(events,
+                                         reference[cases[worker].utt].events,
+                                         "density.finalize_" + mode + ".worker" + std::to_string(worker)));
         if (!same) ++mismatches[worker];
       } catch (const std::exception& e) {
         errors[worker] = e.what();
@@ -4520,6 +4798,8 @@ struct DensitySweepRunResult {
   std::vector<double> ttfs_ms;
   std::vector<uintptr_t> stream_handles;
   ResourceStats resource_stats;
+  AdmissionTelemetry admission;
+  StaleGenTelemetrySnapshot stale_gen;
   std::string finalize_loader_memory_json = "{}";
   std::string error;
 };
@@ -4866,6 +5146,9 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   result.stream_uniqueness_ok = !result.explicit_stream || result.unique_streams == result.workers;
   log_density_phase_timing(n, "worker-context-creation", worker_context_start);
   auto tokenizer = tokenizer_from_bundle(contexts[0]->bundle);
+  DensityAdmission admission(static_cast<uint64_t>(args.admission_active_cap),
+                             static_cast<uint64_t>(args.admission_backlog_cap));
+  StaleGenTelemetry stale_gen;
 
   auto warmup_start = Clock::now();
   ResourceSampler resources;
@@ -4975,13 +5258,24 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
           std::this_thread::sleep_for(ms_duration(args.density_start_stagger_ms * frac));
         }
         for (int utt : assigned[static_cast<size_t>(worker)]) {
-          SessionState session;
-          reset_session(session, contexts[worker]->bundle, device);
-          std::vector<EmittedEvent> events;
           std::string prefix = "utt" + std::to_string(utt);
           std::string label = "density.1a.N" + std::to_string(n) +
                               ".worker" + std::to_string(worker) +
                               ".utt" + std::to_string(utt);
+          AdmitResult admit = admission.try_admit(label);
+          if (!wait_until_admission_active(admission, label, admit.decision)) {
+            if (admit.shed()) ++out.mismatches;
+            std::printf("DENSITY_ADMISSION_SHED N=%d worker=%d utt=%d decision=%s\n",
+                        n,
+                        worker,
+                        utt,
+                        admission_decision_name(admit.decision));
+            continue;
+          }
+          AdmissionCloseGuard admission_guard(admission, label);
+          SessionState session;
+          reset_session(session, contexts[worker]->bundle, device);
+          std::vector<EmittedEvent> events;
           int64_t num_steady = scalar_i64(utt_tensor(contexts[worker]->bundle, utt, "num_steady"));
           auto session_start = Clock::now();
           for (int chunk = 0; chunk < num_steady; ++chunk) {
@@ -5008,7 +5302,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                      nullptr,
                                      nullptr,
                                      nullptr,
-                                     fill_trace_worker);
+                                     fill_trace_worker,
+                                     &stale_gen);
             auto finish = Clock::now();
             auto deadline = session_start + ms_duration(args.density_chunk_period_ms * static_cast<double>(chunk + 1));
             out.lag_ms.push_back(signed_elapsed_ms(deadline, finish));
@@ -5033,12 +5328,15 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                                contexts[worker]->stream,
                                                result.explicit_stream,
                                                args.mutex_serialize_run,
-                                               &out.timings);
+                                               &out.timings,
+                                               &stale_gen);
           out.ttfs_ms.push_back(elapsed_ms_since(ttfs_start));
-          bool tokens_ok = finalize.token_ok &&
-                           finalize.fork_ok &&
-                           finalize.final_tokens == reference[static_cast<size_t>(utt)].final_tokens;
-          bool events_ok = strict_events_equal(events,
+          bool tokens_ok = finalize.stale_dropped ||
+                           (finalize.token_ok &&
+                            finalize.fork_ok &&
+                            finalize.final_tokens == reference[static_cast<size_t>(utt)].final_tokens);
+          bool events_ok = finalize.stale_dropped ||
+                           strict_events_equal(events,
                                                reference[static_cast<size_t>(utt)].events,
                                                label + ".serial_oracle");
           if (!tokens_ok) ++out.token_divergences;
@@ -5078,6 +5376,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   result.wall_ms = elapsed_ms(gate.start_time, end_time);
   result.peak_mem_bytes = mem.finish();
   result.used_after_run_bytes = gpu_used_bytes();
+  result.admission = admission.telemetry_snapshot();
+  result.stale_gen = stale_gen.snapshot();
   result.finalize_loader_memory_json = finalize_loaders.memory_json(result.num_runners);
 
   for (int worker = 0; worker < result.workers; ++worker) {
@@ -5167,6 +5467,9 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"finalize_samples\":" << result.finalize_samples
        << ",\"min_finalize_p95_samples\":" << kMinFinalizeP95Samples
        << ",\"finalize_p95_valid\":" << json_bool(result.finalize_p95_valid)
+       << ",\"admission\":" << admission_telemetry_json(result.admission)
+       << ",\"stale_gen\":" << stale_gen_telemetry_json(result.stale_gen)
+       << ",\"ws_tail\":null"
        << ",\"warmup\":{\"enabled\":" << json_bool(args.density_warmup)
        << ",\"steady_workers\":" << result.warmup_steady_workers
        << ",\"finalize_bucket_worker_runs\":" << result.warmup_finalize_buckets
@@ -5303,6 +5606,9 @@ static DensitySweepRunResult run_density_sweep_one(const DensityArgs& args,
          << ",\"slo_robust\":false"
          << ",\"oom\":" << json_bool(result.oom)
          << ",\"error\":" << json_quote(result.error)
+         << ",\"admission\":" << admission_telemetry_json(result.admission)
+         << ",\"stale_gen\":" << stale_gen_telemetry_json(result.stale_gen)
+         << ",\"ws_tail\":null"
          << ",\"peak_gpu_mem_bytes\":" << result.peak_mem_bytes
          << ",\"total_gpu_mem_bytes\":" << result.total_mem_bytes
          << "}";
@@ -5481,6 +5787,13 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
   summary.binding_slo = infer_binding_slo(summary.runs, summary.knee_n);
   summary.binding_resource = infer_binding_resource(summary.runs, summary.knee_n);
 
+  AdmissionTelemetry summary_admission;
+  StaleGenTelemetrySnapshot summary_stale_gen;
+  for (const auto& run : summary.runs) {
+    merge_admission_telemetry(summary_admission, run.admission);
+    merge_stale_gen_telemetry(summary_stale_gen, run.stale_gen);
+  }
+
   std::ostringstream rows_json;
   rows_json << "[";
   for (size_t i = 0; i < summary.runs.size(); ++i) {
@@ -5505,6 +5818,9 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
               << ",\"token_divergences\":" << run.token_divergences
               << ",\"event_divergences\":" << run.event_divergences
               << ",\"errors\":" << run.errors
+              << ",\"admission\":" << admission_telemetry_json(run.admission)
+              << ",\"stale_gen\":" << stale_gen_telemetry_json(run.stale_gen)
+              << ",\"ws_tail\":null"
               << ",\"oom\":" << json_bool(run.oom)
               << "}";
   }
@@ -5533,6 +5849,9 @@ static DensitySweepSummary run_density_sweep(const DensityArgs& args,
        << ",\"correctness_at_knee\":" << json_bool(summary.correctness_at_knee)
        << ",\"binding_slo\":\"" << summary.binding_slo << "\""
        << ",\"binding_resource\":\"" << summary.binding_resource << "\""
+       << ",\"admission\":" << admission_telemetry_json(summary_admission)
+       << ",\"stale_gen\":" << stale_gen_telemetry_json(summary_stale_gen)
+       << ",\"ws_tail\":null"
        << ",\"rows\":" << rows_json.str()
        << "}";
   emit_telemetry(args.dir,
@@ -5612,9 +5931,137 @@ static void emit_run_manifest(const DensityArgs& args,
               partial ? "true" : "false");
 }
 
+static bool run_admission_smoke() {
+  DensityAdmission active_only(10, 0);
+  int active_admitted = 0;
+  int active_shed = 0;
+  for (int i = 0; i < 100; ++i) {
+    AdmitResult result = active_only.try_admit("active-" + std::to_string(i));
+    if (result.decision == AdmissionDecision::ADMITTED) {
+      ++active_admitted;
+    } else if (result.shed()) {
+      ++active_shed;
+    }
+  }
+  AdmissionTelemetry active = active_only.telemetry_snapshot();
+  bool active_ok = active_admitted == 10 &&
+                   active_shed == 90 &&
+                   active.offered == 100 &&
+                   active.admitted == 10 &&
+                   active.active_peak == 10 &&
+                   active.shed_close_count == 90 &&
+                   active.active_cap_hits == 90;
+
+  DensityAdmission with_backlog(10, 5);
+  int backlog_active_admitted = 0;
+  int backlog_queued = 0;
+  int backlog_shed = 0;
+  for (int i = 0; i < 100; ++i) {
+    AdmitResult result = with_backlog.try_admit("backlog-" + std::to_string(i));
+    if (result.decision == AdmissionDecision::ADMITTED) {
+      ++backlog_active_admitted;
+    } else if (result.decision == AdmissionDecision::QUEUED) {
+      ++backlog_queued;
+    } else if (result.shed()) {
+      ++backlog_shed;
+    }
+  }
+  AdmissionTelemetry backlog = with_backlog.telemetry_snapshot();
+  bool backlog_ok = backlog_active_admitted == 10 &&
+                    backlog_queued == 5 &&
+                    backlog_shed == 85 &&
+                    backlog.offered == 100 &&
+                    backlog.admitted == 15 &&
+                    backlog.active_peak == 10 &&
+                    backlog.backlog_peak == 5 &&
+                    backlog.shed_close_count == 85 &&
+                    backlog.backlog_cap_hits == 85;
+
+  bool ok = active_ok && backlog_ok;
+  std::printf("ADMISSION_SMOKE pass=%s active_cap_shed=%d backlog_cap_shed=%d "
+              "active=%s backlog=%s\n",
+              ok ? "true" : "false",
+              active_shed,
+              backlog_shed,
+              admission_telemetry_json(active).c_str(),
+              admission_telemetry_json(backlog).c_str());
+  return ok;
+}
+
+static bool run_stalegen_smoke() {
+  StaleGenTelemetry telemetry;
+  int stale_events_emitted = 0;
+
+  auto expect_drop = [&](const char* scenario, StaleGenStage stage) {
+    SessionState session;
+    uint64_t work_generation = density_capture_generation(session);
+    density_bump_generation(session, scenario);
+    bool live = density_generation_live(session,
+                                        work_generation,
+                                        &telemetry,
+                                        stage,
+                                        std::string("stalegen_smoke.") + scenario);
+    if (live) {
+      ++stale_events_emitted;
+      std::printf("STALEGEN_SMOKE_UNEXPECTED_LIVE scenario=%s\n", scenario);
+    }
+    return !live;
+  };
+
+  bool close_while_inflight =
+      expect_drop("close_while_inflight", StaleGenStage::FINALIZE_OUTPUT);
+
+  SessionState queued;
+  uint64_t queued_generation = density_capture_generation(queued);
+  density_bump_generation(queued, "reset_while_queued");
+  bool reset_while_queued = true;
+  for (int i = 0; i < 3; ++i) {
+    bool live = density_generation_live(queued,
+                                        queued_generation,
+                                        &telemetry,
+                                        StaleGenStage::ENCODE,
+                                        "stalegen_smoke.reset_while_queued.item" + std::to_string(i));
+    if (live) {
+      ++stale_events_emitted;
+      reset_while_queued = false;
+    }
+  }
+
+  bool reset_while_finalizer =
+      expect_drop("reset_while_finalizer_owns_runner", StaleGenStage::FINALIZE_OUTPUT);
+  bool final_after_shed =
+      expect_drop("final_after_shed", StaleGenStage::FINALIZE_OUTPUT);
+
+  StaleGenTelemetrySnapshot snapshot = telemetry.snapshot();
+  bool ok = close_while_inflight &&
+            reset_while_queued &&
+            reset_while_finalizer &&
+            final_after_shed &&
+            stale_events_emitted == 0 &&
+            snapshot.drops_at_encode == 3 &&
+            snapshot.drops_at_finalize_output == 3 &&
+            snapshot.total_drops() == 6;
+  std::printf("STALEGEN_SMOKE pass=%s close_while_inflight=%s reset_while_queued=%s "
+              "reset_while_finalizer=%s final_after_shed=%s stale_events_emitted=%d drops=%s\n",
+              ok ? "true" : "false",
+              close_while_inflight ? "PASS" : "FAIL",
+              reset_while_queued ? "PASS" : "FAIL",
+              reset_while_finalizer ? "PASS" : "FAIL",
+              final_after_shed ? "PASS" : "FAIL",
+              stale_events_emitted,
+              stale_gen_telemetry_json(snapshot).c_str());
+  return ok;
+}
+
 int main(int argc, char** argv) {
   try {
     DensityArgs args = parse_density_args(argc, argv);
+    if (args.mode == "admission-smoke") {
+      return run_admission_smoke() ? 0 : 1;
+    }
+    if (args.mode == "stalegen-smoke") {
+      return run_stalegen_smoke() ? 0 : 1;
+    }
     if (args.mode == "density-sweep") {
       const char* previous_cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");
       if (setenv("CUDA_MODULE_LOADING", "EAGER", 1) != 0) {
