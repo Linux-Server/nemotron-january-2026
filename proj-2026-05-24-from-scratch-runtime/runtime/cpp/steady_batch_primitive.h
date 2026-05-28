@@ -408,6 +408,18 @@ class BatchedSteadyLoaderSet {
     sealed_ = true;
   }
 
+  void preload_buckets(const std::vector<int>& buckets) {
+    if (sealed_) return;
+    if (buckets.empty()) throw std::runtime_error("batched steady preload_buckets requires at least one bucket");
+    for (int bucket : buckets) {
+      if (std::find(kBuckets.begin(), kBuckets.end(), bucket) == kBuckets.end()) {
+        throw std::runtime_error("batched steady invalid preload bucket B=" + std::to_string(bucket));
+      }
+      (void)load_bucket(bucket);
+    }
+    sealed_ = true;
+  }
+
   std::vector<BatchedSteadyOutput> run(const std::vector<BatchedSteadyInput>& ready,
                                        c10::cuda::CUDAStream stream) {
     c10::cuda::CUDAStreamGuard stream_guard(stream);

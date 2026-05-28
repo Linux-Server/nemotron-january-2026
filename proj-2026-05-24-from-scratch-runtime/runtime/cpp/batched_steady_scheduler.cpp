@@ -55,14 +55,16 @@ BatchedSteadyScheduler::BatchedSteadyScheduler(BatchedSteadyLoaderSet& loader_se
     throw std::runtime_error("batch steady B_max must be one of {1,2,4}");
   }
   if (policy_.queue_capacity <= 0) policy_.queue_capacity = 16;
-  loader_set_.preload_all();
-  if (!loader_set_.sealed()) throw std::runtime_error("batch steady loader set failed to seal after preload_all()");
-  std::printf("B2_SCHEDULER_CONSTRUCT policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d} "
+  auto buckets = required_buckets();
+  loader_set_.preload_buckets(buckets);
+  if (!loader_set_.sealed()) throw std::runtime_error("batch steady loader set failed to seal after preload_buckets()");
+  std::printf("B2_SCHEDULER_CONSTRUCT policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d,use_b2_bucket:%s} "
               "loaded_buckets=%d dispatcher_stream=%p\n",
               policy_.B_max,
               policy_.window_ms,
               policy_.lone_timeout_ms,
               policy_.queue_capacity,
+              policy_.use_b2_bucket ? "true" : "false",
               loader_set_.loaded_bucket_count(),
               reinterpret_cast<void*>(dispatcher_stream_.stream()));
 }
@@ -146,11 +148,7 @@ void BatchedSteadyScheduler::warmup_buckets() {
   c10::cuda::CUDAGuard device_guard(device_.index());
   c10::cuda::CUDAStreamGuard stream_guard(dispatcher_stream_);
   torch::NoGradGuard no_grad;
-  for (int bucket : {1, 2, 4}) {
-    if (bucket > policy_.B_max && policy_.B_max != 4) {
-      // The loader set is still preloaded for all buckets, but a B_max=1/2 policy
-      // only needs the buckets it can dispatch in this run's measured path.
-    }
+  for (int bucket : required_buckets()) {
     std::vector<BatchedSteadyInput> ready;
     ready.reserve(static_cast<size_t>(bucket));
     auto chunk = torch::zeros({1, 128, 25}, torch::TensorOptions().dtype(torch::kFloat32).device(device_));
@@ -172,6 +170,26 @@ void BatchedSteadyScheduler::warmup_buckets() {
     }
     std::printf("B2_SCHEDULER_WARMUP bucket=%d rows=%zu\n", bucket, ready.size());
   }
+}
+
+std::vector<int> BatchedSteadyScheduler::required_buckets() const {
+  std::vector<int> buckets{1};
+  auto add = [&](int bucket) {
+    if (std::find(buckets.begin(), buckets.end(), bucket) == buckets.end()) {
+      buckets.push_back(bucket);
+    }
+  };
+  if (policy_.B_max >= 2) add(policy_.use_b2_bucket ? 2 : 4);
+  if (policy_.B_max >= 4) add(4);
+  return buckets;
+}
+
+int BatchedSteadyScheduler::dispatch_bucket_for_k(int k) const {
+  int bucket = BatchedSteadyLoaderSet::bucket_for_k_public(k);
+  if (bucket > policy_.B_max) bucket = policy_.B_max;
+  bucket = BatchedSteadyLoaderSet::bucket_for_k_public(bucket);
+  if (!policy_.use_b2_bucket && bucket == 2) return 4;
+  return bucket;
 }
 
 void BatchedSteadyScheduler::record_worker_wait(int64_t cycle_id,
@@ -302,9 +320,7 @@ void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<Qu
   double dispatch_cpu_start_us = current_thread_cpu_us();
   c10::cuda::CUDAStreamGuard stream_guard(dispatcher_stream_);
   int k = static_cast<int>(batch.size());
-  int bucket = BatchedSteadyLoaderSet::bucket_for_k_public(k);
-  if (bucket > policy_.B_max) bucket = policy_.B_max;
-  bucket = BatchedSteadyLoaderSet::bucket_for_k_public(bucket);
+  int bucket = dispatch_bucket_for_k(k);
 
   bool backlog = false;
   {
@@ -485,6 +501,7 @@ void BatchedSteadyScheduler::add_dispatch_telemetry(int bucket,
   if (bucket == 1) ++telemetry_.bucket_b1;
   if (bucket == 2) ++telemetry_.bucket_b2;
   if (bucket == 4) ++telemetry_.bucket_b4;
+  if (k == 2 && bucket == 4) ++telemetry_.k2_padded_to_b4;
   if (k == 3 && bucket == 4) ++telemetry_.k3_padded_to_b4;
   if (k == 4) ++telemetry_.k4;
   if (backlog) ++telemetry_.backlog_gt_bmax;

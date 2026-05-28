@@ -488,6 +488,7 @@ static std::string scheduler_telemetry_json(const BatchedSteadySchedulerTelemetr
       << ",\"B1\":" << telemetry.bucket_b1
       << ",\"B2\":" << telemetry.bucket_b2
       << ",\"B4\":" << telemetry.bucket_b4
+      << ",\"K2_padded_to_B4\":" << telemetry.k2_padded_to_b4
       << ",\"K3_padded_to_B4\":" << telemetry.k3_padded_to_b4
       << ",\"K4\":" << telemetry.k4
       << ",\"backlog_gt_bmax\":" << telemetry.backlog_gt_bmax
@@ -522,6 +523,7 @@ static void merge_scheduler_telemetry(BatchedSteadySchedulerTelemetry& dst,
   dst.bucket_b1 += src.bucket_b1;
   dst.bucket_b2 += src.bucket_b2;
   dst.bucket_b4 += src.bucket_b4;
+  dst.k2_padded_to_b4 += src.k2_padded_to_b4;
   dst.k3_padded_to_b4 += src.k3_padded_to_b4;
   dst.k4 += src.k4;
   dst.backlog_gt_bmax += src.backlog_gt_bmax;
@@ -1283,7 +1285,8 @@ static void run_steady_chunk_density(SessionState& state,
                                      const std::string& prefix,
                                      int chunk_index,
                                      SharedEncFirst& enc_first,
-                                     AOTIModelPackageLoader& enc_steady,
+                                     AOTIModelPackageLoader* enc_steady,
+                                     BatchedSteadyLoaderSet* direct_b1_loader,
                                      torch::jit::Module& joint,
                                      torch::jit::Module& predict,
                                      torch::Device device,
@@ -1406,7 +1409,25 @@ static void run_steady_chunk_density(SessionState& state,
       CUDA_CHECK(cudaEventCreate(&ev_start));
       CUDA_CHECK(cudaEventCreate(&ev_stop));
       CUDA_CHECK(cudaEventRecord(ev_start, stream.stream()));
-      out = run_steady_encoder_stream(enc_steady, chunk, state, stream, explicit_stream, mutex_serialize_run, &runner_wait);
+      if (direct_b1_loader != nullptr) {
+        auto direct_start = Clock::now();
+        std::vector<BatchedSteadyInput> ready{{
+            chunk.contiguous(),
+            state.clc.contiguous(),
+            state.clt.contiguous(),
+            state.clcl.contiguous(),
+            label,
+        }};
+        auto rows = direct_b1_loader->run(ready, stream);
+        if (rows.size() != 1) throw std::runtime_error("density direct B=1 bucket returned wrong row count");
+        out = std::move(rows[0].tensors);
+        runner_wait = elapsed_us(direct_start, Clock::now()) / 1000.0;
+      } else {
+        if (enc_steady == nullptr) {
+          throw std::runtime_error("density steady direct B=1 path requires enc_steady loader");
+        }
+        out = run_steady_encoder_stream(*enc_steady, chunk, state, stream, explicit_stream, mutex_serialize_run, &runner_wait);
+      }
       CUDA_CHECK(cudaEventRecord(ev_stop, stream.stream()));
       has_aoti_event = true;
     }
@@ -1871,7 +1892,8 @@ static bool density_event_divergences_gate_pass(int event_divergences) {
 
 static RowReplayResult replay_row_density(int utt,
                                           WorkerContext& ctx,
-                                          AOTIModelPackageLoader& enc_steady,
+                                          AOTIModelPackageLoader* enc_steady,
+                                          BatchedSteadyLoaderSet* direct_b1_loader,
                                           FinalizeBucketLoaderPool& finalize_loaders,
                                           torch::Device device,
                                           const Tokenizer& tokenizer,
@@ -1898,6 +1920,7 @@ static RowReplayResult replay_row_density(int utt,
                                chunk,
                                *ctx.enc_first,
                                enc_steady,
+                               direct_b1_loader,
                                ctx.joint,
                                ctx.predict,
                                device,
@@ -1995,7 +2018,8 @@ static std::vector<RowReplayResult> build_serial_reference(const DensityArgs& ar
   for (int utt = 0; utt < rows; ++utt) {
     auto result = replay_row_density(utt,
                                      *ctx,
-                                     enc_steady,
+                                     &enc_steady,
+                                     nullptr,
                                      finalize_loaders,
                                      device,
                                      tokenizer,
@@ -2217,7 +2241,8 @@ static B1PreparedRow prepare_b1_row_until_target(const B1RowSpec& spec,
                              prefix,
                              chunk,
                              *ctx.enc_first,
-                             enc_steady,
+                             &enc_steady,
+                             nullptr,
                              ctx.joint,
                              ctx.predict,
                              device,
@@ -2284,7 +2309,8 @@ static RowReplayResult finish_b1_row_from_target(B1PreparedRow& prepared,
                                prefix,
                                chunk,
                                *ctx.enc_first,
-                               enc_steady,
+                               &enc_steady,
+                               nullptr,
                                ctx.joint,
                                ctx.predict,
                                device,
@@ -2717,6 +2743,12 @@ static bool compare_b2_token_vector(const std::vector<int64_t>& got,
   return false;
 }
 
+static int expected_scheduler_warmup_runs(const BatchedSteadySchedulerPolicy& policy) {
+  if (policy.B_max <= 1) return 1;
+  if (policy.B_max == 4 && policy.use_b2_bucket) return 3;
+  return 2;
+}
+
 static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
                                      torch::Device device,
                                      const std::shared_ptr<torch::jit::Module>& shared_bundle,
@@ -2740,7 +2772,7 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
   for (const auto& v : assignments) result.rows += static_cast<int>(v.size());
   if (result.workers <= 0 || result.rows <= 0) throw std::runtime_error("B2 T1 case has no work: " + case_name);
   std::printf("B2_T1_CASE case=%s START workers=%d rows=%d forced_barrier=%s stagger_ms=%.3f "
-              "policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d}\n",
+              "policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d,use_b2_bucket:%s}\n",
               case_name.c_str(),
               result.workers,
               result.rows,
@@ -2749,7 +2781,8 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
               policy.B_max,
               policy.window_ms,
               policy.lone_timeout_ms,
-              policy.queue_capacity);
+              policy.queue_capacity,
+              policy.use_b2_bucket ? "true" : "false");
 
   BatchedSteadyScheduler scheduler(batched_steady, device, policy);
   scheduler.warmup_buckets();
@@ -2781,7 +2814,8 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
         for (int utt : assignments[static_cast<size_t>(worker)]) {
           auto row = replay_row_density(utt,
                                         *contexts[worker],
-                                        enc_steady,
+                                        &enc_steady,
+                                        nullptr,
                                         finalize_loaders,
                                         device,
                                         tokenizer,
@@ -2847,16 +2881,20 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
     result.max_cache_t_diff = diff_stats.max_cache_t_diff;
   }
 
-  bool buckets_ok = result.telemetry.warmup_runs == 3;
+  bool buckets_ok = result.telemetry.warmup_runs == expected_scheduler_warmup_runs(policy);
   if (require_b1) buckets_ok = buckets_ok && result.telemetry.bucket_b1 > 0;
-  if (require_b2) buckets_ok = buckets_ok && result.telemetry.bucket_b2 > 0;
+  if (require_b2) {
+    buckets_ok = buckets_ok && (policy.use_b2_bucket ? result.telemetry.bucket_b2 > 0
+                                                     : result.telemetry.k2_padded_to_b4 > 0);
+  }
   if (require_k3_padded) buckets_ok = buckets_ok && result.telemetry.k3_padded_to_b4 > 0;
   if (require_bmax_full_batches) {
     int expected_full = std::max(1, result.workers / std::max(1, policy.B_max));
     if (policy.B_max == 4) {
       buckets_ok = buckets_ok && result.telemetry.k4 >= expected_full;
     } else if (policy.B_max == 2) {
-      buckets_ok = buckets_ok && result.telemetry.bucket_b2 >= expected_full;
+      buckets_ok = buckets_ok && (policy.use_b2_bucket ? result.telemetry.bucket_b2 >= expected_full
+                                                       : result.telemetry.k2_padded_to_b4 >= expected_full);
     } else {
       buckets_ok = buckets_ok && result.telemetry.bucket_b1 >= expected_full;
     }
@@ -2869,12 +2907,13 @@ static B2T1CaseResult run_b2_t1_case(const DensityArgs& args,
                 result.cache_len_mismatches == 0 &&
                 buckets_ok;
   std::printf("B2_T1_BUCKET case=%s warmup_runs=%lld B1=%lld B2=%lld B4=%lld "
-              "K3_padded_to_B4=%lld K4=%lld backlog_gt_bmax=%lld enqueued=%lld completed=%lld buckets_ok=%s\n",
+              "K2_padded_to_B4=%lld K3_padded_to_B4=%lld K4=%lld backlog_gt_bmax=%lld enqueued=%lld completed=%lld buckets_ok=%s\n",
               case_name.c_str(),
               static_cast<long long>(result.telemetry.warmup_runs),
               static_cast<long long>(result.telemetry.bucket_b1),
               static_cast<long long>(result.telemetry.bucket_b2),
               static_cast<long long>(result.telemetry.bucket_b4),
+              static_cast<long long>(result.telemetry.k2_padded_to_b4),
               static_cast<long long>(result.telemetry.k3_padded_to_b4),
               static_cast<long long>(result.telemetry.k4),
               static_cast<long long>(result.telemetry.backlog_gt_bmax),
@@ -2967,7 +3006,8 @@ static bool run_b2_t1_gate(const DensityArgs& args,
                           b2_finalize_loaders,
                           b2_shared_enc_first,
                           reference,
-                          "multi_stream_forced_K2_B2",
+                          base_policy.use_b2_bucket ? "multi_stream_forced_K2_B2"
+                                                    : "multi_stream_forced_K2_padded_B4",
                           {{forced_utt}, {forced_utt}},
                           base_policy,
                           true,
@@ -3176,7 +3216,8 @@ static CorrectnessResult run_correctness_gate_mode(const DensityArgs& args,
         for (int utt = 0; utt < result.rows; ++utt) {
           auto row = replay_row_density(utt,
                                         *contexts[worker],
-                                        enc_steady,
+                                        &enc_steady,
+                                        nullptr,
                                         finalize_loaders,
                                         device,
                                         tokenizer,
@@ -4197,13 +4238,15 @@ struct FinalizeGateResult {
 
 static void prepare_finalize_parent(const FinalizeCase& fc,
                                     WorkerContext& ctx,
-                                    AOTIModelPackageLoader& enc_steady,
+                                    AOTIModelPackageLoader* enc_steady,
+                                    BatchedSteadyLoaderSet* direct_b1_loader,
                                     torch::Device device,
                                     const Tokenizer& tokenizer,
                                     bool explicit_stream,
                                     bool mutex_serialize_run,
                                     SessionState& session,
-                                    std::vector<EmittedEvent>& events) {
+                                    std::vector<EmittedEvent>& events,
+                                    BatchedSteadyScheduler* scheduler = nullptr) {
   reset_session(session, ctx.bundle, device);
   std::string prefix = "utt" + std::to_string(fc.utt);
   int64_t num_steady = scalar_i64(utt_tensor(ctx.bundle, fc.utt, "num_steady"));
@@ -4215,6 +4258,7 @@ static void prepare_finalize_parent(const FinalizeCase& fc,
                              chunk,
                              *ctx.enc_first,
                              enc_steady,
+                             direct_b1_loader,
                              ctx.joint,
                              ctx.predict,
                              device,
@@ -4225,7 +4269,7 @@ static void prepare_finalize_parent(const FinalizeCase& fc,
                              mutex_serialize_run,
                              &ignored,
                              "density.finalize_prep.utt" + std::to_string(fc.utt) + ".chunk" + std::to_string(chunk),
-                             nullptr,
+                             scheduler,
                              nullptr,
                              nullptr,
                              nullptr);
@@ -4288,7 +4332,8 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
         std::vector<EmittedEvent> events;
         prepare_finalize_parent(cases[worker],
                                 *contexts[worker],
-                                enc_steady,
+                                &enc_steady,
+                                nullptr,
                                 device,
                                 tokenizer,
                                 true,
@@ -4594,12 +4639,14 @@ static int pick_assigned_steady_warmup_utt(torch::jit::Module& bundle,
 
 static void warm_steady_encoder_once_density(int utt,
                                              WorkerContext& ctx,
-                                             AOTIModelPackageLoader& enc_steady,
+                                             AOTIModelPackageLoader* enc_steady,
+                                             BatchedSteadyLoaderSet* direct_b1_loader,
                                              torch::Device device,
                                              const Tokenizer& tokenizer,
                                              bool explicit_stream,
                                              bool mutex_serialize_run,
-                                             const std::string& label) {
+                                             const std::string& label,
+                                             BatchedSteadyScheduler* scheduler = nullptr) {
   int64_t num_steady = scalar_i64(utt_tensor(ctx.bundle, utt, "num_steady"));
   if (num_steady < 2) {
     throw std::runtime_error("density steady warmup requires an utterance with at least two steady chunks");
@@ -4615,6 +4662,7 @@ static void warm_steady_encoder_once_density(int utt,
                              chunk,
                              *ctx.enc_first,
                              enc_steady,
+                             direct_b1_loader,
                              ctx.joint,
                              ctx.predict,
                              device,
@@ -4625,7 +4673,7 @@ static void warm_steady_encoder_once_density(int utt,
                              mutex_serialize_run,
                              nullptr,
                              label + ".chunk" + std::to_string(chunk),
-                             nullptr,
+                             scheduler,
                              nullptr,
                              nullptr,
                              nullptr);
@@ -4692,6 +4740,13 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   auto bucket_reps = representative_finalize_cases_for_assignments(assignment_bundle, assigned);
   auto needed_buckets = finalize_keys_from_representatives(bucket_reps);
   auto worker_bucket_reps = representative_finalize_cases_by_worker(assignment_bundle, assigned);
+  const bool batch_steady_on = density_batch_steady_enabled_effective(args);
+  std::string steady_batch_dir = resolve_steady_batch_dir(args);
+  BatchedSteadySchedulerPolicy policy;
+  if (batch_steady_on) {
+    policy = density_batch_policy_effective(args, result.workers);
+    (void)run_b2_a1_parity_check(args, device, steady_batch_dir, shared_bundle, rows_total);
+  }
 
   std::printf("=== DENSITY 1a RUN START: N=%d workers=%d steady_num_runners=%d finalize_num_runners=%d "
               "sessions=%d rows_total=%d finalize_samples_requested=%d min_finalize_p95_samples=%d "
@@ -4710,18 +4765,34 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   MemorySampler mem;
   mem.start();
   result.used_before_bytes = gpu_used_bytes();
-  auto enc_steady_load_start = Clock::now();
-  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, result.num_runners, -1);
-  log_density_phase_timing(n, "enc_steady-load", enc_steady_load_start);
+  AOTIModelPackageLoader* enc_steady = nullptr;
+  std::unique_ptr<BatchedSteadyLoaderSet> direct_b1_loader_owner;
+  BatchedSteadyLoaderSet* direct_b1_loader = nullptr;
+  if (!batch_steady_on) {
+    auto direct_b1_load_start = Clock::now();
+    direct_b1_loader_owner = std::make_unique<BatchedSteadyLoaderSet>(
+        steady_batch_dir,
+        args.dir + "/finalize_shared_weights.ts",
+        device,
+        result.num_runners,
+        "density_sweep_off_direct_b1_bucket");
+    direct_b1_loader_owner->preload_buckets({1});
+    direct_b1_loader = direct_b1_loader_owner.get();
+    log_density_phase_timing(n, "direct-b1-bucket-load", direct_b1_load_start);
+    std::printf("B2_B1_SOURCE density-sweep N=%d OFF direct path uses %s/enc_steady_aoti_b1.pt2; "
+                "production enc_steady_aoti.pt2 is not loaded\n",
+                n,
+                steady_batch_dir.c_str());
+  } else {
+    std::printf("B2_SCHEDULER_ON density-sweep N=%d skip production enc_steady_aoti.pt2; "
+                "scheduler B=1 bucket handles continuation B=1\n",
+                n);
+  }
 
   std::unique_ptr<BatchedSteadyLoaderSet> batched_steady_loader;
   std::unique_ptr<BatchedSteadyScheduler> scheduler_owner;
   BatchedSteadyScheduler* scheduler = nullptr;
-  const bool batch_steady_on = density_batch_steady_enabled_effective(args);
   if (batch_steady_on) {
-    std::string steady_batch_dir = resolve_steady_batch_dir(args);
-    auto policy = density_batch_policy_effective(args, result.workers);
-    (void)run_b2_a1_parity_check(args, device, steady_batch_dir, shared_bundle, rows_total);
     batched_steady_loader = std::make_unique<BatchedSteadyLoaderSet>(
         steady_batch_dir,
         args.dir + "/finalize_shared_weights.ts",
@@ -4733,13 +4804,14 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
     scheduler_owner->start();
     scheduler = scheduler_owner.get();
     auto telem = scheduler->telemetry_snapshot();
-    std::printf("B2_SCHEDULER_ON density-sweep N=%d warmup_runs=%lld policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d}\n",
+    std::printf("B2_SCHEDULER_ON density-sweep N=%d warmup_runs=%lld policy={B_max:%d,window_ms:%d,lone_timeout_ms:%d,queue_capacity:%d,use_b2_bucket:%s}\n",
                 n,
                 static_cast<long long>(telem.warmup_runs),
                 policy.B_max,
                 policy.window_ms,
                 policy.lone_timeout_ms,
-                policy.queue_capacity);
+                policy.queue_capacity,
+                policy.use_b2_bucket ? "true" : "false");
   } else {
     if (scheduler != nullptr) throw std::runtime_error("batch steady OFF but scheduler pointer is non-null");
   }
@@ -4828,12 +4900,14 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
           warm_steady_encoder_once_density(warm_utt,
                                            *contexts[worker],
                                            enc_steady,
+                                           direct_b1_loader,
                                            device,
                                            tokenizer,
                                            result.explicit_stream,
                                            args.mutex_serialize_run,
                                            "density.1a.warmup.steady.worker" + std::to_string(worker) +
-                                               ".utt" + std::to_string(warm_utt));
+                                               ".utt" + std::to_string(warm_utt),
+                                           scheduler);
           warmup_steady_done[static_cast<size_t>(worker)] = 1;
 
           for (const auto& kv : worker_bucket_reps[static_cast<size_t>(worker)]) {
@@ -4843,12 +4917,14 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
             prepare_finalize_parent(fc,
                                     *contexts[worker],
                                     enc_steady,
+                                    direct_b1_loader,
                                     device,
                                     tokenizer,
                                     result.explicit_stream,
                                     args.mutex_serialize_run,
                                     warm_session,
-                                    warm_events);
+                                    warm_events,
+                                    scheduler);
             std::string warm_label = "density.1a.warmup.worker" + std::to_string(worker) +
                                      ".finalize_bucket.drop" + std::to_string(fc.drop) +
                                      ".T" + std::to_string(fc.T) +
@@ -4914,6 +4990,7 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                      chunk,
                                      *contexts[worker]->enc_first,
                                      enc_steady,
+                                     direct_b1_loader,
                                      contexts[worker]->joint,
                                      contexts[worker]->predict,
                                      device,
@@ -5053,15 +5130,26 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
        << ",\"cuda_module_loading\":" << json_quote(cuda_module_loading ? cuda_module_loading : "")
        << ",\"stream_mode\":\"" << stream_mode_label(result.explicit_stream, args.mutex_serialize_run) << "\""
        << ",\"topology\":\"shared_steady_loader_shared_locked_enc_first_per_thread_session_handles_explicit_streams_capped_finalize_pool\""
+       << ",\"steady_b1_source\":"
+       << json_quote(scheduler != nullptr ? "steady_batch_scheduler"
+                                           : (direct_b1_loader != nullptr ? "steady_batch_b1_direct"
+                                                                          : "production_enc_steady"))
+       << ",\"steady_b1_byte_contract\":"
+       << json_quote(direct_b1_loader != nullptr
+                         ? "A1 outcome B: enc_steady_aoti.pt2 and enc_steady_aoti_b1.pt2 are tensor-identical but SHA-different"
+                         : "")
        << ",\"batch_steady_on\":" << json_bool(scheduler != nullptr)
        << ",\"batch_policy\":{\"B_max\":" << (scheduler != nullptr ? scheduler->policy().B_max : 0)
        << ",\"window_ms\":" << (scheduler != nullptr ? scheduler->policy().window_ms : 0)
        << ",\"lone_timeout_ms\":" << (scheduler != nullptr ? scheduler->policy().lone_timeout_ms : 0)
-       << ",\"queue_capacity\":" << (scheduler != nullptr ? scheduler->policy().queue_capacity : 0) << "}"
+       << ",\"queue_capacity\":" << (scheduler != nullptr ? scheduler->policy().queue_capacity : 0)
+       << ",\"use_b2_bucket\":"
+       << json_bool(scheduler != nullptr && scheduler->policy().use_b2_bucket) << "}"
        << ",\"batch_telemetry\":{\"warmup_runs\":" << batch_telemetry.warmup_runs
        << ",\"B1\":" << batch_telemetry.bucket_b1
        << ",\"B2\":" << batch_telemetry.bucket_b2
        << ",\"B4\":" << batch_telemetry.bucket_b4
+       << ",\"K2_padded_to_B4\":" << batch_telemetry.k2_padded_to_b4
        << ",\"K3_padded_to_B4\":" << batch_telemetry.k3_padded_to_b4
        << ",\"K4\":" << batch_telemetry.k4
        << ",\"backlog_gt_bmax\":" << batch_telemetry.backlog_gt_bmax << "}";

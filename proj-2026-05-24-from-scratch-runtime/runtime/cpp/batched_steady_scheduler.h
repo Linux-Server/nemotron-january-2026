@@ -25,6 +25,7 @@ struct BatchedSteadySchedulerPolicy {
   int lone_timeout_ms = 0;
   int B_max = 4;
   int queue_capacity = 16;
+  bool use_b2_bucket = false;
 };
 
 struct EnqueueRequest {
@@ -54,6 +55,7 @@ struct BatchedSteadySchedulerTelemetry {
   int64_t bucket_b1 = 0;
   int64_t bucket_b2 = 0;
   int64_t bucket_b4 = 0;
+  int64_t k2_padded_to_b4 = 0;
   int64_t k3_padded_to_b4 = 0;
   int64_t k4 = 0;
   int64_t backlog_gt_bmax = 0;
@@ -115,6 +117,8 @@ class BatchedSteadyScheduler {
   };
 
   void dispatcher_loop();
+  std::vector<int> required_buckets() const;
+  int dispatch_bucket_for_k(int k) const;
   std::vector<std::shared_ptr<QueueItem>> gather_batch();
   void dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch);
   std::vector<at::Tensor> pack_into_scratch(const std::vector<BatchedSteadyInput>& ready, int bucket);
