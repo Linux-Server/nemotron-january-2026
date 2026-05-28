@@ -4,13 +4,17 @@
 # Run:
 #   deploy/smoke_local.sh
 #
-# This script takes no arguments and runs four independent checks:
+# This script takes no arguments and runs five independent checks:
 #   1. ec2-bench/local_lb.py leastconn spread plus shed-on-full behavior using
 #      two deploy/_smoke_backend.py echo backends and five held TCP clients.
-#   2. deploy/gen_haproxy.py syntax under "haproxy -c" for a two-box config.
-#   3. Optional real-HAProxy health-check behavior using deploy/_smoke_backend.py
+#   2. deploy/gen_haproxy.py FD-vs-maxconn invariant: parses the rendered cfg
+#      for both production and --local-test modes and asserts
+#      ulimit-n >= 2 * global maxconn + 42 (the HAProxy 2.x runtime constraint
+#      that haproxy -c does NOT check; caught live on g6e.4xlarge 2026-05-28).
+#   3. deploy/gen_haproxy.py syntax under "haproxy -c" for a two-box config.
+#   4. Optional real-HAProxy health-check behavior using deploy/_smoke_backend.py
 #      HTTP mode on 127.0.0.1:8080 and deploy/_smoke_haproxy_check.py.
-#   4. deploy/drain.sh fixture parsing against deploy/_drain_fixtures/*.csv via
+#   5. deploy/drain.sh fixture parsing against deploy/_drain_fixtures/*.csv via
 #      HAPROXY_SOCK=/dev/stdin.
 #
 # SKIP interpretation:
@@ -254,6 +258,53 @@ PY
   rm -rf "$tmpdir"
 }
 
+check_generator_fd_invariant() {
+  # HAProxy requires ulimit-n >= 2 * global maxconn + 42 (per HAProxy 2.x runtime).
+  # haproxy -c -f validates SYNTAX, not this RUNTIME FD constraint, so the
+  # generator can silently emit configs that pass -c but fail at startup with
+  # "[ALERT] FD limit (X) too low for maxconn=Y/maxsock=Z" — caught live
+  # 2026-05-28 on g6e.4xlarge. This check parses gen_haproxy.py output and
+  # asserts the invariant for both production and --local-test modes.
+  local check='Generator FD-vs-maxconn invariant'
+  local tmpdir
+  local rc
+
+  tmpdir=$(mktemp -d)
+  trap "rm -rf '$tmpdir'" RETURN
+
+  local prod_rc local_rc
+  (cd "$ROOT" && "$PYTHON_BIN" deploy/gen_haproxy.py --boxes 10.0.1.10,10.0.1.11 -o "$tmpdir/prod.cfg" >/dev/null 2>&1)
+  prod_rc=$?
+  (cd "$ROOT" && "$PYTHON_BIN" deploy/gen_haproxy.py --local-test --stats-socket "$tmpdir/local.sock" --boxes 127.0.0.1 -o "$tmpdir/local.cfg" >/dev/null 2>&1)
+  local_rc=$?
+  if [[ $prod_rc -ne 0 || $local_rc -ne 0 ]]; then
+    fail_check "$check" "gen_haproxy.py failed: prod_rc=$prod_rc local_rc=$local_rc"
+    return
+  fi
+
+  local result
+  result=$("$PYTHON_BIN" - "$tmpdir/prod.cfg" "$tmpdir/local.cfg" <<'PY'
+import re, sys
+for path in sys.argv[1:]:
+    txt = open(path).read()
+    mc = int(re.search(r'^    maxconn (\d+)', txt, re.M).group(1))
+    ul = int(re.search(r'^    ulimit-n (\d+)', txt, re.M).group(1))
+    need = 2 * mc + 42
+    ok = ul >= need
+    label = path.rsplit('/', 1)[-1]
+    print(f'{label}: maxconn={mc} ulimit-n={ul} need>={need} OK={ok}')
+    if not ok:
+        sys.exit(1)
+PY
+  )
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    pass_check "$check" "$(echo "$result" | tr '\n' '; ' | sed 's/; $//')"
+  else
+    fail_check "$check" "$result"
+  fi
+}
+
 check_generator_syntax() {
   local check='Generator syntax (haproxy -c)'
   local tmpdir
@@ -397,6 +448,7 @@ main() {
   cd "$ROOT" || exit 1
 
   check_local_lb
+  check_generator_fd_invariant
   check_generator_syntax
   check_haproxy_health
   check_drain_fixtures

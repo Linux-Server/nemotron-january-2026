@@ -112,6 +112,27 @@ DEFAULT_STATS_SOCKET = "/run/haproxy/admin.sock"
 SERVER_PORT = 8080
 NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# Production-mode global maxconn (the LB ceiling, not per-backend).
+# 100000 is overscale for the realistic Phase-1 fleet (N boxes x ~20 maxconn)
+# but matches HAProxy convention and leaves headroom for connection storms.
+GLOBAL_MAXCONN_PROD = 100000
+# --local-test global maxconn: keep small so the FD constraint stays portable
+# (a laptop's default soft `nofile` may be 1024; 4096 ulimit-n supports
+# maxconn up to ~2025 per the HAProxy 2*maxconn+42 formula).
+GLOBAL_MAXCONN_LOCAL = 1000
+
+
+def required_ulimit_n(global_maxconn: int) -> int:
+    """HAProxy requires file descriptors >= 2 * maxconn + 42.
+
+    Live-validation 2026-05-28 caught the original hardcoded ulimit-n 200000
+    vs. maxconn 100000 mismatch:
+      [ALERT] FD limit (200000) too low for maxconn=100000/maxsock=200042.
+    We derive ulimit-n from maxconn with a small buffer so the two stay
+    consistent forever.
+    """
+    return 2 * global_maxconn + 100
+
 
 @dataclass(frozen=True)
 class Backend:
@@ -427,7 +448,8 @@ def render_config(
     generated_at = generated_at.replace("+00:00", "Z")
     socket_mode = "600" if local_test else "660"
     log_line = "log stdout format raw daemon" if local_test else "log /dev/log local0"
-    ulimit = "4096" if local_test else "200000"
+    global_maxconn = GLOBAL_MAXCONN_LOCAL if local_test else GLOBAL_MAXCONN_PROD
+    ulimit = str(required_ulimit_n(global_maxconn))
     bind_port = tls_port if tls_pem else front_port
     bind_suffix = f" ssl crt {tls_pem}" if tls_pem else ""
     fleet_inline = ", ".join(f"{backend.name}={backend.ip}" for backend in backends)
@@ -458,7 +480,7 @@ def render_config(
             "# -----------------------------------------------------------------------------",
             "",
             "global",
-            "    maxconn 100000",
+            f"    maxconn {global_maxconn}",
             f"    stats socket {stats_socket} mode {socket_mode} level admin",
         ]
     )
