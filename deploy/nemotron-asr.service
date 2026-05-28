@@ -43,16 +43,20 @@ After=network-online.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=%h/nemotron
+WorkingDirectory=/home/ubuntu/nemotron
 
 # Inline defaults keep the unit bootable without /etc/nemotron/asr.env.
-# Use %h here; systemd Environment= does not shell-expand $HOME.
-Environment=HF_HOME=%h/hf NEMOTRON_VENV=%h/nemo-venv NEMOTRON_APP_DIR=%h/nemotron NEMOTRON_ADMISSION_MAX_BACKLOG=12
+# Hardcoded /home/ubuntu — systemd %h resolves to /root for system-mode units
+# regardless of User=ubuntu (per `man systemd.unit`: "In case of the system
+# manager this resolves to /root"). Live-validation 2026-05-28 caught this:
+# %h-based units fail with 203/EXEC because the launcher path resolves to
+# /root/nemotron/... If you must run as a different user, edit these paths.
+Environment=HF_HOME=/home/ubuntu/hf NEMOTRON_VENV=/home/ubuntu/nemo-venv NEMOTRON_APP_DIR=/home/ubuntu/nemotron NEMOTRON_ADMISSION_MAX_BACKLOG=12
 
 # Optional operator overrides. The leading "-" tolerates a missing file.
 EnvironmentFile=-/etc/nemotron/asr.env
 
-ExecStart=%h/nemotron/deploy/launch_single.sh
+ExecStart=/home/ubuntu/nemotron/deploy/launch_single.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=120

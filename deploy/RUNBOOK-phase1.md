@@ -1138,7 +1138,7 @@ sudo install -d -m 0755 /etc/systemd/system/nemotron-asr.service.d
 sudo tee /etc/systemd/system/nemotron-asr.service.d/10-multiproc.conf >/dev/null <<'EOF'
 [Service]
 ExecStart=
-ExecStart=%h/nemotron/deploy/launch_multiproc.sh
+ExecStart=/home/ubuntu/nemotron/deploy/launch_multiproc.sh
 EOF
 sudo systemctl daemon-reload
 sudo systemctl restart nemotron-asr
