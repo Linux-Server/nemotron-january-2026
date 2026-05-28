@@ -28,6 +28,64 @@ FORCE_S3_DOWNLOAD=1 ./run_l40s_density.sh
 DENSITY_TREAT_NO_PASS_AS_FAILURE=1 ./run_l40s_density.sh
 ```
 
+## Profiling on the L40S (ncu + nsys) — the SM-work attribution
+
+Profile **on the L40S target** (arch-specific; the 5090 wouldn't transfer). nsys gives the contention *timeline*
+(launch gaps / GPU-idle% / stream overlap under load → launch-bound vs compute-bound); ncu gives the per-kernel
+*roofline* (occupancy / DRAM throughput → is the steady encoder mem-BW-bound?).
+
+### One-time tooling setup (verified 2026-05-27 on the g6e DL AMI)
+```bash
+# ncu: already present at /usr/local/cuda/bin/ncu, BUT the driver restricts perf counters to root
+#   (cat /proc/driver/nvidia/params | grep RmProfilingAdminOnly  -> 1)  => run ncu via sudo.
+# nsys: install from the configured CUDA apt repo (pick a version matching the runtime's CUDA 12.8):
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nsight-systems-2024.6.2
+sudo chmod o+rx /opt/nvidia /opt/nvidia/nsight-systems          # the install leaves /opt/nvidia/nsight-systems as drwx------; this lets non-root run nsys
+sudo ln -sf /opt/nvidia/nsight-systems/2024.6.2/target-linux-x64/nsys /usr/local/bin/nsys
+nsys --version    # NVIDIA Nsight Systems version 2024.6.2...
+```
+
+### The env (REQUIRED — the cudart-12-vs-13 fix)
+`density_main`'s RUNPATH points at cuda-13 (cudart-13), but torch 2.8.0+cu128 needs **cudart-12** (bundled in the
+venv). A bare profiler invocation hits `libcudart.so.12 => not found`. Set `LD_LIBRARY_PATH` to the venv torch/lib +
+the venv `nvidia/*/lib` (where cudart-12 lives) + cuda-13/lib64:
+```bash
+cd ~/density
+LD=/home/ubuntu/torch280-sm89-venv/lib/python3.10/site-packages
+export LD_LIBRARY_PATH="$LD/torch/lib:$(ls -d $LD/nvidia/*/lib | tr '\n' ':')/usr/local/cuda-13.0/lib64"
+BIN=./cpp/build_l40s_density/density_main
+# (both profiling commands below also set SELF_CHECK_ATOL=0.2 + DENSITY_GOLD_EVENTS_TOLERANT=1 inline — cross-arch tolerance)
+```
+
+### nsys — multi-stream timeline (launch-bound vs compute-bound at the knee)
+Low-overhead (CUPTI); safe to run on a real multi-stream sweep. Use a SHORT config (`--density-sessions-per-worker 2`)
+and skip the serial-oracle/warmup setup with `--delay` so the trace captures the **measured gate** (the setup is
+~250s = oracle ~176s + warmup ~66s; tune `--delay` from the run's `DENSITY_PHASE_TIMING` lines):
+```bash
+LD_LIBRARY_PATH="$LD_LIBRARY_PATH" SELF_CHECK_ATOL=0.2 DENSITY_GOLD_EVENTS_TOLERANT=1 \
+  nsys profile --trace=cuda --sample=none --force-overwrite=true --delay=255 --duration=45 \
+    -o ~/density/nsys_n38 \
+    "$BIN" --n-values 38 --density-sessions-per-worker 2 artifacts_sm89
+# summarize without the GUI:
+nsys stats --report cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum ~/density/nsys_n38.nsys-rep
+# GPU-idle% / launch gaps: inspect the kernel timeline gaps in the report (or `nsys stats --report cuda_gpu_trace`).
+```
+
+### ncu — single-stream roofline (is the encoder mem-BW-bound?)
+ncu **serializes + replays** each profiled kernel → run **single-stream (N=1)** and cap with `--launch-count`; never
+run ncu on a multi-stream sweep. Needs **root** (perf counters), and `sudo` drops env → pass it with `sudo env`:
+```bash
+sudo env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" SELF_CHECK_ATOL=0.2 DENSITY_GOLD_EVENTS_TOLERANT=1 \
+  /usr/local/cuda/bin/ncu --set roofline --launch-count 40 --target-processes all --force-overwrite \
+    -o ~/density/ncu_enc \
+    "$BIN" --n-values 1 --density-sessions-per-worker 1 artifacts_sm89
+ncu -i ~/density/ncu_enc.ncu-rep --page details --csv | head   # occupancy, DRAM throughput, SOL%, roofline
+```
+
+**Notes:** if `RmProfilingAdminOnly` is `0` (driver flag `NVreg_RestrictProfilingToAdminUsers=0` + reboot), ncu runs
+without sudo. The `--delay/--duration` window must land in the measured gate — confirm against `DENSITY_PHASE_TIMING
+phase=measured-gate`. Keep autotune OFF (same as the sweep). Both tools profile the *same* binary the gate uses.
+
 ## Script Flow
 
 1. Installs/checks DL-AMI dependencies: `build-essential`, `cmake`, `ninja-build`, `python3-dev`, `python3-venv`,

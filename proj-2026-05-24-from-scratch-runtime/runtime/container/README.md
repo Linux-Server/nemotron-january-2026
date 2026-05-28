@@ -42,6 +42,24 @@ Smoke (`docker run --rm --gpus all nemotron-aoti:cu128 ...`):
 The image has **torch + nvcc + AOTInductor**, NOT nemo (model export/fixtures are produced on the host with nemo;
 the container consumes the exported `.pt2`/`.ts` for AOTI compilation + kernel builds).
 
+## CANONICAL build + run of the streaming density runtime (`density_main`)
+**Always build AND run in this container** — the host (Ubuntu 25.04 / glibc 2.41) can't build, and its torch
+(pyenv 2.10.x) is ABI-incompatible with the **2.8.0** the EPs + binaries use (every `cpp/build_*/density_main`
+has RUNPATH = the container's `/usr/local/.../torch`, so it only runs in here). `enter.sh` auto-drops `-it` when
+not on a TTY, so it is scriptable. Canonical settings: `TORCH_ROOT=/usr/local/lib/python3.12/dist-packages/torch`
+(torch 2.8.0+cu128, sm_120), `CUDA_ROOT` defaults to `/usr/local/cuda-12.8`; `density_main` is **pure C++** (links
+prebuilt libtorch, no nvcc).
+```bash
+# build (from runtime/)
+./container/enter.sh bash -lc 'cmake -S cpp -B cpp/build_density \
+  -DTORCH_ROOT=/usr/local/lib/python3.12/dist-packages/torch -DCMAKE_BUILD_TYPE=Release \
+  && cmake --build cpp/build_density -j --target density_main'
+# run a 5090 density sweep (sm_120 EPs in artifacts_at_sm120/; 8 sessions/worker matches the L40S gate)
+./container/enter.sh bash -lc './cpp/build_density/density_main --mode density-sweep \
+  --n-values 37 --density-chunk-period-ms 160 --density-sessions-per-worker 8 artifacts_at_sm120'
+```
+The L40S/g6e analog is the sm_89 build in `run_l40s_density.sh` (a torch-2.8.0 sm_89 venv) — same torch, different arch.
+
 ## What it's for (next steps)
 1. **1.2b-wire — byte-exact C++ encoder via AOTInductor**: AOTI-compile the T2a `torch.export` steady encoder
    (`runtime/export_t2a.py` → `enc_steady_t2a.pt2`) to a `.so` (`torch._inductor.aot_compile`), load via the AOTI C++

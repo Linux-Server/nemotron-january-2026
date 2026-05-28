@@ -8,6 +8,25 @@ Project directory: /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from
 > correctness-before-performance gate are pinned. **Reviewer sign-off: GO-to-build Step 1 (Step-0 kill-gates
 > first), conditional on the edits below.**
 
+> **v3 (2026-05-27) — STEADY-BATCH-0 PASSED → the batched-steady encoder is the GREEN-LIT density build.** The L40S
+> profiling (nsys+ncu, paired Codex+Opus) inverted the framing: the N=36 knee is **DRAM-bandwidth-bound
+> weight-streaming in the STEADY encoder** (88% GEMM, 72% DRAM, 15% occupancy = a BW-wall, NOT idle SMs — ~1.4
+> concurrent encoder GEMMs already saturate HBM), and the **only** lever that moves the byte floor is cross-stream
+> batching (load the weight once, reuse across B streams). Both kill-gate conjuncts then PASSED:
+> **(1) OPPORTUNITY** — steady B-fill is real (mean B 2.7/3.5 at N=36, 3.6/4.3 at N=44, 3.8/4.4 at N=56, for 8/12ms
+> windows; refutes the prior "batching dead" sim, which modeled *finalize* bursts not the *steady* 160ms cadence);
+> **(2) SPEEDUP** — per-row steady GPU time B=1 5.11ms → B=2 3.18ms (**0.62×**) → B=4 1.92ms (**0.38×**), total grows
+> sub-linearly (the weight-load amortizes), correctness byte-exact per-row (enc_out max 6e-6, within tol). ⟹ Tier-2
+> (batched steady) is the **validated #1 lever** (no longer "B-fill-gated" — the fill is MEASURED); projected knee
+> **37 → ~47-64** (Amdahl-bounded by the 88% steady GEMM share × the measured fill); the funding multiplier moves
+> from at-bar **1.8× → ~2-2.5×**, **provisionally clearing F1** pending the build's own L40S sweep (Step B3).
+> **User call (2026-05-27): enough evidence to proceed → build the batched-steady runtime now.** The L40S confirm of
+> the SPEEDUP *ratio* is a formality (the per-row amortization is a roofline property that transfers sm_120→sm_89);
+> the build's B3 sweep measures the realized *absolute* knee. Build = Steps **B1-B3** (after Step 1c). 1c-0
+> sync-ablation is moot (profiling routed straight to batching); 1b.5 S_py_LOCK is de-blocked from the build start
+> but still feeds the Step-4 apples-to-apples. Gate data: `reviews/profiling-paired-verdict.md`,
+> `reviews/{opus,codex}-l40s-profiling-analysis.md`; SPEEDUP bench `runtime/steady_b_artifacts/bench_out.log`.
+
 ## Why / the bet's open conjunct
 Phase 1 proved the single native stream is correct (token/event-exact to the server's final transcript;
 preproc→AOTI steady→decode→finalize-bucket→state-machine→emit). It did NOT measure DENSITY, and that compute
@@ -223,13 +242,45 @@ default-stream, `num_runners=1`. Log `num_runners`/stream-mode/topology in every
   escalate to Funding-recheck F1 with the realized ceiling (Phase-3 batching needs its own explicit GO). PAIRED REVIEW
   (1c-0 changes the gate math). The outcome selects what Step 2b schedules; a B>1 selection spins up Phase-3.
 
+### Batched-steady build (B1-B3) — GREEN-LIT by STEADY-BATCH-0 (the Tier-2 lever, paired-validated 2026-05-27)
+The kill-gate passed (v3 block) → build the cross-stream batched steady encoder, the #1 BW-floor lever. **Byte-exact
+when the flag is OFF** (the B=1 path is untouched); the batched path is **T1-gated per-row**. Each step paired-reviewed
+before `[x]` (the implement-loop contract). The build is the concrete realization of the Step-2b topology decision
+(now made: **B>1-batched steady**), and B3 feeds Steps 3/4.
+
+- [ ] **Step B1 — batched-steady forward mechanism + T1 (5090 dev, topology-agnostic core).** Load B∈{1,2,4} steady
+  AOTI buckets (the microbench artifacts + `runtime/export_steady_batched.py`; integrate as a bucket set like the
+  finalize buckets — one dir, SHAs recorded, the same shared-constants discipline). Ragged **pack → run → unpack**:
+  K ready `(stream, mel-chunk, cache_ch, cache_t)` → stack into the nearest bucket B≥K (pad rows K..B-1) → one batched
+  `run(inputs, stream)` → scatter `enc_out`/new-caches/`enc_len` back per stream, discard pad rows. Behind
+  `NEMOTRON_DENSITY_BATCH_STEADY` (default OFF → B=1 byte-exact preserved). **T1 GATE:** the K real rows ==
+  K individual B=1 forwards, AND the full decode+event path emits byte-exact tokens/events per stream over real
+  streams (the microbench showed kernel-level 6e-6 / within-tol — B1 confirms end-to-end through decode). STOP-this-
+  lever on any token/event flip not attributable to a documented tolerance. PAIRED REVIEW (correctness-critical).
+- [ ] **Step B2 — batching scheduler + density integration (5090).** The cross-stream dispatcher: collect ready
+  steady chunks in an 8-12ms window, **low-occupancy short-circuit** (run B=1 immediately if <2 ready after a short
+  timeout → single-stream/best-case latency preserved), bucket-select K→{1,2,4}. **Topology fork (paired-reviewed):**
+  central steady-batching dispatcher vs borrow-and-batch on the arriving worker — pick the lighter that leaves
+  per-stream decode/finalize ownership unchanged (the decode runs on the unpacked `enc_out`). Wire into the density
+  worker loop. Re-measure the 5090 knee (sanity: does it lift from N=40?). **GO** if knee lifts ∧ 0 mismatch ∧
+  ttfs/lag within SLO ∧ added batch-wait p95 ≤ window (absorbed by keep-up slack; does NOT touch finalize ttfs).
+  PAIRED REVIEW (the topology is a design fork).
+- [ ] **Step B3 — L40S batched-density sweep (the realized knee = F1 confirmation + Step-4 feed).** Compile sm_89
+  B∈{1,2,4} steady buckets natively on the g6e; fresh-process-per-N sweep N=36..72; report the SLO-robust knee
+  (lag<500, ttfs p95≤175 / p99≤250, err≤1%, 0 mismatch), **stagger-robust at the knee N and N+4**. **Confirms the
+  projected ~47-64** and sets the realized `S_native_batched` that F1 re-checks (nominal `0.83·S_native_batched/
+  S_py_lock ≥1.70×`, pessimistic `0.75·… ≥1.50×`, p99 guardrail). PAIRED REVIEW (decisive density measurement). The
+  batched topology then becomes the Step-3/4 scheduler/WS baseline.
+
 - [ ] **Funding-recheck F1 — after Step 1b.5 + Step 1c, before freezing the Step-2/3 build scope.** *(MF-2.)* The
   multiplier softened from the hoped 2.0–2.25× to a zero-margin 1.8× (lower once native pays its WS tax). Report
   `nominal_realized = 0.83·S_native_candidate/S_py_lock`, `pessimistic = 0.75·S_native_candidate/S_py_lock`, and the
   remaining eng-weeks + permanent dual-stack carry. **GO-to-build without escalation only if nominal ≥1.70× AND
   pessimistic ≥1.50× with the p99 guardrail met;** otherwise mark **TECHNICAL-CONDITIONAL** → explicit human
   re-justification of the 2nd-stack bet. (Does not change the technical density gate; prevents a strategically weak
-  1.5× from silently inheriting the 2.0× rationale.)
+  1.5× from silently inheriting the 2.0× rationale.) **PROVISIONALLY CLEARED by the v3 STEADY-BATCH-0 projection
+  (~2-2.5× → both thresholds met IF the knee realizes ~47-64); Step B3's measured `S_native_batched` is the binding
+  re-check — if B3 lands <47 the multiplier re-tightens and F1 re-fires.**
 
 - [ ] **Step 2 — scheduler design + admission (blocked on Step-1 telemetry).** **(MF-6 split: Step 2a — invariant
   work [admission close-shed + admitted-vs-offered accounting, stale-generation harness, WS-tail microbench
@@ -339,11 +390,13 @@ in Step 1b.5/MF-1). >36 is load-bearing for Step-4 *if* S_py_lock ≥19.
 - **Tier 1b — `finalize_num_runners` > 2 + priority-finalize-lane:** the `min(N,2)` pool serializes synchronized
   finalize bursts; the wait is mis-attributed into aoti-time (so "finalize_wait=0" hides it). **~free** (buckets
   share one constants set). Fold into Step 2.
-- **Tier 2 — cross-stream batched greedy decode/steady — THE decode-contention lever (re-ranked UP, FACT-2):** the
-  `decode_wall` explosion is cross-stream GEMM queueing, so **batching is what addresses it** (collapses 36×B=1 +
-  amortizes one `.item()` across N) — sync-removal can't. Phase-3-scale (B>1 export + ragged batched decode + T1),
-  **B-fill-gated** (sim `spikes/0.5-batching-sim`: realistic B≈1.5–2 → 20–35%, not 2–3×). Gated by the 1c-A
-  opportunity trace; needs its own Phase-3 GO.
+- **Tier 2 — cross-stream batched STEADY encoder — VALIDATED #1 LEVER (STEADY-BATCH-0 PASSED 2026-05-27):** the
+  binding is BW-bound steady-encoder weight-streaming (profiling), and batching is the **only** lever that lowers the
+  aggregate byte floor (load weight once, reuse across B). **OPPORTUNITY** (fill mean B 2.7-4.4 @ 8-12ms over
+  N=36-56) AND **SPEEDUP** (per-row B=2 **0.62×** / B=4 **0.38×**, byte-exact per-row) both PASS — the prior
+  "B≈1.5-2, batching dead" sim was *finalize* bursts, not the *steady* 160ms cadence. Projected **37 → ~47-64**.
+  **Build = Steps B1-B3** (the green-lit Phase-3). Decode-batching folds in (the `decode_wall` queue clears once the
+  steady GEMM stops monopolizing the BW).
 - **Tier 3 — steady-encoder CUDA-graph** (the shipped finalize-graph primitive) + the autotune-ON ladder
   (T1-blocked): help launch/dispatch, NOT GEMM time (steady is BW-bound). **Nsight-gated** (only if launch gaps ≥15%).
 - **De-prioritized — `enc_first` K-pool / AOTI fold — but TRAFFIC-CONDITIONAL (MF-5):** `lag`-not-`ttfs`,
@@ -378,8 +431,11 @@ in Step 1b.5/MF-1). >36 is load-bearing for Step-4 *if* S_py_lock ≥19.
 | 1a 5090 spend-control | DONE (PASS) | e5f2753, 99fbba3, +W1b' | **TRUE 5090 knee = N=40 SLO-robust (TTFS p95 82.5ms ≪175; lag_p95 −60ms; 0 mismatch at EVERY N=1..64); N=48 first non-SLO. BINDING = GPU CONTENTION** (not memory 19.8/32GiB, not streams unique-to-64, not CPU 3.2/32, not the enc_first lock — lock p95 300ms@N=40 but TTFS 82.5/lag −60, so NO K-pool needed). Full arc: N=4 (enc_first-dup memory-capped) → N=40 (compute-bound) after the Fix-2 dedup + unique-streams. ~2.5× per-process vs Python 5090 (~14-16/proc). Spend-control PASS → L40S. enc_len_sync(25ms)+glue(50ms) grow → W2 could nudge higher. Earlier: 234ms=cold-start(fixed); autotune T1-FAIL(995/1000, shelved); Fix-1 AOTI-first-chunk T1-blocked(stays TorchScript). |
 | 1b L40S ceiling gate | DONE (PASS) | run#13/#14 logs in runtime/artifacts/l40s_w3_logs/ | **L40S native knee = N=36 SLO-robust (true ∈[36,39]); N=40 first non-SLO → PASS** (≥34 floor; ~1.8-2.25× Python S_py~16-20; at-bar vs S_py=20). g6e.8xlarge (32 vCPU/L40S 48GB), sm_89 autotune-OFF, 8 sessions/worker, fresh-process-per-N. **BINDING = keep-up/GPU-compute**: lag p95 −35ms@36 → +1337@40; ttfs p99 147@36 → 720@40 (budget 175/250); finalize_wait 0; per-stream mem 0.035 GiB (NOT memory — could hold 1000s); CPU 5.9/32. steady_gpu+finalize_gpu p50 ~18→~28ms + decode_wall p95 17→309ms at 40 = GPU-scheduling + decode tail. **N=32 control == run#9** (finalize_gpu 14ms, ttfs p99 110) validates the rig. **STAGGER-ROBUST (run#14)**: a 10s per-worker start-stagger improves margins (N=36 ttfs p99 147→50, lag −35→−119) but N=40 STILL collapses (lag +1149) → genuine compute saturation, NOT a synchronized-burst artifact (closes the reviewers' false-fail objection). **PAIRED REVIEW: Codex + Opus both GO** (reviews/codex-l40s-w3-profile.md, codex-l40s-knee-verdict.md). Caveats: exact knee bracketed [36,39] (37-39 untested); at-bar vs high-end S_py=20. **SAME-BOX PYTHON RE-MEASURE DONE 2026-05-27 (spy_*.json): S_py≈20 single-proc @ ttfs p50 ~42ms → 1.8× CONFIRMED AT-BAR / ZERO MARGIN** (the prod 245ms was an MPS-multiproc artifact, not inherent — one proc ≈ same density at ~6× lower ttfs). ⟹ pushing knee >36 is **load-bearing for Step-4** (see Step 1c + CHECKPOINT-scaling-above-36.md). aggregator summary prints ttfs/lag 0.0 + binding=not_observed (cosmetic parser bug; per-N rows authoritative). **RIG (cross-arch sm_89, cu128 wheel + CUDA-13):** share-ONE-bundle context (0.8s — concurrent 668MB jit::load LIVELOCKS on torch's global registry; was the ~60min/N hog, not warmup); cudart-12 unify (CUDA-13 vs torch cudart-12 deadlocked the multi-thread path); full per-worker finalize warmup (the lean per-bucket-runner variant under-warmed 34/36 worker streams → false-fail); SKIP_EPS_VERIFY (90GB SHA ~12min); arch_list/venv/cmake-source fixes. autotune-ON shelved (T1-broken, moot while compute-bound). T1: 1000/1000 finals byte-exact vs gold (run#9); 5/1000 interim-event-timing drift (WER-neutral, counted not gated). |
 | 1b.5 S_py_LOCK (BLOCKING) | todo | | **MF-1 — gates 1c scope+funding.** Re-measure Python same-box, Step-4 manifest, **WS-matched**, repeats≥10, p50/p95/p99, levels {16,18,20,22,24}. S_py noisy/non-monotonic/**not-apples-to-apples** (147ms@conc16 PASSES; first fail conc24@249). Set **S_native_req=ceil(max(34, 1.80·S_py, 1.50·S_py/0.83))**. ≤18→1c optional; 19-21→proceed; ≥22→F1. In-flight apples chart = first half. |
-| 1c push knee >36 (sync/batch triage) | todo | | **Target=S_native_req (not bare >36); load-bearing iff S_py≥19.** **1c-0a 5090 dev/T1 smoke (EXPECTED PIVOT — sync bounded ~17ms, FACT-2)** → **1c-0b L40S net-density arbiter** → 1c-A batching (THE decode-contention lever) / 1c-B Nsight (MANDATORY, 3-way route) / 1c-C scalar / 1c-D enc_first(traffic-cond). **STOP line**; "44-48"=upper-bound-not-forecast. Paired red-team **GO-WITH-CHANGES** (reviews/goforward-paired-verdict.md). PAIRED. |
-| F1 funding recheck | todo | | **MF-2** — after 1b.5+1c, before freezing Step-2/3 build. GO-to-build only if nominal 0.83·S_native/S_py≥**1.70×** AND pessimistic 0.75·…≥**1.50×** + p99 guardrail; else TECHNICAL-CONDITIONAL→human re-justify (multiplier softened 2-2.25×→1.8× at-bar). |
+| 1c push knee >36 (sync/batch triage) | RESOLVED → batching | | **Triage answered by L40S profiling + STEADY-BATCH-0, NOT the 1c-0 sequence.** nsys+ncu (paired) → binding = **BW-bound steady-encoder weight-streaming** (88% GEMM / 72% DRAM / 15% occ = BW-wall, not idle SMs); the 1c-B Nsight attribution routed straight to **batching** (the only byte-floor lever). 1c-0 sync-ablation = moot (sync bounded ~17ms, FACT-2). **STEADY-BATCH-0 PASSED both conjuncts:** OPPORTUNITY fill mean B 2.7-4.4 @ 8-12ms (N=36-56); SPEEDUP per-row B=2 0.62×/B=4 0.38× byte-exact (`steady_b_artifacts/bench_out.log`). ⟹ knee proj 37→~47-64; build = B1-B3. reviews/profiling-paired-verdict.md + {opus,codex}-l40s-profiling-analysis.md (paired). |
+| B1 batched-steady mechanism+T1 (5090) | todo | | Load B∈{1,2,4} steady buckets; ragged pack/run/unpack; `NEMOTRON_DENSITY_BATCH_STEADY` default OFF; T1 byte-exact per-row through decode/events over real streams. PAIRED (correctness). |
+| B2 batching scheduler+integration (5090) | todo | | 8-12ms window + low-occupancy short-circuit + bucket-select; topology fork (central vs borrow-and-batch); wire into worker loop; 5090 knee re-measure (lifts from 40?). PAIRED (design fork). |
+| B3 L40S batched-density sweep | todo | | sm_89 B∈{1,2,4} buckets; fresh-proc-per-N N=36..72; SLO-robust knee + stagger-robust; confirms ~47-64 → sets S_native_batched for the F1 re-check. PAIRED (decisive). |
+| F1 funding recheck | provisional CLEAR | | **MF-2** — GO-to-build only if nominal 0.83·S_native/S_py≥**1.70×** AND pessimistic 0.75·…≥**1.50×** + p99 guardrail. **STEADY-BATCH-0 projection (~47-64 → ~2-2.5×) provisionally clears both; Step B3's realized knee is the binding re-check (re-fires if B3 <47).** User authorized building on the projection (2026-05-27). |
 | 2 scheduler+admission design | todo | | blocked on Step-1 telemetry; paired (design). **2a invariant work (admission/stale-gen/WS-tail/telemetry) parallel after 1b.5; 2b topology waits on 1c-A.** |
 | 3 multi-session + real WS | todo | | WS-tail microbench + stale-gen gate; closes 1.4b interim-cadence |
 | 4 realized density (apples) | todo | | TECHNICAL GO ≥G1_floor; G2 TTFS_spread reported; manifest + re-measured baseline. **AT-RISK (2026-05-27): S_py≈20 → 1.8× at-bar; after the 0.83 haircut 0.83·36≈30 vs 1.5·20=30 = at-bar → push knee >36 (Step 1c) for a robust GO.** |

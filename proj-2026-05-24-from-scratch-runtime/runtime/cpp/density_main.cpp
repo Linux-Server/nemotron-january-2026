@@ -14,10 +14,13 @@
 #include <cuda_runtime_api.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -106,6 +109,60 @@ static std::vector<int> parse_int_list(const std::string& text) {
     pos = comma + 1;
   }
   return out;
+}
+
+static int read_density_env_int(const char* name, int default_value) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') return default_value;
+  errno = 0;
+  char* end = nullptr;
+  long value = std::strtol(raw, &end, 10);
+  if (errno != 0 || end == raw || *end != '\0' ||
+      value < std::numeric_limits<int>::min() ||
+      value > std::numeric_limits<int>::max()) {
+    throw std::runtime_error(std::string("invalid integer env var ") + name + "=" + raw);
+  }
+  return static_cast<int>(value);
+}
+
+static bool density_host_enc_len_enabled() {
+  static const bool enabled = read_density_env_int("NEMOTRON_DENSITY_HOST_ENC_LEN", 0) != 0;
+  return enabled;
+}
+
+static bool density_host_enc_len_verify_enabled() {
+  static const bool enabled = read_density_env_int("NEMOTRON_DENSITY_HOST_ENC_LEN_VERIFY", 0) != 0;
+  return enabled;
+}
+
+static bool density_device_argmax_enabled() {
+  static const bool enabled = read_density_env_int("NEMOTRON_DENSITY_DEVICE_ARGMAX", 0) != 0;
+  return enabled;
+}
+
+static int density_finalize_runner_cap() {
+  static const int cap = read_density_env_int("NEMOTRON_DENSITY_FINALIZE_RUNNERS", 2);
+  return cap;
+}
+
+static bool density_fill_trace_enabled() {
+  static const bool enabled = read_density_env_int("NEMOTRON_DENSITY_FILL_TRACE", 0) != 0;
+  return enabled;
+}
+
+static int64_t density_clock_ns() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+}
+
+static void flush_density_fill_trace(const std::vector<std::vector<int64_t>>& ready_ns_by_worker) {
+  for (size_t worker = 0; worker < ready_ns_by_worker.size(); ++worker) {
+    for (int64_t t_ready_ns : ready_ns_by_worker[worker]) {
+      std::printf("FILL_TRACE worker=%zu t_ready_ns=%lld kind=steady\n",
+                  worker,
+                  static_cast<long long>(t_ready_ns));
+    }
+  }
+  std::fflush(stdout);
 }
 
 static DensityArgs parse_density_args(int argc, char** argv) {
@@ -832,9 +889,82 @@ static int64_t scalar_i64_timed(torch::Tensor tensor, double* item_wait_ms) {
   return value;
 }
 
+static int64_t host_subsampled_encoder_len_density(int64_t input_T) {
+  if (input_T < 0) throw std::runtime_error("density host enc_len input_T is negative");
+  // Finalize keeps all encoder outputs. Nemotron's causal ConvSubsampling has
+  // three stride-2 conv stages with kernel=3 and left+right padding=3, so each
+  // stage maps L -> floor(L / 2) + 1 before drop_extra_pre_encoded is applied.
+  int64_t len = input_T;
+  for (int i = 0; i < 3; ++i) {
+    len = len / 2 + 1;
+  }
+  return len;
+}
+
+enum class DensityEncoderLenMode { STEADY_STREAMING, FINALIZE_KEEP_ALL };
+
+static int64_t host_encoder_len_density(int64_t input_T,
+                                        int64_t drop_extra,
+                                        DensityEncoderLenMode mode) {
+  if (drop_extra < 0) throw std::runtime_error("density host enc_len drop_extra is negative");
+  if (mode == DensityEncoderLenMode::STEADY_STREAMING) {
+    if ((drop_extra == 0 && input_T == SHIFT) ||
+        (drop_extra == DROP && input_T == PRE + SHIFT)) {
+      return SHIFT / 8;
+    }
+    throw std::runtime_error("density host steady enc_len unsupported geometry: input_T=" +
+                             std::to_string(input_T) +
+                             " drop_extra=" + std::to_string(drop_extra));
+  }
+  return std::max<int64_t>(0, host_subsampled_encoder_len_density(input_T) - drop_extra);
+}
+
+static int64_t encoder_len_density(torch::Tensor enc_len_tensor,
+                                   int64_t input_T,
+                                   int64_t drop_extra,
+                                   DensityEncoderLenMode mode,
+                                   const std::string& label,
+                                   double* item_wait_ms) {
+  if (!density_host_enc_len_enabled()) {
+    return scalar_i64_timed(enc_len_tensor, item_wait_ms);
+  }
+  int64_t host_len = host_encoder_len_density(input_T, drop_extra, mode);
+  if (density_host_enc_len_verify_enabled()) {
+    int64_t actual = scalar_i64_timed(enc_len_tensor, item_wait_ms);
+    if (actual != host_len) {
+      throw std::runtime_error("density host enc_len mismatch at " + label +
+                               ": host=" + std::to_string(host_len) +
+                               " actual=" + std::to_string(actual) +
+                               " input_T=" + std::to_string(input_T) +
+                               " drop_extra=" + std::to_string(drop_extra));
+    }
+  }
+  return host_len;
+}
+
+static int64_t device_argmax_pinned_copy(const torch::Tensor& tensor) {
+  if (!tensor.is_cuda()) {
+    return tensor.argmax().item<int64_t>();
+  }
+  static thread_local torch::Tensor host_argmax;
+  if (!host_argmax.defined()) {
+    host_argmax = torch::empty({1},
+                               torch::TensorOptions()
+                                   .dtype(torch::kLong)
+                                   .device(torch::kCPU)
+                                   .pinned_memory(true));
+  }
+  auto idx = tensor.argmax().reshape({1});
+  host_argmax.copy_(idx, /*non_blocking=*/true);
+  CUDA_CHECK(cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream(tensor.get_device()).stream()));
+  return host_argmax.data_ptr<int64_t>()[0];
+}
+
 static int64_t argmax_item_timed(const torch::Tensor& tensor, double* item_wait_ms) {
   auto start = Clock::now();
-  int64_t value = tensor.argmax().item<int64_t>();
+  int64_t value = density_device_argmax_enabled()
+                      ? device_argmax_pinned_copy(tensor)
+                      : tensor.argmax().item<int64_t>();
   if (item_wait_ms != nullptr) *item_wait_ms += elapsed_ms_since(start);
   return value;
 }
@@ -873,10 +1003,18 @@ static void decode_range_density(torch::jit::Module& joint,
 static double apply_encoder_outputs_density(SessionState& state,
                                             const std::vector<at::Tensor>& out,
                                             torch::jit::Module& joint,
-                                            torch::jit::Module& predict) {
+                                            torch::jit::Module& predict,
+                                            int64_t input_T,
+                                            int64_t drop_extra,
+                                            const std::string& label) {
   if (out.size() < 5) throw std::runtime_error("density encoder returned fewer than 5 outputs");
   double item_wait_ms = 0.0;
-  int64_t enc_len = scalar_i64_timed(out[1], &item_wait_ms);
+  int64_t enc_len = encoder_len_density(out[1],
+                                        input_T,
+                                        drop_extra,
+                                        DensityEncoderLenMode::STEADY_STREAMING,
+                                        label,
+                                        &item_wait_ms);
   state.clc = out[2].clone();
   state.clt = out[3].clone();
   state.clcl = out[4].clone();
@@ -909,7 +1047,8 @@ static void run_steady_chunk_density(SessionState& state,
                                      bool explicit_stream,
                                      bool mutex_serialize_run,
                                      TimingBuckets* timings,
-                                     const std::string& label) {
+                                     const std::string& label,
+                                     std::vector<int64_t>* fill_trace_ready_ns = nullptr) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(stream);
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("density steady chunk outside STREAMING");
@@ -950,6 +1089,9 @@ static void run_steady_chunk_density(SessionState& state,
       throw std::runtime_error("density steady continuation geometry mismatch");
     }
     chunk = torch::cat({state.ring, new_mel}, 2).contiguous();
+    if (fill_trace_ready_ns != nullptr) {
+      fill_trace_ready_ns->push_back(density_clock_ns());
+    }
     CUDA_CHECK(cudaEventCreate(&ev_start));
     CUDA_CHECK(cudaEventCreate(&ev_stop));
     CUDA_CHECK(cudaEventRecord(ev_start, stream.stream()));
@@ -958,7 +1100,13 @@ static void run_steady_chunk_density(SessionState& state,
     has_aoti_event = true;
   }
 
-  double scalar_wait_ms = apply_encoder_outputs_density(state, out, joint, predict);
+  double scalar_wait_ms = apply_encoder_outputs_density(state,
+                                                        out,
+                                                        joint,
+                                                        predict,
+                                                        chunk.size(2),
+                                                        drop_extra,
+                                                        label + ".encoder");
 
   if (has_aoti_event) {
     CUDA_CHECK(cudaEventSynchronize(ev_stop));
@@ -1209,7 +1357,7 @@ class FinalizeBucketLoaderPool {
 };
 
 static int capped_general_finalize_runners(int workers_or_runners) {
-  return std::max(1, std::min(workers_or_runners, 2));
+  return std::max(1, std::min(workers_or_runners, density_finalize_runner_cap()));
 }
 
 static std::vector<FinalizeBucketKey> unique_finalize_bucket_keys(const std::vector<FinalizeBucketKey>& keys) {
@@ -1287,7 +1435,12 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     runner_host_ms = elapsed_ms_since(run_start);
     CUDA_CHECK(cudaEventRecord(ev_stop, stream.stream()));
     if (out.size() < 2) throw std::runtime_error("density finalize AOTI bucket returned fewer than 2 outputs");
-    int64_t enc_len = scalar_i64_timed(out[1], &enc_len_sync_ms);
+    int64_t enc_len = encoder_len_density(out[1],
+                                          final_T,
+                                          drop_extra,
+                                          DensityEncoderLenMode::FINALIZE_KEEP_ALL,
+                                          label + ".finalize",
+                                          &enc_len_sync_ms);
     if (out.size() >= 5) {
       fork.clc = out[2];
       fork.clt = out[3];
@@ -2651,7 +2804,7 @@ static FinalizeGateResult run_finalize_gate_one(const DensityArgs& args,
                                                 const std::vector<RowReplayResult>& reference) {
   FinalizeGateResult result;
   result.workers = static_cast<int>(cases.size());
-  result.steady_num_runners = capped_general_finalize_runners(args.num_runners > 0 ? args.num_runners : result.workers);
+  result.steady_num_runners = args.num_runners > 0 ? args.num_runners : result.workers;
   bool hot_same_bucket = mode == "same_bucket";
   result.finalize_num_runners = hot_same_bucket ? result.workers : capped_general_finalize_runners(result.workers);
   result.num_runners = result.finalize_num_runners;
@@ -3169,12 +3322,23 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   std::vector<DensityWorkerOutput> worker_outputs(static_cast<size_t>(result.workers));
   std::vector<int> warmup_steady_done(static_cast<size_t>(result.workers), 0);
   std::vector<int> warmup_finalize_bucket_runs(static_cast<size_t>(result.workers), 0);
+  const bool fill_trace_enabled = density_fill_trace_enabled();
+  std::vector<std::vector<int64_t>> fill_trace_ready_ns;
+  if (fill_trace_enabled) {
+    fill_trace_ready_ns.resize(static_cast<size_t>(result.workers));
+    for (int worker = 0; worker < result.workers; ++worker) {
+      fill_trace_ready_ns[static_cast<size_t>(worker)].reserve(
+          assigned[static_cast<size_t>(worker)].size() * 8);
+    }
+  }
   std::atomic<bool> warmup_failed{false};
   std::vector<std::thread> threads;
   threads.reserve(static_cast<size_t>(result.workers));
   for (int worker = 0; worker < result.workers; ++worker) {
     threads.emplace_back([&, worker] {
       auto& out = worker_outputs[static_cast<size_t>(worker)];
+      std::vector<int64_t>* fill_trace_worker =
+          fill_trace_enabled ? &fill_trace_ready_ns[static_cast<size_t>(worker)] : nullptr;
       try {
         c10::cuda::CUDAGuard device_guard(device.index());
         if (args.density_warmup) {
@@ -3283,7 +3447,8 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
                                      result.explicit_stream,
                                      args.mutex_serialize_run,
                                      &out.timings,
-                                     label + ".chunk" + std::to_string(chunk));
+                                     label + ".chunk" + std::to_string(chunk),
+                                     fill_trace_worker);
             auto finish = Clock::now();
             auto deadline = session_start + ms_duration(args.density_chunk_period_ms * static_cast<double>(chunk + 1));
             out.lag_ms.push_back(signed_elapsed_ms(deadline, finish));
@@ -3341,6 +3506,7 @@ static DensitySweepRunResult run_density_sweep_one_impl(const DensityArgs& args,
   gate.start_now();
   for (auto& thread : threads) thread.join();
   auto end_time = Clock::now();
+  if (fill_trace_enabled) flush_density_fill_trace(fill_trace_ready_ns);
   log_density_phase_timing(n, "measured-gate", gate.start_time, end_time);
   auto teardown_start = Clock::now();
   CUDA_CHECK(cudaDeviceSynchronize());

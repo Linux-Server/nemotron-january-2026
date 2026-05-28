@@ -62,3 +62,11 @@ target_compile_definitions(density_main PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(density_main PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(density_main torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 set_target_properties(density_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
+
+# STEADY-BATCH-0: fixed-B steady encoder AOTI per-row GPU-time microbench.
+add_executable(steady_batch_bench steady_batch_bench.cpp)
+target_include_directories(steady_batch_bench PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
+target_compile_definitions(steady_batch_bench PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+target_link_directories(steady_batch_bench PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
+target_link_libraries(steady_batch_bench torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+set_target_properties(steady_batch_bench PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")

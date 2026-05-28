@@ -1,2 +1,5 @@
 artifacts/
+artifacts_*/
+steady_b_artifacts/
 cpp/build/
+cpp/build_*/
