@@ -1383,10 +1383,13 @@ static void run_steady_chunk_density(SessionState& state,
       has_scheduler_output_sync_event = true;
       CUDA_CHECK(cudaEventRecord(output_sync_start_event.event, stream.stream()));
       auto sync_start = Clock::now();
-      CUDA_CHECK(cudaStreamWaitEvent(stream.stream(), result.completion, 0));
+      if (result.completion.get() == nullptr) {
+        throw std::runtime_error("batch steady scheduler returned a null completion event for " + label);
+      }
+      CUDA_CHECK(cudaStreamWaitEvent(stream.stream(), result.completion.get(), 0));
       CUDA_CHECK(cudaEventRecord(output_sync_stop_event.event, stream.stream()));
       auto sync_end = Clock::now();
-      CUDA_CHECK(cudaEventDestroy(result.completion));
+      result.completion.reset();
       out = std::move(result.row_tensors);
       gpu_ms = result.cuda_run_us / 1000.0;
       runner_wait = elapsed_us(enqueue_start, sync_end) / 1000.0;

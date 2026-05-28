@@ -49,6 +49,7 @@ struct ManifestBucket {
   int B = 0;
   std::string package;
   std::string package_sha256;
+  std::string ep_sha256;
   std::string shared_weight_sha256;
 };
 
@@ -282,6 +283,7 @@ static inline std::vector<ManifestBucket> load_manifest_buckets(const std::strin
     b.B = static_cast<int>(json_int_field(obj, "B"));
     b.package = json_string_field(obj, "package");
     b.package_sha256 = json_string_field(obj, "package_sha256");
+    b.ep_sha256 = json_string_field(obj, "ep_sha256", false);
     b.shared_weight_sha256 = json_string_field(obj, "shared_weight_sha256");
     buckets.push_back(std::move(b));
     pos = end + 1;
@@ -503,6 +505,7 @@ class BatchedSteadyLoaderSet {
     auto buckets = bsteady_detail::load_manifest_buckets(manifest_path);
     std::set<int> seen;
     std::string shared_sha = bsteady_detail::sha256_file(shared_weights_ts_);
+    size_t ep_verified = 0;
     for (const auto& entry : buckets) {
       if (!seen.emplace(entry.B).second) {
         throw std::runtime_error("batched steady manifest duplicate B=" + std::to_string(entry.B));
@@ -512,6 +515,7 @@ class BatchedSteadyLoaderSet {
         throw std::runtime_error("batched steady manifest package mismatch for B=" + std::to_string(entry.B) +
                                  ": got " + entry.package + " expected " + expected);
       }
+      std::string expected_ep = "enc_steady_t2a_b" + std::to_string(entry.B) + ".pt2";
       std::string path = (bsteady_detail::fs::path(package_dir_) / entry.package).string();
       if (!bsteady_detail::file_exists(path)) throw std::runtime_error("batched steady package missing: " + path);
       std::string actual = bsteady_detail::sha256_file(path);
@@ -524,14 +528,31 @@ class BatchedSteadyLoaderSet {
                                  std::to_string(entry.B) + ": manifest=" + entry.shared_weight_sha256 +
                                  " actual=" + shared_sha);
       }
+      std::string ep_path = (bsteady_detail::fs::path(package_dir_) / expected_ep).string();
+      if (!bsteady_detail::file_exists(ep_path)) {
+        std::printf("density batched steady EP sha skipped: B=%d path=%s reason=missing\n",
+                    entry.B,
+                    ep_path.c_str());
+      } else {
+        if (entry.ep_sha256.empty()) {
+          throw std::runtime_error("batched steady manifest missing ep_sha256 for B=" + std::to_string(entry.B));
+        }
+        std::string actual_ep = bsteady_detail::sha256_file(ep_path);
+        if (actual_ep != entry.ep_sha256) {
+          throw std::runtime_error("batched steady EP sha256 mismatch for " + expected_ep +
+                                   ": manifest=" + entry.ep_sha256 + " actual=" + actual_ep);
+        }
+        ++ep_verified;
+      }
     }
     for (int bucket : kBuckets) {
       if (seen.find(bucket) == seen.end()) {
         throw std::runtime_error("batched steady manifest missing B=" + std::to_string(bucket));
       }
     }
-    std::printf("density batched steady manifest verified: buckets=%zu shared_weight_sha256=%s\n",
+    std::printf("density batched steady manifest verified: buckets=%zu ep_verified=%zu shared_weight_sha256=%s\n",
                 buckets.size(),
+                ep_verified,
                 shared_sha.c_str());
   }
 

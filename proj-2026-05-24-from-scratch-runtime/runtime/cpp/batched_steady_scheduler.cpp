@@ -121,8 +121,7 @@ void BatchedSteadyScheduler::close() {
     if (closed_) return;
     closing_ = true;
     if (!queue_.empty()) {
-      auto ep = std::make_exception_ptr(std::runtime_error("batch steady scheduler closed with pending work"));
-      set_pending_exception_locked(ep, &pending);
+      set_pending_exception_locked(&pending);
     }
   }
   for (const auto& item : pending) {
@@ -240,7 +239,7 @@ void BatchedSteadyScheduler::dispatcher_loop() {
       std::lock_guard<std::mutex> lock(mutex_);
       fault_ = ep;
       closing_ = true;
-      set_pending_exception_locked(ep, &pending);
+      set_pending_exception_locked(&pending);
     }
     for (const auto& item : pending) set_item_exception(item, ep);
     {
@@ -357,6 +356,8 @@ void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<Qu
   B2_CUDA_CHECK(cudaEventRecord(ev_start, dispatcher_stream_.stream()));
   auto raw = loader_set_.run_raw_prepacked(inputs, bucket, dispatcher_stream_);
   B2_CUDA_CHECK(cudaEventRecord(ev_stop, dispatcher_stream_.stream()));
+  // TODO(batched-steady): this host-sync is only for CUDA elapsed-time telemetry.
+  // Keep it for B2/B3 diagnosis; move to polling or a debug-only path before production throughput work.
   B2_CUDA_CHECK(cudaEventSynchronize(ev_stop));
   float elapsed_ms = 0.0f;
   B2_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, ev_start, ev_stop));
@@ -392,14 +393,15 @@ void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<Qu
   for (size_t i = 0; i < batch.size(); ++i) {
     cudaEvent_t completion{};
     B2_CUDA_CHECK(cudaEventCreateWithFlags(&completion, cudaEventDisableTiming));
-    B2_CUDA_CHECK(cudaEventRecord(completion, dispatcher_stream_.stream()));
     DispatchResult result;
+    result.completion.reset(completion);
+    completion = nullptr;
+    B2_CUDA_CHECK(cudaEventRecord(result.completion.get(), dispatcher_stream_.stream()));
     result.row_tensors = std::move(rows[i].tensors);
     result.bucket = bucket;
     result.row = static_cast<int>(i);
     result.k = k;
     result.cycle_id = cycle_id;
-    result.completion = completion;
     result.gather_wait_us = gather_waits[i];
     result.service_wait_us = service_waits[i];
     result.cuda_run_us = cuda_run_us;
@@ -462,10 +464,7 @@ BatchedSteadyScheduler::Scratch& BatchedSteadyScheduler::ensure_scratch(int buck
   return scratch;
 }
 
-void BatchedSteadyScheduler::set_pending_exception_locked(
-    std::exception_ptr ep,
-    std::vector<std::shared_ptr<QueueItem>>* pending) {
-  (void)ep;
+void BatchedSteadyScheduler::set_pending_exception_locked(std::vector<std::shared_ptr<QueueItem>>* pending) {
   while (!queue_.empty()) {
     pending->push_back(queue_.front());
     queue_.pop_front();

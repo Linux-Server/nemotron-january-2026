@@ -35,12 +35,47 @@ struct EnqueueRequest {
 };
 
 struct DispatchResult {
+  struct CompletionEvent {
+    cudaEvent_t event = nullptr;
+
+    CompletionEvent() = default;
+    explicit CompletionEvent(cudaEvent_t e) : event(e) {}
+    CompletionEvent(const CompletionEvent&) = delete;
+    CompletionEvent& operator=(const CompletionEvent&) = delete;
+
+    CompletionEvent(CompletionEvent&& other) noexcept : event(other.event) {
+      other.event = nullptr;
+    }
+
+    CompletionEvent& operator=(CompletionEvent&& other) noexcept {
+      if (this != &other) {
+        reset();
+        event = other.event;
+        other.event = nullptr;
+      }
+      return *this;
+    }
+
+    ~CompletionEvent() {
+      reset();
+    }
+
+    cudaEvent_t get() const {
+      return event;
+    }
+
+    void reset(cudaEvent_t next = nullptr) noexcept {
+      if (event != nullptr) cudaEventDestroy(event);
+      event = next;
+    }
+  };
+
   std::vector<at::Tensor> row_tensors;
   int bucket = 0;
   int row = 0;
   int k = 0;
   int64_t cycle_id = 0;
-  cudaEvent_t completion = nullptr;
+  CompletionEvent completion;
   double gather_wait_us = 0.0;
   double service_wait_us = 0.0;
   double cuda_run_us = 0.0;
@@ -123,7 +158,7 @@ class BatchedSteadyScheduler {
   void dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch);
   std::vector<at::Tensor> pack_into_scratch(const std::vector<BatchedSteadyInput>& ready, int bucket);
   Scratch& ensure_scratch(int bucket, const BatchedSteadyInput& first);
-  void set_pending_exception_locked(std::exception_ptr ep, std::vector<std::shared_ptr<QueueItem>>* pending);
+  void set_pending_exception_locked(std::vector<std::shared_ptr<QueueItem>>* pending);
   void set_item_exception(const std::shared_ptr<QueueItem>& item, std::exception_ptr ep);
   void add_dispatch_telemetry(int bucket,
                               int64_t cycle_id,
