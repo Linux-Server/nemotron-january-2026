@@ -73,6 +73,64 @@ Project directory: /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from
 >   (window/lone tuning, configurable buckets) is justified for diagnostic + low-load preserve purposes
 >   but the production setpoint is the boring one. Validates the design didn't over-tune.
 
+> **v5 (2026-05-28, post-B3 landed + Codex plan-v4 review folded) — refinements + scope corrections.** B3
+> committed `dc0c551`; plan-v4 paired-reviewed (`reviews/codex-plan-v4-review.md`, GO-with-changes); F1
+> CLEARED (≥1.60× bounded → ~1.88-2.66× production-equiv vs S_py=20). The v4 insights are right in shape;
+> v5 sharpens scope + adds 2 new B3 findings.
+>
+> **Headline pivot (user-directed 2026-05-28):** the production-relevant knee is the **staggered N≥64**.
+> The TRUE knee is likely well above 64 — L40S sweep was capped at N=64; the cell at N=64 had ttfs_p95=21ms
+> / lag_p95=−93ms (deep margin) → ceiling not reached. **B3-FU-1 (extend N to 80/96/128+) is the next
+> decisive measurement** for production sizing.
+>
+> **Burst-injection is a SANITY CHECK, not a production concern.** Audio physics: each stream's 160ms
+> chunk cadence is intrinsic; chunks naturally de-sync (audio-source/network/OS jitter). Synchronized
+> arrival is pathologically impossible to sustain. Reconnect storms (the only plausible "burst") ramp up
+> over hundreds of ms — 1000-10000× wider than the µs-burst this test models. **Demote B3-FU-2** from
+> Codex-review's "production-shape risk that must inform admission/start-shaping" to: "characterization
+> observation — `enc_first_lock` contention exists under pathologically-synchronized arrivals; revisit
+> only if production-shape symptoms appear."
+>
+> **Codex review must-folds (4):**
+> - **(v5-A)** *Event-policy + b2-t1 closure scope*: high-N B=4 rows are TOKEN-CLEAN but have event-only
+>   drift (counted-not-gated per Fix #8). Strict event-clean B=4 only N=36; B=2 stays event-clean through
+>   N=40. The `## Rules` section's pre-Fix-#8 "token/event equality" wording should be tightened to
+>   "token equality + event drift counted-not-gated per Fix #8" (small edit to Rules; not done yet).
+> - **(v5-B)** *Don't hard-code `active_cap=64+`*: 40 is stale, 64+ isn't a safe universal default.
+>   Production WS requires **explicit deploy-required admission cap** with a named L40S single-instance
+>   profile (cap 64 only after burst+memory review); smaller GPUs / multi-process MPS / multi-tenant
+>   cases override. **Supersedes v4 insight 1.**
+> - **(v5-C)** *Tier-3 memory L40S framing*: v4 insight 9 said "~+5 GiB / ~22 GiB on L40S"; that was 5090
+>   extrapolation. L40S B3 sweep used PRE-Tier-3 binary (+11.7 GiB measured). B3-FU-3 must re-measure on
+>   L40S with the post-Tier-3 binary; v5 does NOT claim the L40S Tier-3 number as measured.
+>   **Supersedes v4 insight 9.**
+> - **(v5-D)** *N=80-100 dispatcher ceiling is HYPOTHESIS, not known.* L40S N=64 telemetry: dispatcher
+>   CPU 60.96%, queue p95=22 — supports the directional inference but not binding. B3-FU-1 brackets
+>   empirically. **Supersedes v4 insight 4** ("hypothesized ceiling; B3-FU-1 measures").
+>
+> **Scope corrections (v5):**
+> - **(v5-E)** `window_ms=10 → 0` is the **high-load production default**; low-load 5090 sweep used
+>   W=10/L=0 (with lone=0, K=1 dispatched immediately so W didn't matter), so W=0 low-load parity isn't
+>   proven. Add a small W=0 low-load smoke OR scope as "high-load default; W/L configurable until Step 4."
+> - **(v5-F)** `B_max=2` stays in the toolbox — event-clean through N=40 while B=4 high-N has event drift;
+>   useful control/fallback for strict-event-clean deployments. **Supersedes v4 insight 3** "debug-only."
+> - **(v5-G)** Bundle defaults updates SEPARATELY from B3 verdict (rollback hygiene).
+> - **(v5-H)** WS-tail matrix corrections: add `n_idle=128, m_streaming=0` (idle-only), `n_idle=0,
+>   m_streaming=128` (streaming-only at projected op-point), + a burst/connect-churn case (for
+>   CHARACTERIZATION). Define axes as independent (not total).
+> - **(v5-I)** B3-FU-1 adaptive bracketing: if N=128 still passes, extend to 160/192 (or sparse doubling).
+> - **(v5-J)** B3-FU-3 includes per-stream activation SLOPE (not one absolute); informs MPS/multi-process
+>   packing.
+>
+> **NEW findings from L40S B3:**
+> - **(v5-K) F2-T binary has a DEADLOCK in forced-concurrency cases.** Codex fell back to pre-F2-T B2
+>   binary + `lone_timeout=5ms` for the L40S F1 run because F2-T + `lone_timeout=0` both deadlocked. NEW
+>   bug introduced by F2-T's telemetry changes; investigate before F2-T production deploy.
+>   **B3-FU-5 added.**
+> - **(v5-L) `enc_first_lock` contention** at synchronized N=64 (`enc_first_lock_p95=1606ms`). PARALLEL
+>   ceiling to dispatcher saturation; **not production-relevant** per the headline pivot. Documented;
+>   mitigation only if production-shape symptoms appear.
+
 ## Why / the bet's open conjunct
 Phase 1 proved the single native stream is correct (token/event-exact to the server's final transcript;
 preproc→AOTI steady→decode→finalize-bucket→state-machine→emit). It did NOT measure DENSITY, and that compute
@@ -322,14 +380,14 @@ before `[x]` (the implement-loop contract). The build is the concrete realizatio
   code (currently exits nonzero under counted-not-gated policy — don't wire strict exit as the policy gate). **A7**
   steady-batch manifest / memory record (B-bucket equivalent of finalize's manifest/loader-delta discipline). **A8**
   header self-containment if the primitive moves out of `runtime/cpp/`.
-- [~] **Step B3 — L40S batched-density sweep (the realized knee = F1 confirmation + Step-4 feed).** **Carry-over follow-ups from B2's paired build verdict (`reviews/B2-build-paired-verdict.md` — B3 pre-conditions):** **F1** full-corpus b2-t1 equivalent (split-case / fresh-process / streamed-reference; the B2 run was 4 ref rows due to OOM); **F2-T** telemetry hardening — emit p50/p95/p99 for the 5 timer buckets + dispatcher CPU% + stream util + queue depth + per-stream fairness spread; fix `service_wait_us` semantics to include scratch pack; clarify or fix `output_sync_us` (currently CPU-cost of enqueueing wait, not device-side wait); **F2-M** scheduler-ON vs OFF peak-memory delta per N in the knee sweep (Codex hit OOM on full-corpus b2-t1 → existing 5090 N=40 may shift down); **F3** test hardening — deterministic forced-concurrency under `lone_timeout_ms=0` (tiny test-only lone OR stronger enqueue gate); **F4** cleanup — drop unused `ep` in `set_pending_exception_locked`, nonblocking timing plumbing; **F5** EP SHA verification in C++ loader (provenance strengthening); **F6** abandoned-future event cleanup (error-path hygiene). Compile sm_89
+- [x] **Step B3 — L40S batched-density sweep (DONE 2026-05-28, commit `dc0c551`, `reviews/B3-L40S-result.md`).** **Realized**: bounded sweep (sessions_per_worker=2) ON `B_max=4 W=0 L=0` passed through N=64 staggered (top of registered axis; true knee >64); OFF bounded knee = 40 → **≥1.60× bounded lift**. Full-session OFF (sessions_per_worker=8 = Step-1b harness) reconfirmed N=36. F1 b2-t1 full 1000-corpus single-stream PASS (0 token + 0 event), with forced/stagger/control cases at 2/3/4 rows (B2's 4-row scope concern partially closed — single-stream is the 1000 case). A1 outcome B (tensors bit-identical). **CAVEATS**: high-N `B=4` rows have **event-only divergences** from N=40 onward (counted-not-gated per Fix #8, token-clean); strict event-clean `B=4` is only N=36; `B=2` stays event-clean through N=40. The required burst-injection at N=64 (no-stagger) FAILED keep-up — `lag_p95 = 1355ms`, `enc_first_lock_p95 = 1607ms` — synchronized-arrival exposes a SECOND-TIER ceiling (`enc_first` lock contention) distinct from dispatcher-CPU saturation. F2-T binary DEADLOCKED in forced-concurrency cases (Codex fell back to pre-F2-T B2 binary + `lone_timeout=5ms` for F1) → new bug introduced by F2-T's telemetry changes; investigate before F2-T production deploy. **Carry-over follow-ups from B2's paired build verdict (`reviews/B2-build-paired-verdict.md`) — original B3 pre-conditions:** **F1** full-corpus b2-t1 equivalent (split-case / fresh-process / streamed-reference; the B2 run was 4 ref rows due to OOM); **F2-T** telemetry hardening — emit p50/p95/p99 for the 5 timer buckets + dispatcher CPU% + stream util + queue depth + per-stream fairness spread; fix `service_wait_us` semantics to include scratch pack; clarify or fix `output_sync_us` (currently CPU-cost of enqueueing wait, not device-side wait); **F2-M** scheduler-ON vs OFF peak-memory delta per N in the knee sweep (Codex hit OOM on full-corpus b2-t1 → existing 5090 N=40 may shift down); **F3** test hardening — deterministic forced-concurrency under `lone_timeout_ms=0` (tiny test-only lone OR stronger enqueue gate); **F4** cleanup — drop unused `ep` in `set_pending_exception_locked`, nonblocking timing plumbing; **F5** EP SHA verification in C++ loader (provenance strengthening); **F6** abandoned-future event cleanup (error-path hygiene). Compile sm_89
   B∈{1,2,4} steady buckets natively on the g6e; fresh-process-per-N sweep N=36..72; report the SLO-robust knee
   (lag<500, ttfs p95≤175 / p99≤250, err≤1%, 0 mismatch), **stagger-robust at the knee N and N+4**. **Confirms the
   projected ~47-64** and sets the realized `S_native_batched` that F1 re-checks (nominal `0.83·S_native_batched/
   S_py_lock ≥1.70×`, pessimistic `0.75·… ≥1.50×`, p99 guardrail). PAIRED REVIEW (decisive density measurement). The
   batched topology then becomes the Step-3/4 scheduler/WS baseline.
 
-- [x] **Funding-recheck F1 — PROVISIONALLY CLEARED by the STEADY-BATCH-0 projection (~2-2.5×); re-fires at Step B3 if the realized knee lands <47.** *(MF-2; user authorized building on the projection 2026-05-27.)* after Step 1b.5 + Step 1c, before freezing the Step-2/3 build scope. The
+- [x] **Funding-recheck F1 — CLEARED 2026-05-28 by realized B3 result (commit `dc0c551`, reviews/B3-L40S-result.md).** Bounded sweep: ON `B_max=4` knee ≥64 vs OFF bounded knee 40 = **≥1.60× bounded lift**. Production-equivalent vs `S_py_high_end≈20`: best case (ON N=64 holds at production scope) `0.83·64/20 = 2.66×`; pessimistic (ON depresses to ~50 at production scope) `0.75·50/20 = 1.88×`. Both clear F1 (1.70× nominal / 1.50× pessimistic). Was provisionally cleared by the STEADY-BATCH-0 projection (~2-2.5×); realized number lands the verdict. *(MF-2; user authorized building on the projection 2026-05-27.)* after Step 1b.5 + Step 1c, before freezing the Step-2/3 build scope. The
   multiplier softened from the hoped 2.0–2.25× to a zero-margin 1.8× (lower once native pays its WS tax). Report
   `nominal_realized = 0.83·S_native_candidate/S_py_lock`, `pessimistic = 0.75·S_native_candidate/S_py_lock`, and the
   remaining eng-weeks + permanent dual-stack carry. **GO-to-build without escalation only if nominal ≥1.70× AND
@@ -529,8 +587,8 @@ in Step 1b.5/MF-1). >36 is load-bearing for Step-4 *if* S_py_lock ≥19.
 | 1c push knee >36 (sync/batch triage) | RESOLVED → batching | | **Triage answered by L40S profiling + STEADY-BATCH-0, NOT the 1c-0 sequence.** nsys+ncu (paired) → binding = **BW-bound steady-encoder weight-streaming** (88% GEMM / 72% DRAM / 15% occ = BW-wall, not idle SMs); the 1c-B Nsight attribution routed straight to **batching** (the only byte-floor lever). 1c-0 sync-ablation = moot (sync bounded ~17ms, FACT-2). **STEADY-BATCH-0 PASSED both conjuncts:** OPPORTUNITY fill mean B 2.7-4.4 @ 8-12ms (N=36-56); SPEEDUP per-row B=2 0.62×/B=4 0.38× byte-exact (`steady_b_artifacts/bench_out.log`). ⟹ knee proj 37→~47-64; build = B1-B3. reviews/profiling-paired-verdict.md + {opus,codex}-l40s-profiling-analysis.md (paired). |
 | B1 batched-steady mechanism+T1 (5090) | done (PASS-by-policy) | 3887cb3 | PASSED both runs: K=3/B=4 grouping 1007 rows/336 cases (2 interim event drifts, 0 token); K=2/B=2 coverage closure 1007 rows/502 cases (4 interim drifts, 0 token); 0 enc_len/cache_len mismatches; finals byte-exact; flag-OFF preserved. Combined 0/2014 token divergences across all 3 buckets. PAIRED REVIEW (opus+codex) → reviews/B1-paired-verdict.md PASS-by-policy. Audit follow-ups A1-A8 folded into B2 step body. Codex job: codex-jobs/step-B1-b4ml9h322.log. |
 | B2 batching scheduler+integration (5090) | done (PASS-with-followup) | 0925fa6 | Central dispatcher built per binding spec §II.1-II.14. Spec faithful: §II.2 bidirectional CUDA sync ✓; §II.4 explicit nullable integration (no globals) ✓; §II.10 sealed loader fail-closed ✓; §II.11 scratch + index_copy_ ✓; §II.12 manifest fail-closed (with built-in SHA256+JSON parser) ✓; §II.8 fault tolerance + process exit ✓. b2-t1: 6/6 cases PASS, 0 token + 0 event divergences (1007 rows from 4 ref over forced K2/K3-padded/B4/staggered/Bmax1-control); A1 outcome B (SHAs differ but tensors bit-identical → OFF stays on PRODUCTION B=1 per §II.9). OFF-path smoke 20 sessions N=4 mismatches=0. Scope reductions (4 ref rows, 20 OFF sessions) flagged as B3 pre-conditions (F1, full-corpus b2-t1). Codex F2-T telemetry hardening + Opus F2-M memory headroom both pre-knee-remeasure. PAIRED REVIEW (design fork + build) → reviews/B2-design-paired-verdict.md + reviews/B2-build-paired-verdict.md. |
-| B3 L40S batched-density sweep | todo | | sm_89 B∈{1,2,4} buckets; fresh-proc-per-N N=36..72; SLO-robust knee + stagger-robust; confirms ~47-64 → sets S_native_batched for the F1 re-check. PAIRED (decisive). |
-| F1 funding recheck | provisional CLEAR | | **MF-2** — GO-to-build only if nominal 0.83·S_native/S_py≥**1.70×** AND pessimistic 0.75·…≥**1.50×** + p99 guardrail. **STEADY-BATCH-0 projection (~47-64 → ~2-2.5×) provisionally clears both; Step B3's realized knee is the binding re-check (re-fires if B3 <47).** User authorized building on the projection (2026-05-27). |
+| B3 L40S batched-density sweep | done | dc0c551 | **REALIZED 2026-05-28** (`reviews/B3-L40S-result.md`). Bounded sweep `B_max=4 w0/l0` passed N=64 (top of axis; true knee >64); OFF bounded knee 40 → **≥1.60× bounded lift**. Full-session OFF (sessions_per_worker=8) reconfirmed N=36. F1 full 1000-corpus single-stream PASS (0 tok/event); forced/staggered/control cases at small row counts. A1 outcome B. **Caveats**: high-N B=4 has event-only drift (counted-not-gated, token-clean); strict event-clean B=4 only N=36 / B=2 only N=40. Burst N=64 FAILED (`lag_p95 1355ms`, `enc_first_lock_p95 1607ms`) — pathological-synchronized arrival, **NOT production-relevant** (audio physics + reconnect storms ramp up over hundreds of ms). F2-T binary DEADLOCK in forced-concurrency (Codex used pre-F2-T binary + `lone_timeout=5ms` for F1). |
+| F1 funding recheck | CLEARED | dc0c551 | **CLEARED 2026-05-28** by B3 (`reviews/B3-L40S-result.md`). Bounded sweep `B_max=4 w0/l0` knee ≥64 vs bounded OFF knee 40 = **1.60×**. Production-equivalent vs `S_py_high_end≈20`: best `0.83·64/20 = 2.66×`; pessimistic `0.75·50/20 = 1.88×`. Both ≫ F1 thresholds (1.70× / 1.50×). At N=64 staggered: **ttfs p50 13.5ms / p95 21ms (12% of 175ms budget)** — ~8× SLO headroom. |
 | 2 scheduler+admission design | partial (2a done, 2b resolved) | 7035d01 | **Step 2a invariant work committed `7035d01`** — `density_admission.{h,cpp}`, stale-gen generation tokens, telemetry blocks (`admission`+`stale_gen`+`ws_tail` schema), `--mode admission-smoke` + `--mode stalegen-smoke` (all 4 scenarios PASS). **Step 2b topology RESOLVED** = B>1-batched central dispatcher per B2 verdict. **v4 follow-ups**: 2 one-line default updates (active_cap=40 stale → 64+; window_ms=10 → 0). Priority-finalize-lane: telemetry separates finalize_wait from steady_wait per design §V; empirical decision post-Step-3b. |
 | 3 multi-session + real WS | partial (3a in flight, 3c done, 3b deferred) | 7035d01 (3c via Step 2a) | **Step 3c stale-gen validation COVERED by Step 2a's `--mode stalegen-smoke`** (4/4 scenarios PASS, 0 stale events, drops counted exactly: 3 encode + 3 finalize_output = 6 total). **Step 3a WS-tail microbench IN FLIGHT** (codex job `bcmhesbv0` — fills the stub Step 2a created; boost::beast standalone echo server + loadgen + per-stage timing). **Step 3b real WS server DEFERRED** per `reviews/Step3-scoping.md` (2-3 days focused work; revisit post-B3 verdict). **v4 sizing rule**: worker thread pool sized for ~80-100 concurrent (not 40). WS-tail microbench RUN should sweep N up to 128. |
 | 4 realized density (apples) | todo | | TECHNICAL GO ≥G1_floor; G2 TTFS_spread reported; manifest + re-measured baseline. **AT-RISK (2026-05-27): S_py≈20 → 1.8× at-bar; after the 0.83 haircut 0.83·36≈30 vs 1.5·20=30 = at-bar → push knee >36 (Step 1c) for a robust GO.** |
