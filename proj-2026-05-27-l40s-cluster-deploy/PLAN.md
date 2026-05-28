@@ -270,7 +270,7 @@ system can deploy it from the docs without reading code. Every step must produce
   `user/group` matching the operator. Cross-link to RUNBOOK and to the systemd unit.
   Key files: `deploy/drain.sh`, `deploy/_drain_fixtures/*.csv`
 
-- [ ] **5. Local smoke test (`deploy/smoke_local.sh` + helpers)**
+- [x] **5. Local smoke test (`deploy/smoke_local.sh` + helpers)**
   Laptop-safe end-to-end check with no GPU/cloud. Four independent checks; each runs cleanly or skips:
   (a) **`local_lb.py` leastconn spread + shed-on-full** — start a trivial TCP echo backend on two ports,
   run `ec2-bench/local_lb.py --front … --backends p1,p2 --maxconn 2`, open several connections,
@@ -634,7 +634,7 @@ system can deploy it from the docs without reading code. Every step must produce
 | 1 | Single-proc launcher | done | 3d32d93 | 176 lines, bash -n OK |
 | 2 | systemd unit template | done | b0b97cb | unit 64L, env 146L; %h not $HOME |
 | 3 | HAProxy config generator | done | 6e57260 | 575L; 9 directive assertions + 6 validation tests pass |
-| 4 | Drain automation | done | (pending) | 456L + 3 fixtures; all exit codes verified |
-| 5 | Local smoke test | pending | — | |
+| 4 | Drain automation | done | 6055b45 | 456L + 3 fixtures; all exit codes verified |
+| 5 | Local smoke test | done | (pending) | 410+154+314L; runs 4 checks, exit 0 with 2P/2S |
 | 6 | Rewrite DEPLOYMENT.md for single-proc | pending | — | |
 | 7 | Hand-deploy runbook + deploy/README.md | pending | — | |
