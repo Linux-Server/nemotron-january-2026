@@ -1,123 +1,360 @@
-# Nemotron streaming ASR — production deployment design
+# Nemotron streaming ASR - Phase 1 deployment rationale
 
-DESIGN ARTIFACT covering Steps 2 (launcher), 3 (routing), and 7 (substrate) of
-`proj-2026-05-21-inference-opt/PLAN.md`. Grounded in the measured per-instance scaling
-(`proj-2026-05-21-inference-opt/g6-vs-g6e-results.md`). "Infra as design" per the user's scope choice — these are
-the reference artifacts + the substrate decision, not a live cluster.
+For the HOW, see [RUNBOOK-phase1.md](RUNBOOK-phase1.md). This file is the WHY:
+topology, measurements, trade-offs, and the decision rules behind the Phase 1
+runbook.
 
-## Architecture
+## TL;DR + Phase-1 Architecture
+
+Phase 1's primary topology is **single process, no MPS**: one
+`python -m nemotron_speech.server` per L40S backend box, listening on `:8080`,
+fronted by one HAProxy host using `leastconn`. The default generated HAProxy
+cap is `maxconn 20` per backend box, but that value is the
+**one-utterance-per-connection** default; use
+`deploy/gen_haproxy.py --maxconn-conservative` for `maxconn 12` until sustained
+multi-turn load validation lands. [sources: `deploy/launch_single.sh:4-11`,
+`deploy/launch_single.sh:172-176`, `deploy/gen_haproxy.py:20-27`,
+`deploy/gen_haproxy.py:203-220`, `deploy/gen_haproxy.py:489-505`]
+
+```text
+Approved clients
+    |
+    | wss://<lb>:8443  (LB SG: approved client CIDR only)
+    v
++----------------------+       private VPC IPs only       +----------------------+
+| HAProxy EC2 host     |  leastconn + http-check /health  | L40S backend box 1   |
+| frontend asr_ws      |---------------------------------->| nemotron-asr.service |
+| backend asr_pool     | maxconn 20 default, 12 safer     | launch_single.sh     |
+| admin.sock for drain |                                  | server.py :8080      |
++----------------------+                                  +----------------------+
+          |                                                 ...
+          | leastconn
+          v
+                                                        +----------------------+
+                                                        | L40S backend box N   |
+                                                        | one server.py :8080  |
+                                                        +----------------------+
 ```
-            Load balancer (HAProxy / AWS ALB)   leastconn + maxconn≈7/process on L40S, ≈3-4 on L4, /health, drain
-           /              |               \
-   box (g6/g6e)       box (g6/g6e)      box ...        ← autoscaling group / ECS service
-   ├ CUDA MPS daemon                                    each box:
-   ├ proc0  server.py lanes=2  :8080                    - 1 MPS daemon (concurrent GPU sharing)
-   ├ proc1  server.py lanes=2  :8081                    - K server processes, each lanes=2 (knee ~16)
-   └ procK  server.py lanes=2  :808K                    - launcher = deploy/launch_multiproc.sh
-```
-A single process's *keep-up* knee is ~16 streams, but the **SLO-robust** point (sustained p95<300ms + clean p99) is
-far lower — ~5–7/proc on L40S, ~3/proc on L4 — because the per-proc asyncio **intake thread** saturates
-(`vad_stop_recv_to_process` blows to seconds) well before the keep-up knee, while the GPU sits 40–65% idle.
-**Provision for the SLO-robust point, not the keep-up knee.**
 
-> **⚠️ Re-measure correction (2026-05-27, same g6e/L40S, single-utterance burst — `proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_*.json`):** a **single** server process on the *full* GPU is SLO-robust to **~20 streams** at **ttfs p50 ~42–54ms** (p95 158ms @20; server-side vad_stop→final). The multi-proc **K=3+MPS** config reaches the *same* ~16–20/box but at **ttfs p50 ~245ms** at matched load — so MPS+multi-proc here buys **≈no density over one process** yet pays a **~190ms median-latency tax** (it was sized on the since-refuted "48/box" keep-up belief). The "~5–7/proc" above is the *MPS-degraded* per-proc, **not** a single proc's ceiling. **This is a LEAD, not yet a flip:** the loadgen is one-utterance-per-connection; the genuine multi-proc rationale is per-proc asyncio **intake** parallelism under *sustained multi-turn* load, which this test does not exercise. **Action before changing prod:** run a single-proc *sustained multi-turn* load test — if a single proc holds ~16–20 under sustained load, prefer **fewer procs / no MPS** for the latency win.
+**Primary sizing lead.** Same g6e/L40S, single-utterance burst: a single
+full-GPU process is SLO-robust to about **20 streams/box** with **ttfs p50
+about 42-54 ms** and **p95 about 158 ms at 20 concurrent**. The 10-repeat
+follow-up shows 20 concurrent at p50 53.3 ms, p95 174.4 ms, p99 212.0 ms.
+The retained historical note below records the original caveat; the Phase 1
+decision is stated immediately after it.
+[sources: `proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_high.json:49-59`,
+`proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_p99.json:45-59`,
+`proj-2026-05-24-from-scratch-runtime/PHASE2-PLAN.md:62-65`]
 
-## Per-GPU config matrix (measured 2026-05-24, cloud SLO-robust — `proj-2026-05-24-0859/validation.md`)
-SLO-robust = sustained **p95<300ms + clean p99** (the competitive bar). Relaxing to the 400ms hard budget gives
-~24/box L40S / ~8/box L4, but p99 degrades. The OLD "knee" numbers (L4 ~32 / L40S 48) were *keep-up* knees that do
-**not** hold the SLO — they overstate deployable density ~2–3×.
-| GPU | instance | lanes/proc | K | **SLO-robust /box** | bound by | notes |
+> **Re-measure correction (2026-05-27, same g6e/L40S, single-utterance burst - `proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_*.json`):** a **single** server process on the *full* GPU is SLO-robust to **~20 streams** at **ttfs p50 ~42-54ms** (p95 158ms @20; server-side vad_stop->final). The multi-proc **K=3+MPS** config reaches the *same* ~16-20/box but at **ttfs p50 ~245ms** at matched load - so MPS+multi-proc here buys **about no density over one process** yet pays a **~190ms median-latency tax** (it was sized on the since-refuted "48/box" keep-up belief). The "~5-7/proc" above is the *MPS-degraded* per-proc, **not** a single proc's ceiling. **This is a LEAD, not yet a flip:** the loadgen is one-utterance-per-connection; the genuine multi-proc rationale is per-proc asyncio **intake** parallelism under *sustained multi-turn* load, which this test does not exercise. **Action before changing prod:** run a single-proc *sustained multi-turn* load test - if a single proc holds ~16-20 under sustained load, prefer **fewer procs / no MPS** for the latency win.
+
+Phase 1 does make that lead the default topology because this phase is a manual,
+observable rollout with an explicit fallback rule. K=3+MPS remains documented as
+the fallback, not the primary path. [sources: `proj-2026-05-27-l40s-cluster-deploy/PLAN.md:301-350`,
+`deploy/launch_single.sh:101-108`, `deploy/launch_multiproc.sh:49-67`]
+
+## Phase-1 Scope + Non-goals
+
+Phase 1 ships runnable deploy artifacts and operator docs. It does not stand up
+a live cluster or replace the future production substrate work. The scoped
+implementation is EC2 boxes provisioned by hand, a separate HAProxy EC2 host,
+one backend process per L40S box, network-level access control, manual checks,
+and a K=3+MPS fallback if sustained traffic invalidates the single-proc
+assumption. [sources: `proj-2026-05-27-l40s-cluster-deploy/PLAN.md:8-11`,
+`proj-2026-05-27-l40s-cluster-deploy/PLAN.md:325-349`]
+
+- No IaC: no Terraform, CloudFormation, ASG, or ALB definitions in Phase 1;
+  Phase 2 moves to EC2 + ASG + ALB or equivalent.
+- No live cluster stood up by this phase; the deliverable is scripts and docs.
+- No autoscaling automation; Phase 2 owns scaling policy and managed target
+  groups.
+- No sustained-multi-turn load validation; the `~20` default came from
+  one-utterance-per-connection runs only.
+- No app-level WebSocket auth; the network allowlist is the Phase 1 access
+  control.
+- No TLS certificate automation or renewal; Phase 1 assumes an operator-provided
+  HAProxy PEM and manual reload.
+- No LB HA; one HAProxy host is a single point of failure. Phase 2 adds
+  keepalived/dual-LB or ALB.
+- No monitoring beyond manual checks; no Prometheus, log shipping, or alerting.
+- No GPU memory monitoring beyond operator `nvidia-smi`.
+- Torch is unpinned in the reused bootstrap; Phase 2 pins or mirrors the runtime
+  dependency set.
+
+## Per-GPU Config Matrix
+
+SLO-robust means the latency-safe operating point, not the old keep-up knee.
+The old L40S "48/box" and L4 "~24/box" keep-up estimates overstate deployable
+density; the cloud SLO-robust validation refuted them. [sources:
+`proj-2026-05-24-0859/validation.md:111-121`,
+`proj-2026-05-24-0859/validation.md:125-130`]
+
+| GPU | instance | Phase-1 primary | lanes/proc | SLO-robust /box | Caveat | notes |
 |---|---|---:|---:|---:|---|---|
-| L4 | g6.4xlarge | 2 | 2 | **~6** (3/proc) | GPU mem-BW | ~3× costlier/stream than L40S |
-| L40S | g6e.4xlarge | 2 | 3 | **~16–20** (5.3–6.7/proc) | per-proc intake + GPU-BW | preferred (cheaper than 8xlarge) |
-| L40S | g6e.8xlarge | 2 | 3 | **~16–20** | same (extra vCPU idle) | no density gain over 4xlarge |
+| L4 | g6.4xlarge | not Phase-1 primary | 2 | **~6** in historical K=2+MPS validation | no single-proc L4 baseline yet | BW-bound; remeasure before using L4 for Phase 1 |
+| L40S | g6e.4xlarge | **1 process, no MPS** | 2 | **~20** one-utterance default; **12 safer** pre-sustained test | `maxconn 20` is not a sustained-multi-turn claim | preferred Phase-1 box |
+| L40S | g6e.8xlarge | **1 process, no MPS** | 2 | **~20** expected | extra vCPU did not buy K=3+MPS density | use only if capacity/availability requires |
 
-K=4 fits memory with the padded bucket but is **NOT** a density win — L40S is ~16–20/box regardless of K (K=3 even
-edges K=4 on clean-p99 headroom). $/stream is ~3× the old keep-up-knee estimate (recompute against current instance
-pricing using these /box numbers).
+The L4 row is preserved as a sizing warning, not a recommendation to deploy L4
+without a fresh single-proc measurement. Historical L4 validation was K=2+MPS,
+about 3 streams/proc and about 6/box at the p95 edge; profiling-off did not help
+because L4 is memory-bandwidth-bound. [sources:
+`proj-2026-05-24-0859/validation.md:66-72`,
+`proj-2026-05-24-0859/validation.md:93-98`]
 
-- **lanes=2/process** is the unit (>2 regresses on the GIL; 1 wastes per-process overhead).
-- **MPS is required for K>2** (turns time-slice contention into concurrent SM sharing).
-- **Operate each process at the SLO-robust point and shed above it**: L40S ~5–7 streams/proc (HAProxy `maxconn 6`
-  for the 16/box solid point, `7` for ~20/box if marginal p95 is acceptable); L4 ~3 streams/proc (`maxconn 3`). This
-  enforces the latency-safe point; it does **not** increase capacity. `maxconn 12` is well above it and drives the
-  scheduler/**intake** backlog cliff (`vad_stop_recv_to_process` → seconds).
-- Server-side defense-in-depth: set **`NEMOTRON_ADMISSION_MAX_BACKLOG` ≈ 8–12** (the backlog-count signal — queued
-  per-session scheduler events + scheduler-ready sessions). It WS-closes (1013) new connections past the cap, so the
-  **LB must DRAIN on 1013**. Cloud-verified 2026-05-24: sheds proportionally under overload and keeps admitted
-  **p50<300** (a tighter cap also protects the p95 tail). The age signal `NEMOTRON_ADMISSION_MAX_READY_AGE_MS` does
-  **NOT** track this intake-bound overload (the ready-set drains fast; the backlog is upstream in intake) — use the
-  backlog-count cap. `/health` reports `admission.attempted/admitted/rejected` + the live signal.
-- **Keep K=3 on L40S** (`auto_pick_K`=3). K=4 fits memory with the padded bucket (gpu_mem 40/46 GB, 0 OOM, cloud-
-  confirmed 2026-05-24) but is **not a density win** — L40S is ~16–20/box regardless of K (per-proc intake + GPU-BW
-  ceiling, not proc count), and K=3 has ~16 GB more headroom (30 vs 40 GB) + edges K=4 on clean-p99. The old K=4
-  `ok=56/944` OOM was the per-T finalize pool; the padded bucket fixes the *fit*, but use it for headroom/L4, not density.
-  Prefer the cheaper **g6e.4xlarge** for L40S (extra 8xlarge vCPU sits idle — the limit is per-proc intake + GPU-BW).
-- **Padded-T_max finalize bucket SHIPS ON** (`NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED`, default 1 in
-  launch_multiproc): one `B=1 × T_max` bucket replaces the 19 per-T buckets (T=42–60) → **~19× less finalize
-  graph-pool memory**, FULL T coverage, byte-exact (padded+masked → byte-identical encoder output for the real
-  frames; cloud-verified `mode=padded_T_max` replay). It obsoletes the per-T `_T_MAX`/`_MAX_B` trim (now fallback only).
-- **L4 (g6.4xlarge / 24 GB) ≈ ~6/box** (K=2, ~3 streams/proc; cloud-confirmed clean AND profiled 2026-05-24, gpu_mem
-  19/23, 0 OOM, padded no-trim). ~3× worse than L40S because the encoder is **memory-bandwidth-bound** (L4 ~8.2ms
-  floor vs L40S ~2.9ms) — the GPU *is* the wall on L4, so unlike L40S, profiling-off does NOT lift it. Genuinely
-  BW-bound-low, not a tuning artifact and not a regression (the old "~24/box" was a different tight-budget-capacity
-  metric on g6.2xlarge that overstated the sustainable knee).
+The L40S primary row is the 2026-05-27 single-proc lead. The older K=3+MPS L40S
+validation remains useful as the fallback baseline: K=3 clean was solid around
+16/box and marginal around 20/box, with p50 around 246-251 ms. [sources:
+`proj-2026-05-24-0859/validation.md:80-84`,
+`proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_high.json:49-59`]
 
-## Substrate decision (Step 7)
-For a long-lived **WebSocket** service (not request/response):
+## `maxconn` Caveat
+
+Every `maxconn 20` in this Phase 1 design means: **one backend box, one server
+process, one-utterance-per-connection measurement**. It is the default because
+the generator needs an operator-friendly starting point and the single-proc
+measurement held about 20 streams. It is not proof that long-lived, multi-turn
+WebSocket sessions keep the same tail behavior. [sources:
+`deploy/gen_haproxy.py:20-27`, `deploy/gen_haproxy.py:203-220`]
+
+The safer setting is `deploy/gen_haproxy.py --maxconn-conservative`, which emits
+`maxconn 12`. Use that for production-leaning smoke or any fleet where the first
+sustained multi-turn test has not been run. HAProxy queues past `maxconn` for up
+to `timeout queue 5s`; server-side overload shedding remains
+`NEMOTRON_ADMISSION_MAX_BACKLOG` and WebSocket close 1013. [sources:
+`deploy/gen_haproxy.py:29-36`, `deploy/gen_haproxy.py:496-505`,
+`src/nemotron_speech/server.py:900-905`, `src/nemotron_speech/server.py:5043-5063`]
+
+## `SRV_ENV` Provenance
+
+`launch_single.sh` deliberately keeps the production optimization stack from the
+old multiproc launcher, but expresses it with canonical `NEMOTRON_*` variables:
+continuous mode, silence0, warmup, scheduler/batching, lanes=2, barrier drain,
+batch finalize, encoder CUDA graphs, padded finalize graph, sync compression,
+and finalize priority. [sources: `deploy/launch_multiproc.sh:45-55`,
+`deploy/launch_single.sh:65-99`, `deploy/launch_single.sh:147-164`]
+
+The important caveat is provenance. The optimization stack was validated in the
+K=3+MPS topology, not in the new single-proc Phase 1 topology. These are
+per-process optimizations and should carry over, but that is an untested
+assumption until the single-proc smoke and sustained test run. [sources:
+`proj-2026-05-24-0859/validation.md:11-17`,
+`proj-2026-05-24-0859/validation.md:118-128`,
+`deploy/asr.env.example:68-124`]
+
+If single-proc smoke shows unexpected p95, first A/B-test
+`NEMOTRON_SYNC_COMPRESS=0` and `NEMOTRON_FINALIZE_PRIORITY=0`. Those are the
+two tail levers most likely to interact with scheduling policy; padded finalize
+should stay on unless GPU memory or correctness evidence points elsewhere.
+[sources: `deploy/launch_multiproc.sh:45-55`, `deploy/asr.env.example:115-124`]
+
+## Reproducibility Risk
+
+`ec2-bench/bootstrap.sh` pins NeMo by commit
+`056d937544064df164b1751e9c8a1c3b597389fd`, but it leaves `torch` unpinned and
+installs `uv` through live `curl | sh`. The script then smoke-prints torch and
+NeMo versions, but the preserved EC2 validation logs retained only
+`bootstrap DONE`, not the full bootstrap output. [sources:
+`ec2-bench/bootstrap.sh:8`, `ec2-bench/bootstrap.sh:17-19`,
+`ec2-bench/bootstrap.sh:24-31`, `ec2-bench/bootstrap.sh:37-43`,
+`proj-2026-05-24-0859/box5_k3_clean.log:20-24`]
+
+Last-known-good runtime pointer: local production ASR venv check on 2026-05-27
+reported `torch 2.11.0+cu130` and `nemo 2.8.0rc0` from
+`/home/khkramer/src/nemotron-nano-omni/.venv-asr/bin/python`. Treat that as a
+memory pointer, not a Phase 1 bootstrap pin. Reusing the validated bootstrap
+verbatim keeps the deployment close to the measured EC2 runs, but accepts
+future drift until Phase 2 pins torch, pins or vendors `uv`, and mirrors the
+NeMo source artifact. [memory pointer: current production runtime check
+2026-05-27; source for bootstrap smoke fields: `ec2-bench/bootstrap.sh:37-43`]
+
+## Network Topology Contract
+
+`ec2-bench/ec2_up.py` provisions into public subnets and associates public IPv4
+addresses. Private subnets plus NAT/bastion are Phase 2 hardening, not what the
+reused provisioner supports in Phase 1. [sources: `ec2-bench/ec2_up.py:65-68`,
+`ec2-bench/ec2_up.py:94-97`, `ec2-bench/ec2_up.py:116-132`]
+
+The Phase 1 contract is:
+
+- HAProxy uses backend **private IPs**, so LB-to-backend traffic stays inside
+  the VPC.
+- Backend security groups block public `:8080`; only the LB security group may
+  reach backend `:8080`.
+- The LB security group allows `:8443` only from an approved client CIDR.
+- SSH remains `:22` from `MY_IP` through the existing `nemotron-bench-sg`.
+- App-level WebSocket auth is deferred; this is acceptable only because the
+  network allowlist is the access control.
+
+The procedure for reconciling those security groups belongs in
+[RUNBOOK-phase1.md section 1.5](RUNBOOK-phase1.md#15-network-and-security-groups).
+This section states the contract and why it matters; the runbook is the
+copy-pasteable AWS CLI. [sources: `proj-2026-05-27-l40s-cluster-deploy/PLAN.md:325-334`,
+`ec2-bench/ec2_up.py:78-80`]
+
+## MPS Hardening - Informational Only for Phase 1
+
+Phase 1 single-proc does **not** run CUDA MPS. This section is preserved for the
+K=3+MPS fallback path only. Use `deploy/launch_multiproc.sh` only if a sustained
+multi-turn Phase 2 load test proves that one process's asyncio intake path fails
+below the needed load. [sources: `deploy/launch_single.sh:101-108`,
+`deploy/launch_multiproc.sh:71-82`]
+
+MPS shares one CUDA context, so a CUDA fault in one process can corrupt the
+context and take down the other processes on that GPU. That is a larger blast
+radius than the Phase 1 single-proc model. Mitigations for the fallback are:
+
+- Per-process supervision in the fallback launcher; if multiple procs die
+  together, restart MPS and all procs.
+- LB health-check and operator drain so a restarting process does not receive
+  new streams until `/health` passes.
+- Optional per-client SM caps with `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` for QoS.
+- MIG is not available on L40S/Ada, so it is not an isolation option here.
+- If the MPS blast radius is unacceptable, run without MPS at lower density
+  rather than treating MPS as transparent isolation.
+
+[sources: `deploy/launch_multiproc.sh:71-96`, `deploy/haproxy.cfg.example:42-48`]
+
+## K=3+MPS Fallback Decision Rule
+
+Abandon single-proc only on externally observable evidence. Do not require
+Prometheus or trace instrumentation that Phase 1 does not ship.
+
+1. Sustained p95 stays above the SLO at a known concurrent-stream load below
+   about 16 on a single L40S box.
+   Observe by running the cloud smoke directly against the box, or drain all but
+   one backend and run through the LB; use `deploy/drain.sh status` or HAProxy
+   `show stat` to confirm the box's active stream count.
+
+2. A single box repeatedly returns 1013 admission rejections under target load.
+   Observe with `curl http://<box>:8080/health` and compare
+   `admission.attempted`, `admission.admitted`, and `admission.rejected` before
+   and after the run.
+
+3. Any box's median TTFS climbs past about 150 ms under steady multi-turn
+   traffic.
+   Observe with the cloud smoke, preferably one backend at a time, and correlate
+   with HAProxy `show stat` so the load per box is known.
+
+The fallback is operationally heavier: `deploy/launch_multiproc.sh` currently
+uses flat `server.py` layout, starts MPS, launches K processes, and has its own
+supervisor loop. The Phase 1 runbook documents the compatibility gap before an
+operator flips to it. [sources: `src/nemotron_speech/server.py:5017-5025`,
+`src/nemotron_speech/server.py:5062`, `deploy/drain.sh:21-29`,
+`deploy/drain.sh:64-69`, `deploy/launch_multiproc.sh:69-96`]
+
+## Substrate Decision
+
+For a long-lived WebSocket service, Phase 2 should move production scaling to
+managed infrastructure. Phase 1 is intentionally simpler: EC2 manual provision
+via `ec2-bench/ec2_up.py`, HAProxy on a separate EC2 host, and one
+systemd-managed backend process per L40S box. [sources:
+`ec2-bench/ec2_up.py:1-8`, `deploy/nemotron-asr.service:3-6`,
+`deploy/gen_haproxy.py:6-10`]
+
 | Substrate | Fit | Notes |
 |---|---|---|
-| **EC2 + ASG + ALB** | **recommended start** | Full control of MPS + the launcher (systemd unit); ALB does WS + least-outstanding-requests + drain. Simplest path. |
-| ECS (EC2 launch type) + ALB | good if already on ECS | Launcher = task entrypoint; ASG via capacity provider; MPS needs the daemon in the task/host. |
-| EKS | only if k8s-native | K containers/pod or a K-process supervisor; MPS via device-plugin/daemonset. Heaviest. |
-| SageMaker real-time endpoint | **not a fit** | Request/response, no raw WS. Only via a custom-container streaming/async pattern + glue — revisit later if mandated. |
+| **Phase 1: EC2 + manual provision + HAProxy** | **shipping now** | Full control, minimal moving parts, no IaC, single LB host. |
+| **Phase 2: EC2 + ASG + ALB** | **recommended production start** | ALB supports WebSockets, least-outstanding-requests, and target drain; ASG owns box lifecycle. |
+| ECS on EC2 + ALB | good if already standardized | Task entrypoint can be the launcher; MPS fallback needs host/task care. |
+| EKS | only if k8s-native | Heaviest control plane for this phase. |
+| SageMaker real-time endpoint | **not a fit** | Request/response endpoint shape does not match raw long-lived WebSockets. |
 
-**Recommendation:** EC2 + ASG + ALB to start (or ECS if you're already there). The launcher + MPS are
-substrate-portable, so this decision is reversible.
+The original HAProxy design already named the ALB equivalent for the routing
+shape; Phase 1 keeps self-hosted HAProxy because it is faster to inspect and
+ship by hand. [source: `deploy/haproxy.cfg.example:45-48`]
 
-## MPS hardening (the isolation tradeoff — important)
-MPS shares one CUDA context, so a CUDA fault in one process can corrupt the context and **take down the others on
-that GPU** (bigger blast radius than separate contexts). Mitigations:
-- Per-process supervision + fast restart (the launcher); if multiple procs die together, restart MPS + all procs.
-- LB **health-check + drain** so a restarting process doesn't receive new streams until `/health` passes.
-- Optional per-client SM caps (`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE`) for QoS.
-- **MIG** (hard isolation) is an A100/H100 alternative — **not available on L40S/Ada**.
-- Fallback: run **without MPS at K=2** (full isolation, lower density) if the blast radius is unacceptable.
+## Day-1 Observability
 
-## Autoscaling
-Scale boxes on aggregate utilization = active_streams / (boxes × per-box-knee), targeting ~75%. ALB target-group +
-ASG; deregistration delay = the drain window. Cold start (model load + MPS + K-process warmup) is ~minutes → keep
-warm headroom or pre-warm new boxes before adding to the LB.
+Operators can see these signals today:
 
-## Native runtime (density roadmap — Phase-2, when funded)
-The Python multi-proc+MPS design above is the *shipping* path. The L40S **density ceiling** is GIL/asyncio per-proc
-intake + scheduler serialization (GPU 40–65% idle at the SLO-robust point) — **not** the GPU. A **native
-C++/libtorch runtime** (one process, N true threads, ONE shared weight set via `AOTIModelPackageLoader(num_runners=N)`)
-breaks that ceiling.
+- `curl http://<box>:8080/health` shows `status` and, when admission is enabled,
+  admission counters.
+- `echo 'show stat' | socat /run/haproxy/admin.sock stdio` shows HAProxy backend
+  status and current sessions; `deploy/drain.sh status` parses the same data.
+- `journalctl -u nemotron-asr -f` streams backend server logs from systemd.
+- `nvidia-smi` shows GPU memory and process presence on a backend box.
 
-**Phase-2 Step-1b gate — DONE/PASS (2026-05-27, `proj-2026-05-24-from-scratch-runtime/`):**
-- **SLO-robust knee = ~36 streams/box on L40S** (one process) vs Python's ~16–20/box = **~1.8–2.25×**. Binding =
-  keep-up/GPU-compute, **not memory** (0.035 GiB/stream → could hold 1000s).
-- **Density, not latency:** server-side ttfs is *comparable* to a single Python proc (native p99 147ms @36 vs
-  single-proc Python ~42ms p50 @20 — both well under the 175/250 budget). The ~2× is purely the GIL-break letting
-  the GPU saturate at 36 vs ~20. (The Python *245ms* is the MPS multi-proc tax noted above, not inherent.)
-- **No MPS, no multi-proc, one weight copy** → smaller blast radius than the MPS design.
+What is not instrumented in Phase 1: no Prometheus, no log shipping, no alerting,
+no metric retention, no GPU memory time series, and no automatic p95 alert.
+[sources: `src/nemotron_speech/server.py:10035-10043`,
+`deploy/drain.sh:21-29`, `deploy/drain.sh:77-81`,
+`deploy/nemotron-asr.service:13-14`]
 
-**When to invest:** a ~40–60 eng-week 2nd-stack bet (separate *funding* call; technical-GO ≠ funding-GO). Take it
-when L40S density (fewer/denser boxes at ~2×) beats the Python fleet's ops simplicity. Levers to push the knee >36
-(steady-encoder contention / decode D2H syncs / enc_first lock / cross-stream batching) are under analysis — see
-`proj-2026-05-24-from-scratch-runtime/reviews/` + the checkpoint notes.
+## Autoscaling Roadmap
 
-## $/stream summary
-**L4 (g6.2xlarge) ≈ $0.031/stream is cheapest → cost-optimized + horizontal scale.** L40S (g6e) is the
-density play (**~16–20/box** SLO-robust — *not* the old "48"; that was a keep-up knee that overstated ~2–3×) at
-~3× $/stream, capped by per-proc intake + GPU-BW (not proc count), so use the cheaper **g6e.4xlarge** (not
-g6e.8xlarge — its extra vCPU sits idle). Choose L4-multi-box unless ops strongly prefers fewer/denser boxes. Spot
-pricing ~halves both (keeps the ratio); use spot for stateless capacity with drain on interruption. **The native
-runtime (below) is the real L40S density play (~36/box, ~2× Python) when funded.**
+Phase 2 should scale boxes on aggregate utilization:
+`active_streams / (boxes * per_box_budget)`, targeting about 75% so a single
+box failure or drain does not immediately force overload. Use an ALB target
+group with deregistration delay equal to the chosen drain window, and keep warm
+headroom because model load plus warmup is measured in minutes, not seconds.
+[sources: `deploy/haproxy.cfg.example:45-48`,
+`deploy/gen_haproxy.py:69-78`, `deploy/nemotron-asr.service:29-31`]
+
+This roadmap is not Phase 1 automation. Phase 1's only scaling action is:
+provision another EC2 box, bootstrap it, add its private IP to the HAProxy
+config, validate, then reload HAProxy. [sources:
+`proj-2026-05-27-l40s-cluster-deploy/PLAN.md:352-610`]
+
+## Native Runtime Roadmap
+
+The Python single-proc Phase 1 topology is the pragmatic shipping path. The
+native C++/libtorch runtime remains the density play if fewer boxes become worth
+the engineering cost. The native L40S gate found an SLO-robust knee around
+36 streams/box, about 1.8-2.25x over the accepted Python 16-20/box baseline, and
+the native path avoids MPS and multiple Python processes. [sources:
+`proj-2026-05-24-from-scratch-runtime/PHASE2-PLAN.md:430-432`,
+`proj-2026-05-24-from-scratch-runtime/reviews/codex-l40s-knee-verdict.md:107-115`,
+`proj-2026-05-24-from-scratch-runtime/reviews/codex-l40s-knee-verdict.md:159-162`]
+
+This is not a Phase 1 dependency. Invest when the reduction in L40S fleet size
+beats the cost of a second serving stack, native correctness gates, and ongoing
+version drift management. [source:
+`proj-2026-05-24-from-scratch-runtime/PLAN.md:630-649`]
+
+## $/stream Summary
+
+Do not price the fleet from the old keep-up knees. Use SLO-robust streams per
+box: L40S Phase 1 `~20/box` at `maxconn 20` one-utterance default, or `12/box`
+with `--maxconn-conservative`; historical L4 validation is about `~6/box` and
+needs a single-proc remeasure before Phase 1 use. [sources:
+`proj-2026-05-24-0859/validation.md:93-98`,
+`proj-2026-05-24-from-scratch-runtime/runtime/artifacts/l40s_w3_logs/spy_p99.json:45-59`,
+`deploy/gen_haproxy.py:213-220`]
+
+The sizing formula is:
+
+```text
+cost_per_stream_hour = instance_on_demand_hourly_price / SLO_robust_streams_per_box
+```
+
+For current procurement, recompute with live AWS pricing and the selected
+region. The old "$0.031/stream L4" note was tied to an obsolete keep-up density
+and should not drive Phase 1 capacity planning. With the validated numbers, L40S
+is the Phase 1 density path; L4 is a horizontal-scale/cost option only after a
+fresh single-proc measurement or an explicit K=2+MPS fallback decision. [memory
+pointer: pre-rewrite `deploy/DEPLOYMENT.md:111-117`; validation sources above]
 
 ## Artifacts
-- `deploy/launch_multiproc.sh` — multi-process + MPS launcher (Step 2).
-- `deploy/haproxy.cfg.example` — routing layer (Step 3); ALB equivalent noted inline.
-- `ec2-bench/` — benchmark toolkit + runbook to measure the per-GPU matrix on the real production instance
-  (the knee is CPU-bound, so confirm on the actual instance type before sizing the fleet).
+
+- [launch_single.sh](launch_single.sh) - Phase-1 launcher: one process, no MPS,
+  no in-script supervisor.
+- [nemotron-asr.service](nemotron-asr.service) - systemd unit; systemd is the
+  only backend supervisor.
+- [asr.env.example](asr.env.example) - environment override template and
+  provenance notes.
+- [gen_haproxy.py](gen_haproxy.py) - HAProxy config generator: `leastconn`,
+  Runtime API socket, `/health` `http-check expect rstring`.
+- [drain.sh](drain.sh) - operator drain wrapper around the HAProxy Runtime API.
+- [_drain_fixtures/](_drain_fixtures/) - sample `show stat` CSVs for drain
+  smoke tests.
+- [smoke_local.sh](smoke_local.sh) plus helpers - laptop-safe smoke test for the
+  deploy artifacts.
+- [RUNBOOK-phase1.md](RUNBOOK-phase1.md) - procedure of record; step 7 lands it.
+- [README.md](README.md) - deploy navigation index; step 7 lands it.
+- [launch_multiproc.sh](launch_multiproc.sh) - K=3+MPS fallback only; untouched
+  by Phase 1.
+- [haproxy.cfg.example](haproxy.cfg.example) - original routing design artifact;
+  predates the generator and still documents the leastconn rationale.
+- [../ec2-bench/](../ec2-bench/) - provisioning and benchmark toolkit referenced
+  by the runbook.

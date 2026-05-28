@@ -298,7 +298,7 @@ system can deploy it from the docs without reading code. Every step must produce
   smoke in RUNBOOK); how to run it (one invocation, no args); how to interpret each SKIP.
   Key files: `deploy/smoke_local.sh`, `deploy/_smoke_backend.py`, `deploy/_smoke_haproxy_check.py`
 
-- [ ] **6. Rewrite `deploy/DEPLOYMENT.md` for single-proc Phase 1**
+- [x] **6. Rewrite `deploy/DEPLOYMENT.md` for single-proc Phase 1**
   Restructure so **single-proc/no-MPS is the Phase-1 primary topology** (architecture diagram: LB →
   N boxes, one `server.py` :8080 each; SLO-robust ~20/box at **p50 ~42–54ms, p95 ~158ms** at 20
   concurrent — cite the 2026-05-27 note in the current DEPLOYMENT.md; `maxconn 20` leastconn).
@@ -635,6 +635,6 @@ system can deploy it from the docs without reading code. Every step must produce
 | 2 | systemd unit template | done | b0b97cb | unit 64L, env 146L; %h not $HOME |
 | 3 | HAProxy config generator | done | 6e57260 | 575L; 9 directive assertions + 6 validation tests pass |
 | 4 | Drain automation | done | 6055b45 | 456L + 3 fixtures; all exit codes verified |
-| 5 | Local smoke test | done | (pending) | 410+154+314L; runs 4 checks, exit 0 with 2P/2S |
-| 6 | Rewrite DEPLOYMENT.md for single-proc | pending | — | |
+| 5 | Local smoke test | done | 100cee9 | 410+154+314L; runs 4 checks, exit 0 with 2P/2S |
+| 6 | Rewrite DEPLOYMENT.md for single-proc | done | (pending) | 123→360L; 15 sections all present |
 | 7 | Hand-deploy runbook + deploy/README.md | pending | — | |
