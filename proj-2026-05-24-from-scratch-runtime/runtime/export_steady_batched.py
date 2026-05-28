@@ -10,7 +10,7 @@ B independent streaming caches:
   cache_last_channel_len: B
 
 Run from runtime/ on a NeMo-capable host for export+compile:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_steady_batched.py --out ./artifacts
+  HF_HUB_OFFLINE=1 ./.venv/bin/python export_steady_batched.py --out ./artifacts
 
 On an L40S torch-only sm_89 box, copy the enc_steady_t2a_b{1,2,4}.pt2 files
 first, then compile only:

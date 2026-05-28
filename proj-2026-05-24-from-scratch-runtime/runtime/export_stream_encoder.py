@@ -4,7 +4,7 @@ stay byte-exact vs eager cache_aware_stream_step ACROSS the whole streaming sequ
 This is the key risk: a frozen trace might not handle varying cache_len. If it holds, the C++ streaming port can load
 these .ts; if not, switch to torch.export/dynamic. Also bundles the clip's mel + gold streaming tokens for the C++ test.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_stream_encoder.py --out ./artifacts
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python export_stream_encoder.py --out ./artifacts
 """
 from __future__ import annotations
 import argparse, io, os, numpy as np, torch, soundfile as sf

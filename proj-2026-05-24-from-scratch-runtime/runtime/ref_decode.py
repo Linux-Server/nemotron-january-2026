@@ -7,7 +7,7 @@ y_sequence to NeMo's deployed greedy_batch label-looping decode on every golden 
 the algorithm exactly → the spec for B1b's C++ decode. (Greedy label-looping and frame-looping yield the same greedy
 argmax sequence; this is the simplest correct reference.)
 
-Run: /home/khkramer/src/parakeet/venv/bin/python ref_decode.py
+Run: ./.venv/bin/python ref_decode.py
 """
 from __future__ import annotations
 import glob, os, torch

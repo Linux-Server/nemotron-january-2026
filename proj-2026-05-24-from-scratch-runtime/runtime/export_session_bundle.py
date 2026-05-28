@@ -20,9 +20,9 @@ finalize geometry as gold checks only.  Each utterance contains:
   per-chunk gold mel tensors, and final remainder geometry/tensors.
 
 Run from runtime/:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_session_bundle.py --n 20
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_session_bundle.py --multiturn --n 8
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_session_bundle.py --audio --n 20
+  HF_HUB_OFFLINE=1 ./.venv/bin/python export_session_bundle.py --n 20
+  HF_HUB_OFFLINE=1 ./.venv/bin/python export_session_bundle.py --multiturn --n 8
+  HF_HUB_OFFLINE=1 ./.venv/bin/python export_session_bundle.py --audio --n 20
 """
 from __future__ import annotations
 

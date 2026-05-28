@@ -4,7 +4,7 @@ fixture (drop=2 continuation T={44,45,58}; drop=0 first-chunk T=49). Fixed-shape
 and EXACT-T = no padding bleed. Saves one ExportedProgram per bucket; aot_compile_buckets.py AOTI-compiles them
 constants-on-disk in the container so they share ONE weight set (validate_shared_weights.py).
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_finalize_buckets.py --out ./artifacts/finalize_buckets
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python export_finalize_buckets.py --out ./artifacts/finalize_buckets
 """
 from __future__ import annotations
 import argparse, json, os, torch

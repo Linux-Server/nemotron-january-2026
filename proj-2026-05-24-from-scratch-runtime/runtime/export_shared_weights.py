@@ -7,7 +7,7 @@ Saves BOTH a .pt (Python consumers) and a TorchScript .ts holding a Dict[str,Ten
 (C++ consumers: FQNs have dots so they can't be buffer names). Older artifacts used "e.<name>"; consumers keep an
 e.* <-> encoder.* compatibility fallback, but the primary exported contract is encoder.*.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_shared_weights.py
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python export_shared_weights.py
 """
 from __future__ import annotations
 

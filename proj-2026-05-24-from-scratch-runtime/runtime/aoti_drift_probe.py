@@ -8,7 +8,7 @@ OWN recurrent caches forward — eager vs AOTI-steady — and logs PER CHUNK: ca
 between the paths (does drift grow or plateau?), token-sequence divergence (first differing chunk), and the minimum
 greedy argmax margin (top1-top2 logit) along each path (how close to a flip we ever got).
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python aoti_drift_probe.py [N_CLIPS]
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python aoti_drift_probe.py [N_CLIPS]
 """
 from __future__ import annotations
 import io, os, sys, numpy as np, torch, soundfile as sf

@@ -7,7 +7,7 @@ of every stripped bucket package with its SHA-256.  Strip validation records are
 kept per bucket when the package hash still matches.
 
 Run from runtime/:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python build_bucket_manifest.py
+  HF_HUB_OFFLINE=1 ./.venv/bin/python build_bucket_manifest.py
 """
 from __future__ import annotations
 

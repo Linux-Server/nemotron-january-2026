@@ -3,7 +3,7 @@
 trace made with an EMPTY initial cache (first-chunk) does NOT match a steady chunk (populated cache). Here we run a
 realistic 2-chunk eager streaming sequence, then export the STEADY chunk's geometry and check byte-exactness vs eager.
 
-Run: /home/khkramer/src/parakeet/venv/bin/python validate_encoder_v2.py
+Run: ./.venv/bin/python validate_encoder_v2.py
 """
 from __future__ import annotations
 import torch, nemo.collections.asr as nemo_asr

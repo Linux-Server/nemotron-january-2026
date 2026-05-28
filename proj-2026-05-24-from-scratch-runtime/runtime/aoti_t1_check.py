@@ -6,7 +6,7 @@ is whether that drift survives to TOKENS: is the AOTI-compiled steady encoder T1
 verified ref decode, and compare the emitted token sequence vs the full-eager NeMo streaming reference.
 
 The AOTI .so was compiled in the container (sm_120); this loads it on the host (same torch 2.8.0+cu128, same 5090) — no
-nvcc needed at load. Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python aoti_t1_check.py
+nvcc needed at load. Run: HF_HUB_OFFLINE=1 ./.venv/bin/python aoti_t1_check.py
 """
 from __future__ import annotations
 import io, os, numpy as np, torch, soundfile as sf

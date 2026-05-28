@@ -13,7 +13,7 @@ src/nemotron_speech/server.py, but keeps it synchronous and single-stream:
   flushing the fork.
 
 Run:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python finalize_ref.py
+  HF_HUB_OFFLINE=1 ./.venv/bin/python finalize_ref.py
 """
 from __future__ import annotations
 

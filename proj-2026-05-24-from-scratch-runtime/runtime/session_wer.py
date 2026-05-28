@@ -2,7 +2,7 @@
 """Compute Step-4 session WER from C++ hypotheses and bundle references.
 
 Run from runtime/ after the C++ session gate writes artifacts/session_hyps.jsonl:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python session_wer.py
+  HF_HUB_OFFLINE=1 ./.venv/bin/python session_wer.py
 """
 from __future__ import annotations
 

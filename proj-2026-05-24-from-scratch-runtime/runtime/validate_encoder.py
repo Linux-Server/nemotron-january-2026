@@ -2,7 +2,7 @@
 """0.2 / T2a — is the exported steady-encoder TorchScript byte-exact vs the eager NeMo cache_aware_stream_step?
 Same inputs -> compare all 5 outputs bit-for-bit (torch.equal) + max-abs-diff. Run-to-run determinism (T0) too.
 
-Run: /home/khkramer/src/parakeet/venv/bin/python validate_encoder.py
+Run: ./.venv/bin/python validate_encoder.py
 """
 from __future__ import annotations
 import os, torch

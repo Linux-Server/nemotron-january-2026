@@ -11,7 +11,7 @@ the eager-vs-AOTI DELTA on the SAME pipeline under identical normalization. We r
     sanity vs ~2%, and the WER cost of any divergence),
   - all hypotheses saved to JSON so the few divergent utterances (if any) can get semantic scoring later.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python aoti_full1000_shadow.py [N]
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python aoti_full1000_shadow.py [N]
 """
 from __future__ import annotations
 import io, os, sys, json, time, numpy as np, torch, soundfile as sf

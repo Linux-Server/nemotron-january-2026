@@ -5,7 +5,7 @@ fixture shows T from 44 to 261). TorchScript trace is not byte-exact for dynamic
 so — exactly like the steady encoder (export_t2a.py + aot_compile.py) — we torch.export here on the host, then
 AOTI-compile in the container (aot_compile_finalize.py). drop_extra is baked per-variant (0=first, 2=continuation).
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_finalize_t2a.py --out ./artifacts
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python export_finalize_t2a.py --out ./artifacts
 """
 from __future__ import annotations
 import argparse, os, torch

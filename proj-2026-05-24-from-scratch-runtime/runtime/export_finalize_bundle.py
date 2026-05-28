@@ -2,7 +2,7 @@
 """Pack finalize_fixture.pt rows into a TorchScript bundle for the C++ finalize harness.
 
 Run from runtime/:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_finalize_bundle.py
+  HF_HUB_OFFLINE=1 ./.venv/bin/python export_finalize_bundle.py
 """
 import os
 

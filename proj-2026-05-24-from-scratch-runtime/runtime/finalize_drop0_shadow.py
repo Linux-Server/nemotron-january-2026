@@ -6,7 +6,7 @@ shared + run + decode-continue) against the eager finalize_ref tokens. Closes th
 basis=unstripped_package = stripped==unstripped; the compile self-check was encoder-level within atol; this is the
 token-level AOTI-vs-finalize_ref check).
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python finalize_drop0_shadow.py
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python finalize_drop0_shadow.py
 """
 from __future__ import annotations
 import glob, os, re, torch

@@ -6,7 +6,7 @@ FORCE it by truncating a clip to short lengths and sweeping. Per the server math
 strip via the usual pipeline. (rc=1 EN v1: this completes the bounded finalize T range 33..58, so full bucket coverage +
 fail-closed = no eager path needed.)
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python build_drop0_buckets.py --out ./artifacts/finalize_buckets
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python build_drop0_buckets.py --out ./artifacts/finalize_buckets
 """
 from __future__ import annotations
 import argparse, glob, json, os, re, torch

@@ -12,7 +12,7 @@ always writes an eager fixture bundle containing inputs, eager reference outputs
 carried decoder state, and gold final token sequences.
 
 Run:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_finalize_encoder.py --out ./artifacts
+  HF_HUB_OFFLINE=1 ./.venv/bin/python export_finalize_encoder.py --out ./artifacts
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ fixed-T finalize bucket (byte-exact fixed-shape). The corpus T-distribution is d
 we already have 44/45/58, so export the rest. aot_compile_buckets.py then AOTI-compiles them (container), strip_bucket_weights
 strips the dead in-package weights. Real (not dummy) examples avoid any export-fidelity question.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python build_range_examples.py --out ./artifacts/finalize_buckets
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python build_range_examples.py --out ./artifacts/finalize_buckets
 """
 from __future__ import annotations
 import argparse, glob, json, os, re, torch

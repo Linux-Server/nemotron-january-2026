@@ -5,7 +5,7 @@ output to the unpadded chunk_at_true_T? If yes, a fixed-T AOTI bucket + pad/slic
 "padded finalize"). If the depthwise-conv right-context bleeds across the pad boundary, it won't be byte-exact and we
 need a different bucketing. Eager-only, no export/AOTI — the crux check before building the substrate.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python test_finalize_padding.py
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python test_finalize_padding.py
 """
 from __future__ import annotations
 import torch

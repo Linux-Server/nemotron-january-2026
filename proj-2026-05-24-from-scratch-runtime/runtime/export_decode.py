@@ -3,7 +3,7 @@
 is BYTE-EXACT vs the fixtures. This proves the decode path is exportable -> the C++ port (1.2a) loads the SAME .ts and
 implements the (verified, simple) loop. The SOS pred-output is precomputed once (avoids tracing the y=None branch).
 
-Run: /home/khkramer/src/parakeet/venv/bin/python export_decode.py --out ./artifacts
+Run: ./.venv/bin/python export_decode.py --out ./artifacts
 """
 from __future__ import annotations
 import argparse, glob, os, torch

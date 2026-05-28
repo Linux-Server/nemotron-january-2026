@@ -6,7 +6,7 @@ microbench can capture+replay a realistic CUDA graph from multiple threads. This
 (that's Wave-2) — we only need it to RUN at the right shape/cost.
 
 Run in the env that has torch+nemo (the parakeet venv):
-  /home/khkramer/src/parakeet/venv/bin/python export_encoder.py --out ./artifacts
+  ./.venv/bin/python export_encoder.py --out ./artifacts
 
 Outputs: artifacts/encoder_steady_b1.ts (TorchScript) + artifacts/shapes.json (static input shapes for the C++ harness).
 If TorchScript tracing of the streaming step fails (known risk: the drop_extra global mutation + cache control flow),

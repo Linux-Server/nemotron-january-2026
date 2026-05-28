@@ -4,7 +4,7 @@ tokens, so a C++ program can run audio -> preproc -> encoder -> decode end-to-en
 non-streaming encoder, matching how the fixtures were made — proves the C++ chain composes byte-exact on real speech.
 The streaming cache-aware chunk loop is the separate 1.2b proper.)
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_pipeline.py --out ./artifacts
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python export_pipeline.py --out ./artifacts
 """
 from __future__ import annotations
 import argparse, io, os, numpy as np, torch, soundfile as sf

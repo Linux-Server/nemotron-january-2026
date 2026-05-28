@@ -4,7 +4,7 @@ captures tensor-value ops symbolically (unlike trace which bakes them); if cache
 pure tensor ops it'll be byte-exact across cache_len; if it has data-dependent Python control flow, export errors (a
 finding -> reimplement the step, or stay T1). Validate byte-exact across the 20-chunk streaming sequence.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python export_t2a.py --out ./artifacts
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python export_t2a.py --out ./artifacts
 """
 from __future__ import annotations
 import argparse, io, os, numpy as np, torch, soundfile as sf

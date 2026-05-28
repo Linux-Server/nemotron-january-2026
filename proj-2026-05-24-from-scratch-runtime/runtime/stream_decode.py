@@ -4,7 +4,7 @@ chunk = cat(mel_ring[9], new_mel[16]) drop=2; ring=last 9) + decode with state-c
 the streaming loop is BYTE-EXACT vs NeMo's streaming decode (partial_hypotheses continuation) on the SAME encoder
 outputs. Proves the streaming COMPOSITION (cache threading + decode state-carry) before the C++ port.
 
-Run: HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python stream_decode.py
+Run: HF_HUB_OFFLINE=1 ./.venv/bin/python stream_decode.py
 """
 from __future__ import annotations
 import io, numpy as np, torch, soundfile as sf

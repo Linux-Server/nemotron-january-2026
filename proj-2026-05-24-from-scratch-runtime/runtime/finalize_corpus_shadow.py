@@ -2,7 +2,7 @@
 """Corpus shadow for exact-T AOTI finalize buckets vs eager finalize_ref.
 
 Run from runtime/:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python finalize_corpus_shadow.py 200
+  HF_HUB_OFFLINE=1 ./.venv/bin/python finalize_corpus_shadow.py 200
 """
 from __future__ import annotations
 

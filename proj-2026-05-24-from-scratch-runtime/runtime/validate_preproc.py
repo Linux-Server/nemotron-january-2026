@@ -4,7 +4,7 @@ keep cuFFT deterministic (memory cufft-stft-plan-size-nondeterminism). Validate:
 run-to-run byte-identical, and (T2a) it exports to TorchScript byte-exact. If both hold, the native runtime can
 reproduce the server's preprocessing byte-exact by using the same fixed-size constant-plan approach.
 
-Run: /home/khkramer/src/parakeet/venv/bin/python validate_preproc.py
+Run: ./.venv/bin/python validate_preproc.py
 """
 from __future__ import annotations
 import torch, nemo.collections.asr as nemo_asr

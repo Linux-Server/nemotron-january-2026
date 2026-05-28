@@ -6,7 +6,7 @@ The native C++ decode (B1b) must reproduce NeMo's decode BYTE/STATE-exact given 
 use_cuda_graph_decoder=False, max_symbols=10) and prints the state structure the native impl must match. Synthetic audio
 is fine — the decode ALGORITHM is exercised identically; realistic/streaming-continuation fixtures are a follow-up.
 
-Run: /home/khkramer/src/parakeet/venv/bin/python capture_decode_fixtures.py --out ./fixtures
+Run: ./.venv/bin/python capture_decode_fixtures.py --out ./fixtures
 """
 from __future__ import annotations
 import argparse, os, json

@@ -1,7 +1,7 @@
 # PLAN_RULES — 1.4b Phase-1 T1 gate completion
 
 ## Environment
-- Python (export/oracle): HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python <script> from runtime/ (has nemo+torch 2.8+cu128).
+- Python (export/oracle): HF_HUB_OFFLINE=1 ./.venv/bin/python <script> from runtime/ (has nemo+torch 2.8+cu128). The venv is created by `bash setup-venv.sh` (one-time, ~5-20 min, ~11 GiB). Pin: Python 3.12.10 (.python-version), torch 2.8.0+cu128, NeMo 2.4.1. Lockfile = requirements.txt (377 entries, full transitive freeze); top-level intents = requirements.in. The venv is gitignored (.venv/).
 - C++ build+run: in-container nemotron-aoti:cu128. docker run --rm --gpus all -v /home/khkramer/src/nemotron-january-2026:/work -w /work/proj-2026-05-24-from-scratch-runtime/runtime ... ; TORCH_ROOT=$(python3 -c "import torch,os;print(os.path.dirname(torch.__file__))"), CUDA_ROOT=/usr/local/cuda. Build via the cmake/make pattern in cpp/CMakeLists.txt; the established build scripts are /tmp/build_session_cpp.sh etc.
 - Strip-validation + any nemo-dependent step: HOST only (container lacks nemo/omegaconf).
 

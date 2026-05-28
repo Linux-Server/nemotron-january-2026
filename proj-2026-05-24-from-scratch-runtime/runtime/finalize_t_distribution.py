@@ -6,7 +6,7 @@ to ``prepare_finalize_inputs``. It intentionally does not run the finalize encod
 it only measures which exact-T buckets the corpus would route to.
 
 Run from runtime/:
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python finalize_t_distribution.py 200
+  HF_HUB_OFFLINE=1 ./.venv/bin/python finalize_t_distribution.py 200
 """
 from __future__ import annotations
 

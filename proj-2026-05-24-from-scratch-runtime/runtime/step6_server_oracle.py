@@ -10,7 +10,7 @@ server or C++ harness.
 
 Run from this directory with the parakeet env:
 
-  HF_HUB_OFFLINE=1 /home/khkramer/src/parakeet/venv/bin/python step6_server_oracle.py --n 8 --start-server
+  HF_HUB_OFFLINE=1 ./.venv/bin/python step6_server_oracle.py --n 8 --start-server
 
 The client intentionally follows the same wire protocol used by
 ``stt_benchmark.nemotron_local_stt``: raw 16 kHz mono int16 PCM binary frames
@@ -44,7 +44,7 @@ ART = RUNTIME / "artifacts"
 LOG_DIR = ART / "logs"
 SERVER = ROOT / "src" / "nemotron_speech" / "server.py"
 DEFAULT_BUNDLE = ART / "session_audio_bundle.ts"
-DEFAULT_PYTHON = "/home/khkramer/src/parakeet/venv/bin/python"
+DEFAULT_PYTHON = "./.venv/bin/python"
 
 EVENT_INTERIM = 0
 EVENT_FINAL = 1
