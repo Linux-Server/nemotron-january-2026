@@ -1,0 +1,37 @@
+# Round 3 Codex review
+
+## Resolved from round 2
+- `drain.sh wait-empty` now uses the HAProxy Runtime API command `show stat`, not `show stat;csv` (`PLAN.md:231-236`). HAProxy's Runtime API returns CSV by default and its first row is `# pxname,svname,...`, so stripping the leading `# ` before header-name parsing is the right behavior.
+- The editable-install command now follows `ec2-bench/bootstrap.sh:25-31`: PATH `uv` plus `uv pip install --python "$HOME/nemo-venv" -e "$HOME/nemotron"` (`PLAN.md:368-372`), not `$VENV/bin/uv`.
+- The health check was tightened in the generator spec to `http-check expect rstring "\"status\"[ ]*:[ ]*\"healthy\""` (`PLAN.md:205-208`). HAProxy documents `expect rstring` as the regex form for matching HTTP response bodies, and the quoted/escaped config argument should yield the intended regex.
+- The public-subnet reality is now acknowledged: `ec2_up.py` provisions public-IP instances, while Phase 1 relies on private backend IPs plus security-group restrictions rather than claiming private subnets (`PLAN.md:305-314`).
+- The round-2 smoke refinements are folded: `--local-test` exists for non-root HAProxy (`PLAN.md:192-195,263-271`), the health smoke covers healthy to loading to healthy, and LB-host prereqs include `socat`, `python3`, and `aws-cli` (`PLAN.md:336-340`).
+- Cloud smoke artifact clobbering is addressed with a unique `--model-tag` (`PLAN.md:398-404`).
+
+## Critical (must-fix before implementation)
+- The public-subnet access-control plan still is not executable with the reused provisioner. `ec2-bench/ec2_up.py:21-23,71-80,94-100` always creates/reuses one fixed security group, `nemotron-bench-sg`, and attaches it to every instance. The revised runbook then talks about a backend SG allowing `:8080` only from an LB SG and an LB SG allowing `:8443` from client CIDRs (`PLAN.md:345-348`), but Step 1 provisions the LB "the same way" (`PLAN.md:359-362`), which puts it in the same fixed SG as the backends. For an auth-less WebSocket service on public-IP instances, this cannot stay implicit. The plan must require concrete SG reconciliation: either extend `ec2_up.py` with SG-name overrides, or add AWS CLI commands to create/attach distinct backend and LB SGs and authorize exactly `LB_SG -> backend:8080`, `client CIDR -> LB:8443`, and `MY_IP -> SSH`.
+
+## Material (should-fix; folding into the plan adds real value)
+- The rsync exclusions are not yet the right deploy shape. A dry run of the exact `PLAN.md:363-367` command still includes local virtualenvs (`.venv/`, `stt-benchmark/.venv/`) and `.git/`; in this checkout those are about 1.1 GB, 1.8 GB, and 20 MB respectively. It also over-matches `ec2-bench/local_*`, which drops the source file `ec2-bench/local_lb.py`, not only bulky `local_.../` result directories. Add excludes for `.git/`, `.venv/`, `stt-benchmark/.venv/` (or `stt-benchmark/` if the backend does not need it), and make the local-result exclusion directory-specific, e.g. `ec2-bench/local_*/`.
+- The LB host still has a missing code-copy step. Step 4 runs `python3 ~/nemotron/deploy/gen_haproxy.py` on the LB host (`PLAN.md:388-391`), but the only rsync procedure is under "Bootstrap each box" and is written for backend boxes (`PLAN.md:363-368`). Either explicitly rsync the repo or `deploy/` directory to the LB host, or generate locally and copy `haproxy.cfg` plus `drain.sh`.
+- The `ec2-bench/.instance_*.json` path guidance is still copy-paste ambiguous. Step 1 says `cd ec2-bench` and run `python ec2_up.py` (`PLAN.md:349-353`), then immediately reads `ec2-bench/.instance_boxN.json` (`PLAN.md:355-357`). That path is correct from repo root, but wrong if the operator remains in `ec2-bench`. Pick one style for the whole runbook, preferably repo-root commands like `python ec2-bench/ec2_up.py`, or add an explicit `cd ..` before every `ec2-bench/...` path.
+- The old loose HAProxy health-check directive is still present in plan-wide validation text. `PLAN.md:31-36` and `PLAN.md:103-106` still say `http-check expect string "healthy"`, while Step 3 correctly says `rstring "\"status\"[ ]*:[ ]*\"healthy\""`. Update those stale references so implementation and tests enforce the same directive.
+- The single-supervisor rule is fixed in Rules and Step 1, but the reference-implementation bullet still says to reuse the `launch_multiproc.sh` supervisor loop (`PLAN.md:16-18`). That directly contradicts `PLAN.md:83-88` and `PLAN.md:139-151`; remove "and the supervisor loop" from the reference section.
+- The SRV_ENV summary in Current state still drops `NEMOTRON_` prefixes for most variables (`PLAN.md:58-62`), despite the canonical namespace rule (`PLAN.md:45-50`) and the actual `launch_multiproc.sh:49-55` values. This is a small-looking docs bug, but it is exactly the kind of text an implementer will copy into `asr.env.example`.
+
+## Minor (nice-to-have; OK to defer to implementation if low cost there)
+- `--local-test` should say whether the generator expands `$TMPDIR` to a concrete socket path or the smoke passes `--stats-socket "$tmpdir/haproxy.sock"`. HAProxy config files do not shell-expand `$TMPDIR`.
+- For laptop HAProxy, consider dropping or lowering `ulimit-n 200000` in `--local-test`. Non-root HAProxy can fail if the user's hard `nofile` limit is lower than the configured value; this is not a production issue, only a smoke-test portability issue.
+- The cloud-smoke command should state where it runs. If it runs from the operator's original checkout, excluding `proj-*` from server rsync is fine. If it is expected to run on the LB host, excluding `proj-2026-05-19-eou-endpointing/run_full1000_conc12.py` breaks the command.
+
+## Non-findings (things I checked that look correct)
+- `show stat` plus leading-`#` header stripping is the correct Runtime API parsing contract. The CSV header includes `pxname`, `svname`, `scur`, and `smax`, and parsing by header name is the right durability choice across HAProxy versions.
+- `http-check expect rstring "\"status\"[ ]*:[ ]*\"healthy\""` is valid HAProxy syntax for the intended body regex. It is better than `string "healthy"` because it keys on the JSON `status` field rather than any future field containing the word `healthy`.
+- `http-check send meth GET uri /health` is valid HAProxy 2.2+ syntax and is suitable with `option httpchk`; `inter 2s fall 3 rise 2` matches the smoke timing assumptions of roughly 6s down and 4s up.
+- `--local-test` is directionally sufficient for non-root HAProxy: temp stats socket, no `user haproxy` / `group haproxy`, non-privileged bind ports, and stdout logging are the right substitutions.
+- `ADMISSION_MAX_BACKLOG` is the only variable that needs to be made operator-visible as a deploy-time requirement. The service and launcher can default app dir, venv, model, port, right-context, and HF cache paths; the admission cap is the one setting that changes safety semantics from server default "effectively off" to Phase-1 backpressure.
+- `maxconn` is internally consistent where it affects capacity: default 20, conservative 12, and documentation caveats identify 20 as the one-utterance-per-connection number.
+- Excluding `proj-*` does not break the backend service itself. The editable install needs `pyproject.toml` and `src/nemotron_speech`, and bootstrap needs `ec2-bench/bootstrap.sh`; those are still included by the rsync dry run.
+
+## Verdict
+CRITICAL_FINDINGS - the HAProxy and `uv` fixes are correct, but the security-group plan still conflicts with the fixed-SG EC2 provisioner, so the plan is not ready to ship to `/implement`.

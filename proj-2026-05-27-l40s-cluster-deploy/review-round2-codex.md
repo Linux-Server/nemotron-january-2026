@@ -1,0 +1,43 @@
+# Round 2 Codex review
+
+## Resolved from round 1
+
+- Instance reuse is addressed in the main box provisioning path: `PLAN.md:314-321` now requires both unique `NEMOTRON_EC2_NAME=nemotron-asr-boxN` and unique `NEMOTRON_EC2_STATE=.instance_boxN.json`, matching the reuse key in `ec2-bench/ec2_up.py:23,44-50`. Caveat: the state-file path in the follow-up commands is still wrong; see Material.
+- The flat-copy/package-layout issue is addressed in direction: `PLAN.md:139-144,323-326` switches to `python -m nemotron_speech.server` plus editable install, and the repo supports that layout via `pyproject.toml:1-2,64-65` and `src/nemotron_speech/server.py:53-67,10096-10128`. Caveat: the exact `uv` command in the runbook is broken; see Critical.
+- The systemd `$HOME` expansion issue is folded correctly: `PLAN.md:159-163` uses `%h` instead of shell `$HOME` inside the unit.
+- The HAProxy queue-vs-shed issue is folded correctly: `PLAN.md:190-203` documents `timeout queue 5s`, and `PLAN.md:239-243` explicitly says `local_lb.py` sheds while HAProxy queues.
+- Drain parsing by CSV header and fixture tests are folded in `PLAN.md:217-226`. Caveat: the runtime socket command got changed to a non-HAProxy command; see Critical.
+- TLS, HAProxy supervision/reload, manual observability, `maxconn 20` caveats, `systemd-analyze verify`, and stable IP-derived backend names are all materially folded in `PLAN.md:176-208,260-296,335-343`.
+- The health-check semantics from round 1 are folded correctly: `PLAN.md:31-34,192-194` now says `/health` is HTTP 200 with body status and adds `http-check expect string "healthy"`.
+
+## Critical (must-fix before implementation)
+
+- `drain.sh wait-empty` is specified with the wrong HAProxy Runtime API command. `PLAN.md:217-220` says to poll `show stat;csv`, but the runtime socket command is `show stat`; CSV is the default output. `;csv` is stats-page URI syntax, not the socket command. If implemented literally, `wait-empty` will parse an error instead of the `pxname/svname/scur` table and the rolling deploy safety check is dead. Fix the plan to send `show stat\n`, strip the leading `#` from the CSV header, and keep the existing header-name parsing. Reference: HAProxy Runtime API `show stat` docs show `echo "show stat" | socat ...` and CSV output by default.
+- The editable-install command in the runbook will fail before the service can import the package. `PLAN.md:323-326` says `cd $HOME/nemotron && $HOME/nemo-venv/bin/uv pip install -e .`, but `ec2-bench/bootstrap.sh:17-22` installs `uv` on PATH and creates the venv; it does not install a `uv` executable into `$HOME/nemo-venv/bin`. The existing bootstrap consistently uses `uv pip install --python "$VENV" ...` at `ec2-bench/bootstrap.sh:24-31`. Change the runbook command to something like `uv pip install --python "$HOME/nemo-venv" -e "$HOME/nemotron"` or activate the venv first and run PATH `uv`.
+
+## Material (should-fix; folding into the plan adds real value)
+
+- The supervisor fold still has a contradictory rule. `PLAN.md:81-85` says the launcher must kill/restart the child on crash, while `PLAN.md:137-145` correctly says to drop the in-script supervisor and `exec` Python so systemd owns restart. The step text is right; the rule block should be updated so implementation does not reintroduce the round-1 double-supervisor bug.
+- The EC2 state-file path in the private-IP fetch and teardown snippets is wrong. `ec2-bench/ec2_up.py:24-26,130-131` resolves `NEMOTRON_EC2_STATE=.instance_boxN.json` relative to `ec2-bench/`, but `PLAN.md:318-320` and `PLAN.md:364-366` read `.instance_boxN.json` from the current directory. Use `ec2-bench/.instance_boxN.json` in the snippets, or have the runbook `cd ec2-bench` consistently before running the provision/fetch/teardown commands.
+- The network topology contract still does not match the reused provisioner. `PLAN.md:278-282,310-322` says backend boxes are in a private subnet with separate backend/LB SG rules, but `ec2-bench/ec2_up.py:65-68,96-97,116-123` deliberately chooses public-IP subnets, associates a public IP, waits for public SSH, and `ec2-bench/ec2_up.py:21-23,71-80` uses one fixed SG with only SSH ingress. With the current provisioner, bootstrap/HF/package installs do not break because the boxes are public-IP instances; if the plan really requires private subnets, it needs NAT/bastion and modified provisioning instructions. Otherwise soften the contract to "LB uses backend private IPs; SGs block public :8080."
+- The local HAProxy health-check smoke is directionally sound but under-specified for a laptop-safe run. `PLAN.md:246-250` should require flipping `healthy -> loading -> healthy` and waiting through the configured `inter/fall/rise` windows from `PLAN.md:195`, not just proving initial UP then DOWN. Also ensure the generated test config uses a temp stats socket instead of the default `/run/haproxy/admin.sock` from `PLAN.md:181`, and account for `user haproxy` / `group haproxy` in `PLAN.md:188-189` when running HAProxy as a non-root local process.
+
+## Minor (nice-to-have; OK to defer to implementation if low cost there)
+
+- The cloud smoke client is usable, but the runbook should mention that it writes benchmark artifacts. `proj-2026-05-19-eou-endpointing/run_full1000_conc12.py:263-273` writes rows to `stt-benchmark/.../results.db` and overwrites/updates a JSON artifact name derived from `--model-tag`; `PLAN.md:345-350` should either pass unique `--service/--model-tag` values or call out the mutation.
+- After fixing the `uv` executable path, consider installing the repo editable with `--no-deps`. `pyproject.toml:22-32` includes bot/TTS/Riva dependencies unrelated to this ASR server, while `ec2-bench/bootstrap.sh:24-31` already installs the validated ASR runtime stack. Pulling the full project dependency graph during deploy is avoidable churn.
+- `deploy/haproxy.cfg.example` is described as "`mode tcp` intent" in `PLAN.md:19-20`, but the actual file says `mode http` / `option httplog` at `deploy/haproxy.cfg.example:16-23`. The generator spec in `PLAN.md:190-196` is clear and correct; this is just a reference-description cleanup.
+
+## Non-findings (things I checked that look correct)
+
+- `/health` is exactly as revised: `src/nemotron_speech/server.py:10035-10043` returns `web.json_response(payload)`, so default HTTP status is 200, field name is `status`, and values are `"healthy"` / `"loading"`. `src/nemotron_speech/server.py:10045-10081` loads the model and sets `model_loaded=True` before binding, so the reachable steady-state response should normally be healthy.
+- `http-check expect string "healthy"` is the right HAProxy directive shape. HAProxy's `http-check expect` is valid in TCP and HTTP contexts, and `string` matches an exact substring in the HTTP response body, so it will match either `{"status":"healthy"}` or aiohttp's spaced JSON form. It will not match `"loading"`.
+- `python -m nemotron_speech.server` is valid after a correct editable install. The package is declared in `pyproject.toml:1-2,64-65`, `server.py` has module-safe imports with a script fallback at `src/nemotron_speech/server.py:53-77`, and the CLI entrypoint/args are present at `src/nemotron_speech/server.py:10096-10128`.
+- The proposed `exec env -u LD_LIBRARY_PATH "${SRV_ENV[@]}" "$VENV/bin/python" -m ...` shell shape is valid Bash: array entries become `env` assignments, `LD_LIBRARY_PATH` is removed, and `exec` leaves systemd supervising the Python process directly.
+- The cloud smoke flags exist: `--url`, `--concurrency`, and `--limit` are defined at `proj-2026-05-19-eou-endpointing/run_full1000_conc12.py:277-285`. The URL is passed directly to `websockets.connect` at `proj-2026-05-19-eou-endpointing/run_full1000_conc12.py:116-118`, so both `ws://` and `wss://` are acceptable.
+- Unique `NEMOTRON_EC2_NAME` plus unique `NEMOTRON_EC2_STATE` are enough to prevent same-name EC2 reuse for the N backend boxes, because reuse is keyed by the Name tag in `ec2-bench/ec2_up.py:44-50`. Fetching `PrivateIpAddress` separately is the right fix because the state file only records public `ip` at `ec2-bench/ec2_up.py:116-131`.
+- The K=3+MPS fallback generator gap is acceptable for Phase 1. `PLAN.md:72-74` explicitly excludes K>1 paths from the new launcher, and `PLAN.md:359-363` labels `--ports-per-box 3` as a known gap requiring manual regeneration or future generator work. That is fine as long as the fallback remains an emergency/manual path rather than a promised one-command path.
+
+## Verdict
+
+CRITICAL_FINDINGS — the revised plan is close, but `show stat;csv` and `$VENV/bin/uv` would break core deploy/drain steps if implemented literally.
