@@ -168,7 +168,7 @@ system can deploy it from the docs without reading code. Every step must produce
   SIGTERM = process kill, NOT a graceful WS drain — operator MUST use `drain.sh` first.
   Key files: `deploy/launch_single.sh`
 
-- [ ] **2. systemd unit template (`deploy/nemotron-asr.service`)**
+- [x] **2. systemd unit template (`deploy/nemotron-asr.service`)**
   A `systemd` service that runs `launch_single.sh`. `Type=simple`, `Restart=on-failure`, `RestartSec=5`,
   `TimeoutStopSec=120` (a backstop, **not** a drain mechanism — operator uses `drain.sh` first to
   bound the wait; direct `systemctl restart` cuts active streams), `KillSignal=SIGTERM`, `User=ubuntu`,
@@ -631,8 +631,8 @@ system can deploy it from the docs without reading code. Every step must produce
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | Single-proc launcher | done | (pending) | 176 lines, bash -n OK |
-| 2 | systemd unit template | pending | — | |
+| 1 | Single-proc launcher | done | 3d32d93 | 176 lines, bash -n OK |
+| 2 | systemd unit template | done | (pending) | unit 64L, env 146L; %h not $HOME |
 | 3 | HAProxy config generator | pending | — | |
 | 4 | Drain automation | pending | — | |
 | 5 | Local smoke test | pending | — | |
