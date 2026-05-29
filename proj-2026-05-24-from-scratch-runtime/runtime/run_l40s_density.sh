@@ -999,4 +999,6 @@ main() {
   log "DONE"
 }
 
-main "$@"
+if [[ "${RUN_L40S_DENSITY_SOURCE_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi
