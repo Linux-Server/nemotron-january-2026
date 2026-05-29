@@ -2,12 +2,25 @@
 
 #include "lib/scheduler/batched_steady_scheduler.h"
 
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdio>
+#include <cstring>
+#include <deque>
 #include <filesystem>
+#include <functional>
+#include <future>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -15,6 +28,86 @@ namespace fs = std::filesystem;
 namespace {
 
 using FinalizeBucketKey = std::pair<int64_t, int64_t>;
+
+class InferenceExecutor;
+
+thread_local InferenceExecutor* current_inference_executor = nullptr;
+
+class InferenceExecutor {
+ public:
+  explicit InferenceExecutor(int device_index)
+      : device_index_(device_index),
+        worker_([this]() { worker_loop(); }) {}
+
+  ~InferenceExecutor() {
+    close();
+  }
+
+  InferenceExecutor(const InferenceExecutor&) = delete;
+  InferenceExecutor& operator=(const InferenceExecutor&) = delete;
+
+  template <class F>
+  auto run(F&& f) -> std::invoke_result_t<std::decay_t<F>&> {
+    if (current_inference_executor == this) {
+      throw std::runtime_error("nested inference executor run is not allowed");
+    }
+    using Fn = std::decay_t<F>;
+    using R = std::invoke_result_t<Fn&>;
+    auto task = std::make_shared<std::packaged_task<R()>>(Fn(std::forward<F>(f)));
+    auto future = task->get_future();
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (closed_) throw std::runtime_error("inference executor is closed");
+      tasks_.emplace_back([task]() { (*task)(); });
+    }
+    cv_.notify_one();
+    if constexpr (std::is_void_v<R>) {
+      future.get();
+    } else {
+      return future.get();
+    }
+  }
+
+  void close() {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      closed_ = true;
+    }
+    cv_.notify_one();
+    if (worker_.joinable()) worker_.join();
+  }
+
+ private:
+  void worker_loop() {
+    current_inference_executor = this;
+    torch::NoGradGuard no_grad;
+    c10::cuda::CUDAGuard device_guard(device_index_);
+    for (;;) {
+      std::function<void()> task;
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [this]() { return closed_ || !tasks_.empty(); });
+        if (closed_ && tasks_.empty()) break;
+        task = std::move(tasks_.front());
+        tasks_.pop_front();
+      }
+      task();
+    }
+    current_inference_executor = nullptr;
+  }
+
+  int device_index_ = 0;
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::deque<std::function<void()>> tasks_;
+  bool closed_ = false;
+  std::thread worker_;
+};
+
+struct WarmupInput {
+  std::string label;
+  std::vector<float> audio;
+};
 
 double unix_now_seconds() {
   using namespace std::chrono;
@@ -132,6 +225,93 @@ std::vector<float> pcm_to_float(const PCMFrame& frame) {
   return out;
 }
 
+std::vector<float> tensor_to_float_vector(torch::Tensor tensor) {
+  auto flat = tensor.to(torch::kCPU).to(torch::kFloat32).contiguous().reshape({-1});
+  std::vector<float> out(static_cast<size_t>(flat.numel()));
+  if (!out.empty()) {
+    std::memcpy(out.data(), flat.data_ptr<float>(), out.size() * sizeof(float));
+  }
+  return out;
+}
+
+std::optional<WarmupInput> make_bucket_warmup_input(const AudioGeometry& audio_geometry,
+                                                    int64_t drop,
+                                                    int64_t final_t) {
+  int64_t audio_frames = -1;
+  if (drop == 0) {
+    audio_frames = final_t - FINAL_PADDING_FRAMES - 1;
+    if (audio_frames <= 0 || audio_frames >= SHIFT + 1) return std::nullopt;
+  } else if (drop == DROP) {
+    constexpr int64_t kWarmupSteadyChunks = 2;
+    const int64_t final_t_offset =
+        PRE + FINAL_PADDING_FRAMES + 1 - kWarmupSteadyChunks * SHIFT;
+    const int64_t min_audio_frames = kWarmupSteadyChunks * SHIFT + 1;
+    const int64_t next_chunk_audio_frames = (kWarmupSteadyChunks + 1) * SHIFT + 1;
+    audio_frames = final_t - final_t_offset;
+    if (audio_frames < min_audio_frames || audio_frames >= next_chunk_audio_frames) {
+      return std::nullopt;
+    }
+    const int64_t second_chunk_pending =
+        (audio_frames - SHIFT) * audio_geometry.hop_samples;
+    if (second_chunk_pending < audio_geometry.preprocess_new_audio_samples) {
+      return std::nullopt;
+    }
+  } else {
+    return std::nullopt;
+  }
+
+  const int64_t audio_samples = audio_frames * audio_geometry.hop_samples;
+  if (audio_samples <= 0) return std::nullopt;
+  if (drop == DROP && audio_samples < audio_geometry.preprocess_new_audio_samples) {
+    return std::nullopt;
+  }
+  WarmupInput input;
+  input.label = "bucket.drop" + std::to_string(drop) + ".T" + std::to_string(final_t);
+  input.audio.assign(static_cast<size_t>(audio_samples), 0.0f);
+  return input;
+}
+
+std::vector<WarmupInput> make_bucket_warmup_inputs(
+    const AudioGeometry& audio_geometry,
+    const std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders) {
+  std::vector<WarmupInput> inputs;
+  inputs.reserve(finalize_loaders.size());
+  for (const auto& kv : finalize_loaders) {
+    auto input = make_bucket_warmup_input(audio_geometry, kv.first.first, kv.first.second);
+    if (input.has_value()) inputs.push_back(std::move(*input));
+  }
+  return inputs;
+}
+
+std::optional<WarmupInput> make_fixture_warmup_input(torch::jit::Module& bundle) {
+  try {
+    int64_t rows = scalar_i64(attr_tensor(bundle, "num_utts"));
+    int best_utt = -1;
+    int best_score = std::numeric_limits<int>::min();
+    int64_t best_samples = std::numeric_limits<int64_t>::max();
+    for (int64_t utt = 0; utt < rows; ++utt) {
+      int64_t final_t = scalar_i64(utt_tensor(bundle, static_cast<int>(utt), "final_T"));
+      if (final_t <= 0) continue;
+      int64_t steady = scalar_i64(utt_tensor(bundle, static_cast<int>(utt), "num_steady"));
+      auto audio = utt_tensor(bundle, static_cast<int>(utt), "audio");
+      int64_t samples = audio.numel();
+      int score = steady >= 2 ? 2 : (steady >= 1 ? 1 : 0);
+      if (score > best_score || (score == best_score && samples < best_samples)) {
+        best_utt = static_cast<int>(utt);
+        best_score = score;
+        best_samples = samples;
+      }
+    }
+    if (best_utt < 0) return std::nullopt;
+    WarmupInput input;
+    input.label = "utt" + std::to_string(best_utt);
+    input.audio = tensor_to_float_vector(utt_tensor(bundle, best_utt, "audio"));
+    return input;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 std::vector<WireEvent> project_events(const std::vector<EmittedEvent>& events,
                                       const std::optional<SessionTiming>& final_timing) {
   std::vector<WireEvent> out;
@@ -169,7 +349,8 @@ struct SharedRuntime::Impl {
         artifact_dir(artifact_dir_from_config(cfg)),
         bundle_path(bundle_path_from_config(cfg, artifact_dir)),
         finalize_buckets_dir(finalize_buckets_dir_from_config(cfg, artifact_dir)),
-        device(torch::kCUDA, cfg.device_index) {
+        device(torch::kCUDA, cfg.device_index),
+        inference_executor(cfg.device_index) {
     if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
     torch::NoGradGuard ng;
 
@@ -203,6 +384,8 @@ struct SharedRuntime::Impl {
         &finalize_bucket_manifest,
         &shared_constants);
 
+    warm_inference_executor();
+
     if (cfg.scheduler_enabled) {
       std::string batch_dir = resolve_steady_batch_dir(artifact_dir, cfg.steady_artifacts_dir);
       BatchedSteadySchedulerPolicy policy;
@@ -225,6 +408,65 @@ struct SharedRuntime::Impl {
 
   ~Impl() {
     if (scheduler) scheduler->close();
+    inference_executor.close();
+  }
+
+  void warm_inference_executor() {
+    constexpr int kWarmupItersPerInput = 5;
+    auto inputs = make_bucket_warmup_inputs(audio_geometry, finalize_loaders);
+    if (inputs.empty()) {
+      auto fixture = make_fixture_warmup_input(bundle);
+      if (fixture.has_value()) inputs.push_back(std::move(*fixture));
+    }
+    if (inputs.empty()) {
+      throw std::runtime_error("unable to build inference executor warmup input");
+    }
+
+    int warmed = inference_executor.run([this,
+                                         warmup_inputs = std::move(inputs),
+                                         warmup_iters = kWarmupItersPerInput]() {
+      int completed = 0;
+      for (const auto& warmup_input : warmup_inputs) {
+        for (int iter = 0; iter < warmup_iters; ++iter) {
+          SessionState warm_state;
+          reset_session(warm_state, bundle, device);
+          auto warm_audio = make_session_runtime_audio_frontend(bundle, preproc, device);
+          reset_session_runtime_audio_front(warm_state, *warm_audio);
+
+          std::vector<EmittedEvent> events;
+          const std::string label = "inference_warmup." + warmup_input.label +
+                                    ".iter" + std::to_string(iter);
+          (void)session_runtime_append_pcm_and_drain(warm_state,
+                                                     warmup_input.audio,
+                                                     *warm_audio,
+                                                     enc_first,
+                                                     *enc_steady,
+                                                     joint,
+                                                     predict,
+                                                     device,
+                                                     tokenizer_value,
+                                                     events,
+                                                     label + ".append");
+          vad_stop(warm_state);
+          (void)session_runtime_finalize(warm_state,
+                                         bundle,
+                                         *warm_audio,
+                                         finalize_loaders,
+                                         joint,
+                                         predict,
+                                         device,
+                                         tokenizer_value,
+                                         events,
+                                         FinalizeFinish::SPECULATIVE_KEEP,
+                                         label + ".finalize");
+          ++completed;
+        }
+      }
+      c10::cuda::device_synchronize();
+      return completed;
+    });
+    std::printf("inference executor warmed: %d iters\n", warmed);
+    std::fflush(stdout);
   }
 
   SharedRuntimeConfig cfg;
@@ -232,6 +474,7 @@ struct SharedRuntime::Impl {
   std::string bundle_path;
   std::string finalize_buckets_dir;
   torch::Device device;
+  InferenceExecutor inference_executor;
   torch::jit::Module bundle;
   Tokenizer tokenizer_value;
   torch::jit::Module enc_first;
@@ -247,7 +490,6 @@ struct SharedRuntime::Impl {
   torch::jit::Module preproc;
   std::unique_ptr<BatchedSteadyLoaderSet> batched_steady;
   std::unique_ptr<BatchedSteadyScheduler> scheduler;
-  mutable std::mutex model_mutex;
 };
 
 SharedRuntime::SharedRuntime(SharedRuntimeConfig cfg) : impl_(std::make_unique<Impl>(std::move(cfg))) {}
@@ -279,8 +521,7 @@ struct SessionRuntime::Impl {
     std::vector<float> pcm = pcm_to_float(frame);
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
-    {
-      std::lock_guard<std::mutex> lock(s.model_mutex);
+    s.inference_executor.run([&]() {
       session_runtime_append_pcm_and_drain(state,
                                            pcm,
                                            *audio,
@@ -292,7 +533,7 @@ struct SessionRuntime::Impl {
                                            s.tokenizer_value,
                                            events,
                                            cfg.label + ".append");
-    }
+    });
     debug_events.insert(debug_events.end(), events.begin(), events.end());
     return project_events(events, std::nullopt);
   }
@@ -303,8 +544,7 @@ struct SessionRuntime::Impl {
     pending_timing.reset();
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
-    {
-      std::lock_guard<std::mutex> lock(s.model_mutex);
+    s.inference_executor.run([&]() {
       session_runtime_vad_start(state,
                                 *audio,
                                 s.enc_first,
@@ -315,7 +555,7 @@ struct SessionRuntime::Impl {
                                 s.tokenizer_value,
                                 events,
                                 cfg.label + ".vad_start");
-    }
+    });
     debug_events.insert(debug_events.end(), events.begin(), events.end());
   }
 
@@ -367,23 +607,23 @@ struct SessionRuntime::Impl {
     std::vector<EmittedEvent> events;
     FinalizeOutcome outcome;
     timing.fork_flush_start_ts = unix_now_seconds();
-    auto lock_wait_start = std::chrono::steady_clock::now();
-    {
-      std::unique_lock<std::mutex> lock(s.model_mutex);
+    auto executor_wait_start = std::chrono::steady_clock::now();
+    outcome = s.inference_executor.run([&]() {
       timing.inference_lock_acquire_wait_ms =
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lock_wait_start).count();
-      outcome = session_runtime_finalize(state,
-                                         s.bundle,
-                                         *audio,
-                                         s.finalize_loaders,
-                                         s.joint,
-                                         s.predict,
-                                         s.device,
-                                         s.tokenizer_value,
-                                         events,
-                                         finish,
-                                         cfg.label + ".finalize");
-    }
+          std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - executor_wait_start).count();
+      return session_runtime_finalize(state,
+                                      s.bundle,
+                                      *audio,
+                                      s.finalize_loaders,
+                                      s.joint,
+                                      s.predict,
+                                      s.device,
+                                      s.tokenizer_value,
+                                      events,
+                                      finish,
+                                      cfg.label + ".finalize");
+    });
     timing.fork_flush_done_ts = unix_now_seconds();
     timing.final_sent_ts = unix_now_seconds();
     timing.was_suppressed = !has_final_event(events);

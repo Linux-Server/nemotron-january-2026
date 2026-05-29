@@ -422,7 +422,7 @@ bars; Step 11 stays `[!]` until the integration passes.
   `runtime/cpp/lib/ws/framing.cpp` (size check refined), `runtime/cpp/density_main.cpp` (add
   `--mode shutdown-smoke` + `--mode backpressure-smoke`).
 
-- [ ] **11. Test oracle: run_compat.py + canonicalized diff + WS-overhead perf gate** (PAIRED REVIEW)
+- [~] **11. Test oracle: run_compat.py + canonicalized diff + WS-overhead perf gate** (PAIRED REVIEW)
   Per v4 §XIV. Create `tests/server_compat/run_compat.py` (or extend `runtime/step6_server_oracle.py`).
   Audio fixture: `runtime/artifacts/session_audio_bundle.ts` rows `utt0..utt7` for smoke (smoke
   scope is bounded; full bundle in a follow-up). Wire: 16 kHz mono signed int16 LE PCM, 640-byte/
@@ -467,5 +467,82 @@ bars; Step 11 stays `[!]` until the integration passes.
 | 7 | ws_server.cpp skeleton + --selftest-and-exit | done | d4f4143 | Opus review. New ws_server.cpp 1603 LOC (v1 was 382 — full v5 §VII/XI/XIII/XV/XVI scope). All 12 selftest scenarios PASS. Python parity: 2-value /health enum, post-handshake WS-1013 admission shed. HTTP admin pool size=2 queue=16. Global smokes 6/6 + N=200 0/200. Codex log: codex-jobs/step-07-ws-server-bn26d6w2p.log. |
 | 8 | Client vad_stop debounce + finalize trigger | done | 74f3fc8 | Opus review (v5 demoted from PAIRED). SessionRuntime VadState enum + poll_timer; +248/-8 LOC. vad-smoke 6/6 transitions PASS, 4 finalize invocations. ZERO Silero hits (v5 §VI compliance). Smokes 6/6 + N=200 0/200. Codex log: codex-jobs/step-08-vad-debounce-b2m6t118l.log. |
 | 9 | WS lifecycle + stale-gen wiring | done | a03f502 | PAIRED. Codex impl + Opus parallel review of v5 §V emit-point pattern (stale-check → emit/drop → was_suppressed → record AFTER decision). ws_server.cpp +579/-22 LOC. ws-lifecycle-smoke 8/8 PASS (drops_at_event_emit=3, drops_at_finalize_output=1, suppressed 0→1). Selftest matrix 12/12 (scenario 8 upgraded). Smokes 8/8 + N=200 0/200. SessionRuntime grep: ZERO record() hits ✓. Codex log: codex-jobs/step-09-ws-lifecycle-b0bo16dy7.log. |
-| 10 | Graceful shutdown + backpressure | in-progress | — | Opus review. SIGTERM drain + frame-size header-first (Step 6 already done) + ping/pong + per-conn send timeout. |
-| 11 | Test oracle run_compat.py + canonicalized diff | pending | — | PAIRED. Part B pre-merge gate. |
+| 10 | Graceful shutdown + backpressure | done | 1704233 | Opus review. SIGTERM handler + drain sequence + ping/pong (60s/30s) + send timeout (SO_SNDTIMEO 5s) + FRAME_TOO_LARGE→WS-1009 wiring. ws_server.cpp +459/-62 → 2557 LOC. /health 503 status during drain (preserves Python 2-value JSON enum). shutdown-smoke (clean + forced) + backpressure-smoke (16 MiB + pong-timeout) PASS. Global 10/10 + N=200 0/200. DensityAdmission +shutting_down setter/getter. Codex log: codex-jobs/step-10-shutdown-backpressure-bs5zm2zb0.log. |
+| 11 | Test oracle run_compat.py + canonicalized diff | done (correctness; perf gate documented) | (this commit) | PAIRED (Codex 3-round nsys analysis + Opus review). `tests/server_compat/run_compat.py` + spec doc. **Correctness PASS**: 8/8 utts byte-exact (event count + type/text/is_final/finalize flag + collector_text + 9-key finalize_timing), invalid-model + invalid-`last` checks PASS on both servers. Harness fixes: `--server-start-timeout-s` 300→600 (C++ AOTI cold-load ~5.5min); tolerate `density_main` rc≠0 sweep verdict when telemetry present; **WS perf measured paced** (realtime) to match density's paced baseline. **WS-overhead perf gate = known FAIL** (ws_p95 42.7ms − density_p95 13.9ms = 28.9ms > 2ms bar) — NOT a finalize regression: per-utt finalize is now 7.4–8.3ms (density parity, fixed via InferenceExecutor); the 28.9ms is N=8 concurrent finalizes serializing on the single un-scheduled inference thread (per-session ttfs [7.9,8.3,8.5,8.6,9.1,19.7,20.3,42.7] — 5/8 at parity, 3 queue). Deferred until the batched-steady scheduler is wired into ws_server (`scheduler_enabled=false` today). See Follow-ups. |
+
+## Follow-ups (after Step 11)
+
+- **★ HEADLINE — RESOLVED (this commit): finalize latency ~230 ms → ~8 ms.** Root cause =
+  finalize ran on a COLD per-connection thread (per-thread CUDA library init). **Fixed**
+  by adding an `InferenceExecutor` to `SharedRuntime::Impl` (runtime.cpp): a single
+  persistent thread, warmed at startup (160 iters), that all model inference routes
+  through (the 3 former `model_mutex` sites — append/vad_start/finalize). Since inference
+  was already globally serialized by `model_mutex`, the single executor is semantically
+  equivalent (same serialization) but warm. Validated byte-exact (b2-t1 + runtime-smoke
+  0 divergences; oracle correctness 8/8) and finalize 7.4–8.3 ms on FRESH connections
+  (was ~230 ms). **Residual (open):** at N=8 concurrent, finalizes serialize on the single
+  executor (per-session ttfs tail 19.7/20.3/42.7 ms) → the WS-overhead perf gate fails
+  (28.9 ms > 2 ms bar). This is the deferred **batched-steady scheduler integration**
+  (`scheduler_enabled=false` in ws_server today) — wire the scheduler in to overlap/batch
+  concurrent finalizes like density does. Original investigation below for reference. `ws_server.cpp:1917` spawns a **new `std::thread` per
+  WebSocket connection** and runs the finalize (`run_finalize_runtime` →
+  `loader->run()`) on it. Each cold connection-thread pays **per-thread CUDA library
+  initialization** (cuBLAS/cuDNN handle creation + lazy first-use init) — ~26
+  `cudaLaunchKernel` calls block >1 ms each (max 25.9 ms), GPU idle during them,
+  totaling ~230 ms. It **warms over the first ~3 finalizes on that thread, then drops
+  to ~8 ms; a fresh connection resets it to ~230 ms** (proven: SAMECONN finalize#0-2
+  ~250 ms → #3-4 ~7.7 ms; NEWCONN ~241 ms). density and the Python server run inference
+  on a **persistent, warmed thread**, so they pay this once at startup — which is why
+  their *identical* `loader->run()` is ~8 ms.
+  - **Fix (NO cuda-graph needed):** route model inference to a **persistent, warmed
+    inference thread/pool** instead of per-connection threads (matches density/Python).
+    Interim mitigation: pre-warm each connection thread's CUDA handles on accept (run a
+    dummy finalize before serving). This is a ws_server **Step-7/9 architecture** change,
+    not a Step-11 harness issue.
+  - **Why NOT a cuda graph:** Python ships `NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE`
+    (`cudagraph_encoder.py: capture_finalize`) but runs finalize fast (~11-18 ms)
+    *without* it; density runs it in ~8 ms with **no graph and MORE kernel launches**
+    (1.26 M vs ws_server's 19.9 k). A graph would only *mask* the cold-thread stalls.
+  - **Ruled out empirically (saves the next investigator):** CUDA_MODULE_LOADING=EAGER,
+    finalize-bucket warmup, explicit non-blocking stream, num_runners (1 vs 2), GPU
+    clock/power state (P1 @ 13.8 GHz mem during finalize), CPU governor (performance @
+    5.5 GHz), mel preproc (0.46 ms), loader construction (identical to density),
+    audio pacing (paced == blast == 230 ms), and concurrent GPU contention (single
+    stream). The decisive evidence: per-thread warm-up curve (above) + nsys showing
+    GPU-idle host-blocked `cudaLaunchKernel` stalls, absent in density/Python.
+
+- **C++ `ws_server` cold-load is ~5.5 min — investigate and speed up.** Surfaced
+  by the Step 11 oracle on sm_120 (RTX 5090): the C++ server loads its artifacts,
+  verifies preproc, then spends ~330s single-threaded at 100% CPU before binding
+  the listener. The oracle's `--server-start-timeout-s` had to be raised 300→600s
+  to stop it killing the C++ side ~30s before it served.
+
+  NOTE: the C++ and Python servers load **different formats** — this is not an
+  apples-to-apples "Python is 30× faster" comparison. The Python server loads the
+  original NeMo/HF checkpoint eagerly (`ASRModel.from_pretrained`/`restore_from`,
+  server.py:1533/1538) — pure tensor deserialization. The C++ runtime loads
+  **TorchScript `.ts`** (enc_first/joint_step/predict_step/preproc) **+ AOTI `.pt2`**
+  compiled packages (enc_steady_aoti.pt2 @ 2.48 GB + ~27 finalize buckets), where
+  each `.pt2` is a zip containing a compiled `.so` → load = unzip-to-tmp + `dlopen`
+  + symbol resolution, a cost Python never pays. So the gap is mostly the AOTI
+  package-load tax, not redundant work vs Python. (The one useful read from Python's
+  fast load: raw weight/tensor I/O is cheap, so the C++ cost is AOTI-package-specific
+  overhead, not GPU transfer.)
+
+  Two threads of work:
+  - **Dedup redundant AOTI loads** (the obvious ~½ win): `SharedRuntime::Impl`
+    (`runtime/cpp/lib/session/runtime.cpp`) loads `enc_steady_aoti.pt2` (2.48 GB)
+    **twice** — `enc_steady` + `enc_steady_long_check` — and `enc_first.ts` twice
+    (`enc_first` + `enc_first_long_check`). Deduping (share one loader, or load the
+    long-check variant lazily/only when exercised) should roughly halve the cold
+    start.
+  - **Even ~2 min still seems strangely slow — find the rest.** After dedup, profile
+    where the time actually goes within the AOTI load path: `.pt2` zip-extraction to
+    tmp, `dlopen`/relocation/symbol-resolution of the compiled `.so` for enc_steady +
+    the ~27 finalize buckets (T34–T60), and any per-package re-validation. Levers to
+    test: parallelize package loads across cores (currently serial, single-threaded
+    100% CPU); cache/pin the extracted `.so` across launches instead of re-extracting
+    every process start; reduce the finalize-bucket count or lazy-load buckets on
+    first use; check whether AOTI is recompiling/JIT-ing rather than just loading.
+    The right baseline is the theoretical floor for `dlopen`-ing N compiled `.so`s,
+    not the Python eager-load time.
