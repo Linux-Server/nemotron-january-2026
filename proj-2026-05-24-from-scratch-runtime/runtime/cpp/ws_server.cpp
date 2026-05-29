@@ -46,6 +46,32 @@
 namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
+namespace ws_server {
+
+struct StaleGenDrops {
+  uint64_t drops_at_event_emit = 0;
+  uint64_t drops_at_finalize_output = 0;
+};
+
+namespace {
+std::atomic<uint64_t> g_drops_at_event_emit{0};
+std::atomic<uint64_t> g_drops_at_finalize_output{0};
+}  // namespace
+
+StaleGenDrops stale_gen_drops() {
+  StaleGenDrops out;
+  out.drops_at_event_emit = g_drops_at_event_emit.load(std::memory_order_acquire);
+  out.drops_at_finalize_output = g_drops_at_finalize_output.load(std::memory_order_acquire);
+  return out;
+}
+
+void reset_stale_gen_drops_for_test() {
+  g_drops_at_event_emit.store(0, std::memory_order_release);
+  g_drops_at_finalize_output.store(0, std::memory_order_release);
+}
+
+}  // namespace ws_server
+
 namespace {
 
 constexpr int kAdminWorkers = 2;
@@ -61,6 +87,7 @@ constexpr int kDefaultWsPingIntervalSec = 60;
 constexpr int kDefaultWsPongTimeoutSec = 30;
 constexpr int kDefaultShutdownDrainSec = 30;
 constexpr int kDefaultFinalizeSilenceMs = 0;
+constexpr const char* kStaleGenTestPath = "/__stale_gen_drops";
 
 std::string json_quote(const std::string& value) {
   return nlohmann::json(value).dump();
@@ -68,6 +95,26 @@ std::string json_quote(const std::string& value) {
 
 const char* json_bool(bool value) {
   return value ? "true" : "false";
+}
+
+double unix_now_seconds() {
+  using namespace std::chrono;
+  return duration<double>(system_clock::now().time_since_epoch()).count();
+}
+
+std::string ascii_lower(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+std::string trim_ascii(const std::string& value) {
+  size_t begin = 0;
+  while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin]))) ++begin;
+  size_t end = value.size();
+  while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+  return value.substr(begin, end - begin);
 }
 
 std::string http_reason(int status) {
@@ -221,6 +268,10 @@ bool read_env_enabled(const char* name, bool fallback) {
   const char* raw = std::getenv(name);
   if (raw == nullptr || raw[0] == '\0') return fallback;
   return std::string(raw) != "0";
+}
+
+bool stale_gen_test_endpoint_enabled() {
+  return read_env_enabled("NEMOTRON_WS_STALEGEN_TEST_ENDPOINT", false);
 }
 
 bool file_exists(const fs::path& path) {
@@ -743,6 +794,15 @@ std::string health_json(const ServerState& state) {
   return oss.str();
 }
 
+std::string stale_gen_drops_json() {
+  ws_server::StaleGenDrops drops = ws_server::stale_gen_drops();
+  std::ostringstream oss;
+  oss << "{\"drops_at_event_emit\":" << drops.drops_at_event_emit
+      << ",\"drops_at_finalize_output\":" << drops.drops_at_finalize_output
+      << "}";
+  return oss.str();
+}
+
 struct AdminJob {
   int fd = -1;
   ws_routes::Route route;
@@ -803,7 +863,9 @@ class AdminHandlerPool {
     std::string body;
     int status = 200;
     try {
-      switch (job.route.kind) {
+      if (job.route.path == kStaleGenTestPath && stale_gen_test_endpoint_enabled()) {
+        body = stale_gen_drops_json();
+      } else switch (job.route.kind) {
         case ws_routes::RouteKind::HEALTH:
           body = health_json(*state_);
           break;
@@ -862,25 +924,423 @@ class AdmissionCloseGuard {
   std::string stream_id_;
 };
 
-void ws_worker(int fd, std::shared_ptr<ServerState> state) {
+std::string wire_event_json(const WireEvent& event) {
+  std::ostringstream oss;
+  oss << "{\"type\":" << json_quote(event.type);
+  if (event.text.has_value()) oss << ",\"text\":" << json_quote(*event.text);
+  if (event.is_final.has_value()) oss << ",\"is_final\":" << json_bool(*event.is_final);
+  if (event.finalize.has_value()) oss << ",\"finalize\":" << json_bool(*event.finalize);
+  if (event.finalize_timing.has_value()) {
+    oss << ",\"finalize_timing\":" << event.finalize_timing->dump();
+  }
+  if (event.message.has_value()) oss << ",\"message\":" << json_quote(*event.message);
+  oss << "}";
+  return oss.str();
+}
+
+std::string error_event_json(const std::string& message) {
+  WireEvent event;
+  event.type = "error";
+  event.message = message;
+  return wire_event_json(event);
+}
+
+bool send_ws_text(int fd, const std::string& json) {
+  return send_all(fd, ws_framing::write_frame(ws_framing::Opcode::TEXT, json));
+}
+
+std::string accepted_model_aliases_text(const std::vector<std::string>& aliases) {
+  std::ostringstream oss;
+  for (size_t i = 0; i < aliases.size(); ++i) {
+    if (i > 0) oss << ", ";
+    oss << aliases[i];
+  }
+  return oss.str();
+}
+
+std::vector<std::string> accepted_model_aliases(const ServerState& state) {
+  std::vector<std::string> aliases;
+  auto add = [&](std::string value) {
+    value = trim_ascii(std::move(value));
+    if (value.empty()) return;
+    value = ascii_lower(std::move(value));
+    if (std::find(aliases.begin(), aliases.end(), value) == aliases.end()) {
+      aliases.push_back(std::move(value));
+    }
+  };
+
+  const char* env_model = std::getenv("NEMOTRON_MODEL_NAME");
+  if (env_model != nullptr) add(env_model);
+  add(MODEL_ID);
+  fs::path model_path(MODEL_ID);
+  add(model_path.filename().string());
+  add(model_path.stem().string());
+  add("english");
+  add("en");
+  add("nvidia/nemotron-speech-streaming-en-0.6b");
+  add("nemotron-speech-streaming-en-0.6b");
+  (void)state;
+  return aliases;
+}
+
+std::optional<std::string> validate_ws_query(const ws_routes::Route& route,
+                                             const ServerState& state) {
+  auto model_it = route.query_params.find("model");
+  std::string model = model_it == route.query_params.end() ? std::string() : trim_ascii(model_it->second);
+  if (!model.empty()) {
+    std::vector<std::string> aliases = accepted_model_aliases(state);
+    std::string requested = ascii_lower(model);
+    if (std::find(aliases.begin(), aliases.end(), requested) == aliases.end()) {
+      return "model mismatch: requested " + model + "; server accepts: " +
+             accepted_model_aliases_text(aliases);
+    }
+  }
+
+  auto language_it = route.query_params.find("language");
+  std::string language =
+      language_it == route.query_params.end() ? std::string() : trim_ascii(language_it->second);
+  if (!language.empty()) {
+    return "this model does not accept a language argument";
+  }
+  return std::nullopt;
+}
+
+struct PendingOutput {
+  enum class Kind {
+    EVENT,
+    FINALIZE,
+  };
+
+  Kind kind = Kind::EVENT;
+  uint64_t generation = 0;
+  std::vector<WireEvent> events;
+  std::optional<SessionTiming> timing;
+};
+
+bool event_is_finalize_output(const WireEvent& event) {
+  return event.is_final.value_or(false) && event.finalize.value_or(false);
+}
+
+void enqueue_event_outputs(std::deque<PendingOutput>* pending,
+                           std::vector<WireEvent> events,
+                           uint64_t generation) {
+  if (events.empty()) return;
+  PendingOutput output;
+  output.kind = PendingOutput::Kind::EVENT;
+  output.generation = generation;
+  output.events = std::move(events);
+  pending->push_back(std::move(output));
+}
+
+void enqueue_finalize_output(std::deque<PendingOutput>* pending,
+                             std::vector<WireEvent> events,
+                             uint64_t generation,
+                             const SessionRuntime& session,
+                             uint64_t* last_enqueued_finalize_seq) {
+  std::optional<SessionTiming> timing = session.last_timing();
+  if (!timing.has_value() || timing->finalize_seq == *last_enqueued_finalize_seq) {
+    enqueue_event_outputs(pending, std::move(events), generation);
+    return;
+  }
+
+  PendingOutput output;
+  output.kind = PendingOutput::Kind::FINALIZE;
+  output.generation = generation;
+  output.timing = *timing;
+  for (auto& event : events) {
+    if (event_is_finalize_output(event)) {
+      output.events.push_back(std::move(event));
+    }
+  }
+  *last_enqueued_finalize_seq = timing->finalize_seq;
+  pending->push_back(std::move(output));
+}
+
+bool flush_pending_outputs(int fd,
+                           const SessionRuntime& session,
+                           StatsCollector& stats_collector,
+                           std::deque<PendingOutput>* pending) {
+  while (!pending->empty()) {
+    PendingOutput output = std::move(pending->front());
+    pending->pop_front();
+
+    const bool stale = session.generation() != output.generation;
+    if (output.kind == PendingOutput::Kind::EVENT) {
+      if (stale) {
+        ws_server::g_drops_at_event_emit.fetch_add(output.events.size(), std::memory_order_relaxed);
+        continue;
+      }
+      for (const auto& event : output.events) {
+        if (!send_ws_text(fd, wire_event_json(event))) return false;
+      }
+      continue;
+    }
+
+    bool emitted = false;
+    if (stale) {
+      if (!output.events.empty()) {
+        ws_server::g_drops_at_finalize_output.fetch_add(output.events.size(), std::memory_order_relaxed);
+      }
+    } else {
+      emitted = !output.events.empty();
+      for (const auto& event : output.events) {
+        if (!send_ws_text(fd, wire_event_json(event))) {
+          emitted = false;
+          break;
+        }
+      }
+    }
+
+    if (output.timing.has_value()) {
+      SessionTiming timing = *output.timing;
+      if (stale) timing.was_suppressed = true;
+      stats_collector.record(timing, emitted && !stale);
+    }
+    if (!stale && !emitted && !output.events.empty()) return false;
+  }
+  return true;
+}
+
+int poll_timeout_ms(const SessionRuntime& session) {
+  if (session.vad_state() != VadState::PENDING_FINALIZE) return -1;
+  std::optional<double> deadline = session.vad_deadline_ts();
+  if (!deadline.has_value()) return -1;
+  double remaining_ms = (*deadline - unix_now_seconds()) * 1000.0;
+  if (remaining_ms <= 0.0) return 0;
+  if (remaining_ms > static_cast<double>(std::numeric_limits<int>::max())) return -1;
+  return static_cast<int>(std::ceil(remaining_ms));
+}
+
+std::optional<bool> control_finalize_flag(const nlohmann::json& parsed) {
+  auto it = parsed.find("finalize");
+  if (it == parsed.end()) return std::nullopt;
+  if (!it->is_boolean()) return std::nullopt;
+  return it->get<bool>();
+}
+
+bool process_text_control(const ws_framing::Frame& frame,
+                          SessionRuntime& session,
+                          std::deque<PendingOutput>* pending,
+                          uint64_t* last_enqueued_finalize_seq,
+                          bool* should_close) {
+  std::string text(frame.payload.begin(), frame.payload.end());
+  nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) return true;
+  auto type_it = parsed.find("type");
+  if (type_it == parsed.end() || !type_it->is_string()) return true;
+  std::string type = type_it->get<std::string>();
+
+  if (type == "vad_start") {
+    session.handle_vad_start();
+    return true;
+  }
+
+  if (type == "vad_stop") {
+    uint64_t finalize_gen = session.generation();
+    auto events = session.handle_vad_stop();
+    enqueue_finalize_output(pending,
+                            std::move(events),
+                            finalize_gen,
+                            session,
+                            last_enqueued_finalize_seq);
+    return true;
+  }
+
+  if (type == "reset") {
+    bool finalize = control_finalize_flag(parsed).value_or(true);
+    auto events = session.reset(finalize);
+    uint64_t generation = session.generation();
+    if (finalize) {
+      enqueue_finalize_output(pending,
+                              std::move(events),
+                              generation,
+                              session,
+                              last_enqueued_finalize_seq);
+    } else {
+      enqueue_event_outputs(pending, std::move(events), generation);
+    }
+    return true;
+  }
+
+  if (type == "end") {
+    bool finalize = control_finalize_flag(parsed).value_or(true);
+    auto events = session.end(finalize);
+    uint64_t generation = session.generation();
+    if (finalize) {
+      enqueue_finalize_output(pending,
+                              std::move(events),
+                              generation,
+                              session,
+                              last_enqueued_finalize_seq);
+    } else {
+      enqueue_event_outputs(pending, std::move(events), generation);
+    }
+    *should_close = true;
+    return true;
+  }
+
+  return true;
+}
+
+bool process_binary_pcm(const ws_framing::Frame& frame,
+                        SessionRuntime& session,
+                        std::deque<PendingOutput>* pending,
+                        bool* protocol_close_sent,
+                        int fd) {
+  if ((frame.payload.size() % 2) != 0) {
+    (void)send_all(fd, ws_framing::write_close_frame(1003, "unsupported_data"));
+    *protocol_close_sent = true;
+    return false;
+  }
+
+  uint64_t interim_gen = session.generation();
+  PCMFrame pcm;
+  pcm.samples = reinterpret_cast<const int16_t*>(frame.payload.data());
+  pcm.count = frame.payload.size() / sizeof(int16_t);
+  auto events = session.append_pcm_and_drain(pcm);
+  enqueue_event_outputs(pending, std::move(events), interim_gen);
+  return true;
+}
+
+void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route route) {
   UniqueFd conn(fd);
   std::string stream_id = "ws-" + std::to_string(::getpid()) + "-" +
                           std::to_string(state->next_stream_id.fetch_add(1));
 
-  // Python prepares the websocket before admission rejection, then closes with WS-1013.
-  // The v5 pre-handshake HTTP-503 path is an architectural extension deferred past Step 7.
+  if (auto query_error = validate_ws_query(route, *state); query_error.has_value()) {
+    (void)send_ws_text(conn.get(), error_event_json(*query_error));
+    (void)send_all(conn.get(), ws_framing::write_frame(ws_framing::Opcode::CLOSE, ""));
+    return;
+  }
+
   AdmitResult admit = state->admission->try_admit(stream_id);
   if (admit.shed()) {
     (void)send_all(conn.get(), ws_framing::write_close_frame(1013, "admission_backpressure"));
     return;
   }
+  if (admit.decision == AdmissionDecision::QUEUED) {
+    while (!state->admission->try_admit_complete(stream_id)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
 
   AdmissionCloseGuard guard(state->admission.get(), stream_id);
-  (void)send_all(conn.get(), ws_framing::write_frame(ws_framing::Opcode::TEXT, "{\"type\":\"ready\"}"));
-  if (state->cfg.selftest_ws_close_delay_ms > 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(state->cfg.selftest_ws_close_delay_ms));
+  if (!state->shared_runtime) {
+    (void)send_all(conn.get(), ws_framing::write_close_frame(1011, "runtime_unavailable"));
+    return;
   }
-  (void)send_all(conn.get(), ws_framing::write_close_frame(1011, "server-not-ready"));
+
+  SessionConfig session_cfg;
+  session_cfg.finalize_silence_ms = state->cfg.finalize_silence_ms;
+  session_cfg.active_sessions_at_emit =
+      static_cast<int>(state->admission->telemetry_snapshot().active_count);
+  session_cfg.label = stream_id;
+  SessionRuntime session(*state->shared_runtime, session_cfg);
+
+  if (!send_ws_text(conn.get(), "{\"type\":\"ready\"}")) return;
+
+  std::string recv_buffer;
+  recv_buffer.reserve(4096);
+  std::deque<PendingOutput> pending_outputs;
+  uint64_t last_enqueued_finalize_seq = 0;
+  bool should_close = false;
+  bool protocol_close_sent = false;
+
+  while (!should_close) {
+    pollfd pfd{};
+    pfd.fd = conn.get();
+    pfd.events = POLLIN;
+    int pr = ::poll(&pfd, 1, poll_timeout_ms(session));
+    if (pr < 0) {
+      if (errno == EINTR) continue;
+      (void)send_all(conn.get(), ws_framing::write_close_frame(1011, "poll_failed"));
+      protocol_close_sent = true;
+      break;
+    }
+
+    if (pr > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+      should_close = true;
+    }
+
+    if (pr > 0 && (pfd.revents & POLLIN)) {
+      char buf[8192];
+      ssize_t n = ::recv(conn.get(), buf, sizeof(buf), 0);
+      if (n > 0) {
+        recv_buffer.append(buf, static_cast<size_t>(n));
+      } else if (n == 0) {
+        should_close = true;
+      } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+        should_close = true;
+      }
+
+      for (;;) {
+        ws_framing::Frame frame;
+        size_t consumed = 0;
+        ws_framing::ReadResult read =
+            ws_framing::read_frame(recv_buffer, frame, consumed, state->cfg.ws_max_message_size);
+        if (read == ws_framing::ReadResult::NEED_MORE) break;
+        if (read == ws_framing::ReadResult::FRAME_TOO_LARGE) {
+          (void)send_all(conn.get(), ws_framing::write_close_frame(1009, "message_too_big"));
+          protocol_close_sent = true;
+          should_close = true;
+          break;
+        }
+        if (read == ws_framing::ReadResult::MALFORMED) {
+          (void)send_all(conn.get(), ws_framing::write_close_frame(1003, "unsupported_data"));
+          protocol_close_sent = true;
+          should_close = true;
+          break;
+        }
+        recv_buffer.erase(0, consumed);
+
+        if (frame.opcode == ws_framing::Opcode::BINARY) {
+          if (!process_binary_pcm(frame,
+                                  session,
+                                  &pending_outputs,
+                                  &protocol_close_sent,
+                                  conn.get())) {
+            should_close = true;
+            break;
+          }
+        } else if (frame.opcode == ws_framing::Opcode::TEXT) {
+          if (!process_text_control(frame,
+                                    session,
+                                    &pending_outputs,
+                                    &last_enqueued_finalize_seq,
+                                    &should_close)) {
+            should_close = true;
+            break;
+          }
+        } else if (frame.opcode == ws_framing::Opcode::PING) {
+          std::string payload(frame.payload.begin(), frame.payload.end());
+          if (!send_all(conn.get(), ws_framing::write_frame(ws_framing::Opcode::PONG, payload))) {
+            should_close = true;
+            break;
+          }
+        } else if (frame.opcode == ws_framing::Opcode::CLOSE) {
+          should_close = true;
+          break;
+        }
+      }
+    }
+
+    if (!flush_pending_outputs(conn.get(), session, *state->stats, &pending_outputs)) break;
+
+    if (!should_close) {
+      uint64_t finalize_gen = session.generation();
+      auto timer_events = session.poll_timer(unix_now_seconds());
+      enqueue_finalize_output(&pending_outputs,
+                              std::move(timer_events),
+                              finalize_gen,
+                              session,
+                              &last_enqueued_finalize_seq);
+      if (!flush_pending_outputs(conn.get(), session, *state->stats, &pending_outputs)) break;
+    }
+  }
+
+  if (!protocol_close_sent) {
+    (void)send_all(conn.get(), ws_framing::write_close_frame(1000, ""));
+  }
 }
 
 class WsServer {
@@ -1043,9 +1503,12 @@ class WsServer {
     }
 
     ws_routes::Route route = ws_routes::dispatch(read.request);
+    bool stale_gen_test_endpoint =
+        route.path == kStaleGenTestPath && stale_gen_test_endpoint_enabled();
     if (route.kind == ws_routes::RouteKind::HEALTH ||
         route.kind == ws_routes::RouteKind::STATS ||
-        route.kind == ws_routes::RouteKind::SCHEDULER_TELEMETRY) {
+        route.kind == ws_routes::RouteKind::SCHEDULER_TELEMETRY ||
+        stale_gen_test_endpoint) {
       AdminJob job;
       job.fd = conn.release();
       job.route = std::move(route);
@@ -1061,7 +1524,9 @@ class WsServer {
       std::string accept_key = ws_handshake::compute_accept_key(key_it->second);
       if (!send_all(conn.get(), ws_handshake::build_handshake_response(accept_key))) return;
       std::lock_guard<std::mutex> lock(ws_threads_mutex_);
-      ws_threads_.emplace_back([state = state_, fd = conn.release()] { ws_worker(fd, state); });
+      ws_threads_.emplace_back([state = state_, fd = conn.release(), route = std::move(route)]() mutable {
+        ws_worker(fd, state, std::move(route));
+      });
       return;
     }
 
@@ -1130,6 +1595,7 @@ void clear_selftest_env(ScopedEnv* env) {
            "NEMOTRON_DENSITY_BATCH_WINDOW_MS",
            "NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS",
            "NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY",
+           "NEMOTRON_WS_STALEGEN_TEST_ENDPOINT",
        }) {
     env->unset(name);
   }
@@ -1235,6 +1701,31 @@ ClientFrame read_server_frame(int fd) {
   return frame;
 }
 
+ClientFrame read_server_frame_timeout(int fd, int timeout_ms) {
+  pollfd pfd{};
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+  int pr = ::poll(&pfd, 1, timeout_ms);
+  if (pr <= 0) throw std::runtime_error("timed out waiting for websocket frame");
+  return read_server_frame(fd);
+}
+
+bool send_client_text(int fd, const std::string& payload) {
+  return send_all(fd, ws_framing::write_frame(ws_framing::Opcode::TEXT, payload, true));
+}
+
+bool send_client_binary(int fd, const std::vector<int16_t>& pcm) {
+  std::string payload(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(int16_t));
+  return send_all(fd, ws_framing::write_frame(ws_framing::Opcode::BINARY, payload, true));
+}
+
+bool send_client_close(int fd) {
+  std::string payload;
+  payload.push_back(static_cast<char>((1000 >> 8) & 0xff));
+  payload.push_back(static_cast<char>(1000 & 0xff));
+  return send_all(fd, ws_framing::write_frame(ws_framing::Opcode::CLOSE, payload, true));
+}
+
 UniqueFd websocket_connect(int port, int* http_status) {
   UniqueFd fd = connect_localhost(port);
   std::string request =
@@ -1275,6 +1766,39 @@ uint16_t close_code(const ClientFrame& frame) {
 std::string close_reason(const ClientFrame& frame) {
   if (frame.payload.size() <= 2) return {};
   return std::string(frame.payload.begin() + 2, frame.payload.end());
+}
+
+std::vector<int16_t> selftest_audio_tensor_to_pcm_int16(torch::Tensor tensor) {
+  auto flat = tensor.to(torch::kCPU).to(torch::kFloat32).contiguous().view({-1});
+  std::vector<int16_t> out;
+  out.reserve(static_cast<size_t>(flat.numel()));
+  for (int64_t i = 0; i < flat.numel(); ++i) {
+    long value = std::lrint(static_cast<double>(flat[i].item<float>()) * 32768.0);
+    value = std::max<long>(-32768, std::min<long>(32767, value));
+    out.push_back(static_cast<int16_t>(value));
+  }
+  return out;
+}
+
+bool has_raw_finalize_timing_keys(const nlohmann::json& event) {
+  if (!event.contains("finalize_timing") || !event["finalize_timing"].is_object()) return false;
+  const nlohmann::json& timing = event["finalize_timing"];
+  static const std::vector<std::string> keys = {
+      "reason",
+      "vad_stop",
+      "vad_stop_recv",
+      "debounce_expiry",
+      "fork_flush_start",
+      "fork_flush_done",
+      "final_sent",
+      "inference_lock_acquire_wait_ms",
+      "gil_attrib_enabled",
+  };
+  if (timing.size() != keys.size()) return false;
+  for (const auto& key : keys) {
+    if (!timing.contains(key)) return false;
+  }
+  return timing["gil_attrib_enabled"].is_boolean();
 }
 
 struct SelftestResult {
@@ -1445,18 +1969,47 @@ int run_selftest(const ServerConfig& parsed) {
     }
   }));
 
-  results.push_back(run_case(8, "Bound port health + stats + WS handshake-only", [&](SelftestResult* r) {
+  results.push_back(run_case(8, "Bound port health + stats + WS lifecycle PCM+vad_stop", [&](SelftestResult* r) {
     ScopedEnv env;
     clear_selftest_env(&env);
-    ServerConfig cfg = selftest_config(base);
+    ServerConfig cfg = selftest_config(base, false);
+    auto bundle = torch::jit::load((fs::path(cfg.artifact_dir) / "session_audio_bundle.ts").string());
+    std::vector<int16_t> pcm =
+        selftest_audio_tensor_to_pcm_int16(prefix_tensor(bundle, "utt0", "audio"));
     WsServer server(cfg);
     server.start();
     HttpClientResponse health = http_request(server.port(), "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
     HttpClientResponse stats = http_request(server.port(), "GET /stats?last=1 HTTP/1.1\r\nHost: localhost\r\n\r\n");
     int status = 0;
     UniqueFd ws = websocket_connect(server.port(), &status);
-    ClientFrame ready = read_server_frame(ws.get());
-    ClientFrame close = read_server_frame(ws.get());
+    ClientFrame ready = read_server_frame_timeout(ws.get(), 5000);
+    if (!send_client_text(ws.get(), "{\"type\":\"vad_start\"}") ||
+        !send_client_binary(ws.get(), pcm) ||
+        !send_client_text(ws.get(), "{\"type\":\"vad_stop\"}")) {
+      throw std::runtime_error("failed to send lifecycle websocket frames");
+    }
+
+    bool interim_ok = false;
+    bool final_ok = false;
+    bool timing_ok = false;
+    for (int i = 0; i < 64 && !final_ok; ++i) {
+      ClientFrame frame = read_server_frame_timeout(ws.get(), 30000);
+      if (frame.opcode != static_cast<uint8_t>(ws_framing::Opcode::TEXT)) continue;
+      std::string payload(frame.payload.begin(), frame.payload.end());
+      nlohmann::json event = nlohmann::json::parse(payload);
+      if (event.value("type", "") != "transcript") continue;
+      if (event.value("is_final", false)) {
+        final_ok = event.contains("text") && event["text"].is_string() &&
+                   !event["text"].get<std::string>().empty() &&
+                   event.value("finalize", false);
+        timing_ok = has_raw_finalize_timing_keys(event);
+      } else {
+        interim_ok = event.contains("text") && event["text"].is_string() &&
+                     !event["text"].get<std::string>().empty();
+      }
+    }
+    if (!send_client_close(ws.get())) throw std::runtime_error("failed to send close");
+    ClientFrame close = read_server_frame_timeout(ws.get(), 5000);
     server.stop();
     std::string ready_payload(ready.payload.begin(), ready.payload.end());
     r->pass = health.status == 200 &&
@@ -1465,31 +2018,35 @@ int run_selftest(const ServerConfig& parsed) {
               status == 101 &&
               ready.opcode == static_cast<uint8_t>(ws_framing::Opcode::TEXT) &&
               ready_payload == "{\"type\":\"ready\"}" &&
+              final_ok &&
+              timing_ok &&
               close.opcode == static_cast<uint8_t>(ws_framing::Opcode::CLOSE) &&
-              close_code(close) == 1011 &&
-              close_reason(close) == "server-not-ready";
+              close_code(close) == 1000;
     r->diagnostic = "health=" + std::to_string(health.status) +
                     " stats=" + std::to_string(stats.status) +
                     " ws_status=" + std::to_string(status) +
+                    " interim=" + std::string(interim_ok ? "true" : "false") +
+                    " final=" + std::string(final_ok ? "true" : "false") +
+                    " timing=" + std::string(timing_ok ? "true" : "false") +
                     " close=" + std::to_string(close_code(close));
   }));
 
   results.push_back(run_case(9, "Cap=1, two WS connections, second post-handshake WS-1013", [&](SelftestResult* r) {
     ScopedEnv env;
     clear_selftest_env(&env);
-    ServerConfig cfg = selftest_config(base);
+    ServerConfig cfg = selftest_config(base, false);
     cfg.admission_active_cap = 1;
     cfg.admission_backlog_cap = 0;
-    cfg.selftest_ws_close_delay_ms = 300;
     WsServer server(cfg);
     server.start();
     int first_status = 0;
     UniqueFd first = websocket_connect(server.port(), &first_status);
-    ClientFrame first_ready = read_server_frame(first.get());
+    ClientFrame first_ready = read_server_frame_timeout(first.get(), 5000);
     int second_status = 0;
     UniqueFd second = websocket_connect(server.port(), &second_status);
-    ClientFrame second_close = read_server_frame(second.get());
-    ClientFrame first_close = read_server_frame(first.get());
+    ClientFrame second_close = read_server_frame_timeout(second.get(), 5000);
+    if (!send_client_close(first.get())) throw std::runtime_error("failed to close first ws");
+    ClientFrame first_close = read_server_frame_timeout(first.get(), 5000);
     server.stop();
     r->pass = first_status == 101 &&
               first_ready.opcode == static_cast<uint8_t>(ws_framing::Opcode::TEXT) &&
@@ -1497,7 +2054,7 @@ int run_selftest(const ServerConfig& parsed) {
               second_close.opcode == static_cast<uint8_t>(ws_framing::Opcode::CLOSE) &&
               close_code(second_close) == 1013 &&
               close_reason(second_close) == "admission_backpressure" &&
-              close_code(first_close) == 1011;
+              close_code(first_close) == 1000;
     r->diagnostic = "first_status=" + std::to_string(first_status) +
                     " second_status=" + std::to_string(second_status) +
                     " second_close=" + std::to_string(close_code(second_close)) +

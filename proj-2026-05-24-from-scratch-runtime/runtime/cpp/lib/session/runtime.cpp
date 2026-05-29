@@ -392,8 +392,8 @@ struct SessionRuntime::Impl {
     pending_timing.reset();
     debug_events.insert(debug_events.end(), events.begin(), events.end());
 
-    // SessionRuntime deliberately does not call StatsCollector::record here. The WS worker owns
-    // the stale-generation/send/drop decision and records last_timing() after that emit decision.
+    // SessionRuntime leaves stats emission to the WS worker, which owns the stale-generation
+    // send/drop decision and records last_timing() after that emit decision.
     return project_events(events, timing);
   }
 
@@ -425,7 +425,9 @@ struct SessionRuntime::Impl {
 SessionRuntime::SessionRuntime(const SharedRuntime& shared, SessionConfig cfg)
     : impl_(std::make_unique<Impl>(shared, std::move(cfg))) {}
 
-SessionRuntime::~SessionRuntime() = default;
+SessionRuntime::~SessionRuntime() {
+  if (impl_) bump_generation();
+}
 
 std::vector<WireEvent> SessionRuntime::append_pcm_and_drain(const PCMFrame& frame) {
   return impl_->append_pcm(frame);
@@ -452,6 +454,7 @@ std::optional<double> SessionRuntime::vad_deadline_ts() const noexcept {
 }
 
 std::vector<WireEvent> SessionRuntime::reset(bool finalize) {
+  bump_generation();
   if (!finalize) {
     impl_->clear_vad_state();
     return impl_->soft_final(false);
@@ -460,6 +463,7 @@ std::vector<WireEvent> SessionRuntime::reset(bool finalize) {
 }
 
 std::vector<WireEvent> SessionRuntime::end(bool finalize) {
+  bump_generation();
   if (!finalize) {
     impl_->clear_vad_state();
     return impl_->soft_final(false);

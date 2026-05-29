@@ -1,0 +1,422 @@
+Starting Codex task thread.
+Thread ready (019e7220-28db-7c80-9571-de28d34d1dcc).
+Turn started (019e7220-290b-7440-86a9-c149828abf25).
+Assistant message captured: I’ll start by reading the plan, architecture/audit notes, and the current C++ lifecycle code ...
+Running command: /bin/bash -lc 'git status --short'
+Running command: /bin/bash -lc 'rg -n "Step 9|stale-gen|stale|finalize_timing|scenario 8|ws-lifecycle|ws lifec...
+Command completed: /bin/bash -lc 'git status --short' (exit 0)
+Command failed: /bin/bash -lc 'rg -n "Step 9|stale-gen|stale|finalize_timing|scenario 8|ws-lifecycle|ws lifec... (exit 2)
+Running command: /bin/bash -lc "sed -n '1,260p' runtime/cpp/ws_server.cpp"
+Command failed: /bin/bash -lc "sed -n '1,260p' runtime/cpp/ws_server.cpp" (exit 2)
+Running command: /bin/bash -lc "sed -n '1,260p' runtime/cpp/lib/session/runtime.h"
+Command failed: /bin/bash -lc "sed -n '1,260p' runtime/cpp/lib/session/runtime.h" (exit 2)
+Assistant message captured: The paths in the task are relative to a runtime subtree that is not at repo root in this chec...
+Running command: /bin/bash -lc "rg --files | rg '("'^|/)runtime/cpp/(ws_server.cpp|density_main.cpp|lib/sessio...
+Command completed: /bin/bash -lc "rg --files | rg '("'^|/)runtime/cpp/(ws_server.cpp|density_main.cpp|lib/sessio... (exit 0)
+Running command: /bin/bash -lc "sed -n '360,410p' proj-2026-05-24-from-scratch-runtime/STEP3B-WS-PLAN.md"
+Command completed: /bin/bash -lc "sed -n '360,410p' proj-2026-05-24-from-scratch-runtime/STEP3B-WS-PLAN.md" (exit 0)
+Running command: /bin/bash -lc "find . -path '*reviews*' -maxdepth 5 -type f | sed 's#"'^./##'"' | sort | head...
+Command completed: /bin/bash -lc "find . -path '*reviews*' -maxdepth 5 -type f | sed 's#"'^./##'"' | sort | head... (exit 0)
+Running command: /bin/bash -lc "find . -path '*ws_server.cpp' -o -path '*density_main.cpp' -o -path '*lib/sess...
+Command completed: /bin/bash -lc "find . -path '*ws_server.cpp' -o -path '*density_main.cpp' -o -path '*lib/sess... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp"
+Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,280p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/r...
+Command completed: /bin/bash -lc "sed -n '1,280p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/r... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main....
+Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,340p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/r...
+Command completed: /bin/bash -lc "sed -n '1,340p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/r... (exit 0)
+Running command: /bin/bash -lc "sed -n '260,620p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session...
+Command completed: /bin/bash -lc "sed -n '260,620p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session... (exit 0)
+Running command: /bin/bash -lc "sed -n '260,620p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp"
+Command completed: /bin/bash -lc "sed -n '260,620p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '620,1020p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server....
+Command completed: /bin/bash -lc "sed -n '620,1020p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.... (exit 0)
+Running command: /bin/bash -lc "sed -n '1020,1500p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server...
+Command completed: /bin/bash -lc "sed -n '1020,1500p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server... (exit 0)
+Running command: /bin/bash -lc "sed -n '1500,1900p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server...
+Command completed: /bin/bash -lc "sed -n '1500,1900p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server... (exit 0)
+Running command: /bin/bash -lc "sed -n '1900,2300p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server...
+Command completed: /bin/bash -lc "sed -n '1900,2300p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server... (exit 0)
+Running command: /bin/bash -lc 'rg -n "stalegen|admission-smoke|stats-smoke|runtime-smoke|vad-smoke|ws-lib-smo...
+Command completed: /bin/bash -lc 'rg -n "stalegen|admission-smoke|stats-smoke|runtime-smoke|vad-smoke|ws-lib-smo... (exit 0)
+Running command: /bin/bash -lc "rg -n \"struct SessionTiming|to_wire_json|record\\(\" proj-2026-05-24-from-scr...
+Command completed: /bin/bash -lc "rg -n \"struct SessionTiming|to_wire_json|record\\(\" proj-2026-05-24-from-scr... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,180p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/telemetry...
+Running command: /bin/bash -lc "sed -n '1,230p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/telemetry...
+Command completed: /bin/bash -lc "sed -n '1,180p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/telemetry... (exit 0)
+Command completed: /bin/bash -lc "sed -n '1,230p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/telemetry... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ws/framin...
+Command completed: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ws/framin... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ws/routes...
+Command completed: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ws/routes... (exit 0)
+Running command: /bin/bash -lc "sed -n '5800,6075p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Command completed: /bin/bash -lc "sed -n '5800,6075p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Running command: /bin/bash -lc 'rg -n "generation|EVENT_SUPPRESSED|stale|suppress|struct SessionState|enum Eve...
+Command completed: /bin/bash -lc 'rg -n "generation|EVENT_SUPPRESSED|stale|suppress|struct SessionState|enum Eve... (exit 0)
+Running command: /bin/bash -lc "sed -n '6720,6860p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Running command: /bin/bash -lc "sed -n '6075,6285p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Command completed: /bin/bash -lc "sed -n '6720,6860p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Command completed: /bin/bash -lc "sed -n '6075,6285p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Running command: /bin/bash -lc "sed -n '620,735p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai...
+Command completed: /bin/bash -lc "sed -n '620,735p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,280p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/s...
+Command completed: /bin/bash -lc "sed -n '1,280p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/s... (exit 0)
+Running command: /bin/bash -lc "sed -n '1080,1110p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/sessi...
+Command completed: /bin/bash -lc "sed -n '1080,1110p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/sessi... (exit 0)
+Running command: /bin/bash -lc "sed -n '280,360p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai...
+Command completed: /bin/bash -lc "sed -n '280,360p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai... (exit 0)
+Running command: /bin/bash -lc "rg -n \"§V|stale|generation|emit-point|StatsCollector|record\\(|§VIII|1003|101...
+Command completed: /bin/bash -lc "rg -n \"§V|stale|generation|emit-point|StatsCollector|record\\(|§VIII|1003|101... (exit 0)
+Running command: /bin/bash -lc 'rg -n "1493|1498|model|language|finalize_timing|9 RAW|raw|1013|health|post-han...
+Command completed: /bin/bash -lc 'rg -n "1493|1498|model|language|finalize_timing|9 RAW|raw|1013|health|post-han... (exit 0)
+Running command: /bin/bash -lc "sed -n '80,150p' proj-2026-05-24-from-scratch-runtime/reviews/Step3b-WS-archit...
+Command completed: /bin/bash -lc "sed -n '80,150p' proj-2026-05-24-from-scratch-runtime/reviews/Step3b-WS-archit... (exit 0)
+Running command: /bin/bash -lc "sed -n '60,130p' proj-2026-05-24-from-scratch-runtime/reviews/server-py-protoc...
+Command completed: /bin/bash -lc "sed -n '60,130p' proj-2026-05-24-from-scratch-runtime/reviews/server-py-protoc... (exit 0)
+Running command: /bin/bash -lc "sed -n '270,315p' proj-2026-05-24-from-scratch-runtime/reviews/server-py-proto...
+Command completed: /bin/bash -lc "sed -n '270,315p' proj-2026-05-24-from-scratch-runtime/reviews/server-py-proto... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ws/handsh...
+Command completed: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ws/handsh... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/admission...
+Command completed: /bin/bash -lc "sed -n '1,220p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/admission... (exit 0)
+Running command: /bin/bash -lc "rg -n \"websocket|websockets|ws_server|python.*client|subprocess|popen|fork|ex...
+Command completed: /bin/bash -lc "rg -n \"websocket|websockets|ws_server|python.*client|subprocess|popen|fork|ex... (exit 0)
+Assistant message captured: The current server has the Step 7 split: the accept thread already parses HTTP and completes ...
+Running command: /bin/bash -lc "sed -n '380,520p' proj-2026-05-24-from-scratch-runtime/runtime/step6_server_or...
+Command completed: /bin/bash -lc "sed -n '380,520p' proj-2026-05-24-from-scratch-runtime/runtime/step6_server_or... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,150p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt"
+Command completed: /bin/bash -lc "sed -n '1,150p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt" (exit 0)
+Running command: /bin/bash -lc "rg -n \"json_quote\\(|json_bool\\(|wire|WireEvent|finalize_timing|type.*transc...
+Command completed: /bin/bash -lc "rg -n \"json_quote\\(|json_bool\\(|wire|WireEvent|finalize_timing|type.*transc... (exit 0)
+Running command: /bin/bash -lc "rg -n \"pthread|fork\\(|execv|waitpid|kill\\(|std::system|popen|subprocess|ws_...
+Command completed: /bin/bash -lc "rg -n \"pthread|fork\\(|execv|waitpid|kill\\(|std::system|popen|subprocess|ws_... (exit 0)
+Running command: /bin/bash -lc "ls -la proj-2026-05-24-from-scratch-runtime/runtime | sed -n '1,80p' && ls -la...
+Command completed: /bin/bash -lc "ls -la proj-2026-05-24-from-scratch-runtime/runtime | sed -n '1,80p' && ls -la... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,80p' proj-2026-05-24-from-scratch-runtime/runtime/container/enter.sh"
+Command completed: /bin/bash -lc "sed -n '1,80p' proj-2026-05-24-from-scratch-runtime/runtime/container/enter.sh" (exit 0)
+Running command: /bin/bash -lc "rg -n \"ws_server|selftest-and-exit|ws-lifecycle\" proj-2026-05-24-from-scratc...
+Command failed: /bin/bash -lc "rg -n \"ws_server|selftest-and-exit|ws-lifecycle\" proj-2026-05-24-from-scratc... (exit 1)
+Running command: /bin/bash -lc "test -x proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python && proj-...
+Command completed: /bin/bash -lc "test -x proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python && proj-... (exit 0)
+Running command: /bin/bash -lc "sed -n '220,245p' proj-2026-05-24-from-scratch-runtime/reviews/Step3b-WS-archi...
+Running command: /bin/bash -lc "rg -n '\"reset\"|\"end\"|finalize.*reset|reset\\(' proj-2026-05-24-from-scratc...
+Command completed: /bin/bash -lc "sed -n '220,245p' proj-2026-05-24-from-scratch-runtime/reviews/Step3b-WS-archi... (exit 0)
+Command completed: /bin/bash -lc "rg -n '\"reset\"|\"end\"|finalize.*reset|reset\\(' proj-2026-05-24-from-scratc... (exit 0)
+Running command: /bin/bash -lc "sed -n '6280,6335p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Command completed: /bin/bash -lc "sed -n '6280,6335p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Running command: /bin/bash -lc "rg -n \"reset\\(|end\\(\" proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib...
+Command completed: /bin/bash -lc "rg -n \"reset\\(|end\\(\" proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib... (exit 0)
+Running command: /bin/bash -lc "sed -n '580,625p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai...
+Command completed: /bin/bash -lc "sed -n '580,625p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai... (exit 0)
+Running command: /bin/bash -lc "sed -n '280,340p' proj-2026-05-24-from-scratch-runtime/reviews/Step2a-invarian...
+Command completed: /bin/bash -lc "sed -n '280,340p' proj-2026-05-24-from-scratch-runtime/reviews/Step2a-invarian... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,140p' proj-2026-05-24-from-scratch-runtime/runtime/step6_server_orac...
+Command completed: /bin/bash -lc "sed -n '1,140p' proj-2026-05-24-from-scratch-runtime/runtime/step6_server_orac... (exit 0)
+Running command: /bin/bash -lc "proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python - <<'PY' import ...
+Command completed: /bin/bash -lc "proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python - <<'PY' import ... (exit 0)
+Assistant message captured: I have enough of the shape now. The main edit is to add a pending-output queue in the WS work...
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: Before touching tests, I’m adding the required generation bumps in `SessionRuntime` itself. T...
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: The core worker path is patched now. I’m doing a focused build next because this touched thre...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server density_main s...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server density_main s... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server -j2'
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server -j2' (exit 0)
+Running command: /bin/bash -lc "sed -n '1,45p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1,45p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp" (exit 0)
+Assistant message captured: Next I’m adding `density_main --mode ws-lifecycle-smoke` as a lightweight launcher: it starts...
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "sed -n '6650,6815p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Command completed: /bin/bash -lc "sed -n '6650,6815p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target density_main ws_server -j2'
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target density_main ws_server -j2' (exit 0)
+Assistant message captured: The build is clean. I’m running the new lifecycle smoke now; this is the first point where th...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts'
+Command failed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts' (exit 1)
+Assistant message captured: The first lifecycle run got through ready, interim ordering, final transcript, timing keys, a...
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target density_main -j2'
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target density_main -j2' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts' (exit 0)
+Assistant message captured: The lifecycle smoke passes now. I’m running the upgraded `ws_server --selftest-and-exit` matr...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/ws_server --selftest-and-exit'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/ws_server --selftest-and-exit' (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server density_main s...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server density_main s... (exit 0)
+Assistant message captured: I rebuilt after the cleanup tweak. I’m re-running the targeted lifecycle smoke once, then I’l...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/ws_server --selftest-and-exit'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/ws_server --selftest-and-exit' (exit 0)
+Assistant message captured: The upgraded selftest matrix is green, including scenario 8 and the post-handshake 1013 case....
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stalegen-smoke artifacts'
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode admission-smoke artifacts'
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stats-smoke artifacts'
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lib-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stalegen-smoke artifacts' (exit 0)
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode admission-smoke artifacts' (exit 0)
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stats-smoke artifacts' (exit 0)
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lib-smoke artifacts' (exit 0)
+Assistant message captured: The non-GPU smokes are green: stalegen, admission, stats, and ws-lib. I’m moving through runt...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode runtime-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode runtime-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode vad-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode vad-smoke artifacts' (exit 0)
+Assistant message captured: Runtime and VAD smokes are green. I’m running the heavier density gates now: B2 first, then t...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode b2-t1 artifacts'
+Assistant message captured: B2 is still running inside the container after model and finalize-bucket load. I’m letting it...
+Assistant message captured: This B2 invocation picked up the full 1000-row default, not the intended smoke-sized gate. I’...
+Running command: /bin/bash -lc "ps -eo pid,ppid,stat,cmd | rg 'density_main --mode b2-t1|docker run|container/...
+Command completed: /bin/bash -lc "ps -eo pid,ppid,stat,cmd | rg 'density_main --mode b2-t1|docker run|container/... (exit 0)
+Running command: /bin/bash -lc "kill 2272848 && sleep 2 && ps -eo pid,ppid,stat,cmd | rg 'density_main --mode ...
+Command completed: /bin/bash -lc "kill 2272848 && sleep 2 && ps -eo pid,ppid,stat,cmd | rg 'density_main --mode ... (exit 0)
+Command failed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode b2-t1 artifacts' (exit -1)
+Running command: /bin/bash -lc "kill -9 2272848 2273010 2>/dev/null || true; sleep 2; ps -eo pid,ppid,stat,cmd...
+Command completed: /bin/bash -lc "kill -9 2272848 2273010 2>/dev/null || true; sleep 2; ps -eo pid,ppid,stat,cmd... (exit 0)
+Running command: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'density_main --mode...
+Command completed: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'density_main --mode... (exit 0)
+Running command: /bin/bash -lc "docker kill 334feb56f838 >/dev/null && sleep 1 && docker ps --format '{{.ID}} ...
+Command completed: /bin/bash -lc "docker kill 334feb56f838 >/dev/null && sleep 1 && docker ps --format '{{.ID}} ... (exit 0)
+Running command: /bin/bash -lc 'rg -n "run_b2_t1_gate|B2_T1 START|correctness_rows|rows_total" proj-2026-05-24...
+Command completed: /bin/bash -lc 'rg -n "run_b2_t1_gate|B2_T1 START|correctness_rows|rows_total" proj-2026-05-24... (exit 0)
+Running command: /bin/bash -lc "sed -n '3238,3335p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Command completed: /bin/bash -lc "sed -n '3238,3335p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode b2-t1 --correctness-rows 4 ...
+Assistant message captured: The corrected B2 smoke is running with `rows=4/1000` now. It has completed the serial referen...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode b2-t1 --correctness-rows 4 ... (exit 0)
+Running command: /bin/bash -lc "sed -n '5000,5075p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m...
+Command completed: /bin/bash -lc "sed -n '5000,5075p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_m... (exit 0)
+Running command: /bin/bash -lc 'rg -n "args.smoke|--smoke|smoke" proj-2026-05-24-from-scratch-runtime/runtime/...
+Command completed: /bin/bash -lc 'rg -n "args.smoke|--smoke|smoke" proj-2026-05-24-from-scratch-runtime/runtime/... (exit 0)
+Running command: /bin/bash -lc "sed -n '250,285p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai...
+Command completed: /bin/bash -lc "sed -n '250,285p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_mai... (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode density-sweep --n-values 4 ...
+Command failed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode density-sweep --n-values 4 ... (exit 1)
+Assistant message captured: The single-row N=4 density sweep completed cleanly at the row level (`SLO_ROBUST`, zero error...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode density-sweep --n-values 1,...
+Assistant message captured: The OFF density sweep is running with the baseline set (`1,2,4`) now. It has built the 20-sam...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode density-sweep --n-values 1,... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,120p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_main....
+Command completed: /bin/bash -lc "sed -n '1,120p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/session_main.... (exit 0)
+Running command: /bin/bash -lc 'rg -n -- "--n|limit|rows|argc|argv" proj-2026-05-24-from-scratch-runtime/runti...
+Command completed: /bin/bash -lc 'rg -n -- "--n|limit|rows|argc|argv" proj-2026-05-24-from-scratch-runtime/runti... (exit 0)
+Running command: /bin/bash -lc "sed -n '3991,4028p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/sessi...
+Command completed: /bin/bash -lc "sed -n '3991,4028p' proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/sessi... (exit 0)
+Running command: /bin/bash -lc "ls -la proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel | sed -...
+Command completed: /bin/bash -lc "ls -la proj-2026-05-24-from-scratch-runtime/runtime/artifacts_n200_mel | sed -... (exit 0)
+Assistant message captured: The OFF density sweep passed with `1,2,4` and batching off; the earlier N=4-only run is noted...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/session_main artifacts_n200_mel'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/session_main artifacts_n200_mel' (exit 0)
+Assistant message captured: I’m continuing from the verification phase. The only outstanding item is the long `session_ma...
+Assistant message captured: The N=200 session determinism gate finished cleanly. I’m doing the final compliance checks no...
+Running command: /bin/bash -lc 'git diff --numstat -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r...
+Command completed: /bin/bash -lc 'git diff --numstat -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r... (exit 0)
+Running command: /bin/bash -lc "grep -n \"stats_collector.record\\|\\.record(\" runtime/cpp/ws_server.cpp"
+Command completed: /bin/bash -lc "grep -n \"stats_collector.record\\|\\.record(\" runtime/cpp/ws_server.cpp" (exit 0)
+Running command: /bin/bash -lc "grep -n \"stats_collector.record\\|StatsCollector::record\\|\\.record(\" runti...
+Running command: /bin/bash -lc 'git diff --check -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp run...
+Running command: /bin/bash -lc "rg -n \"drops_at_event_emit|drops_at_finalize_output|stats_collector\\.record|...
+Command failed: /bin/bash -lc "grep -n \"stats_collector.record\\|StatsCollector::record\\|\\.record(\" runti... (exit 1)
+Command completed: /bin/bash -lc "rg -n \"drops_at_event_emit|drops_at_finalize_output|stats_collector\\.record|... (exit 0)
+Command completed: /bin/bash -lc 'git diff --check -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp run... (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1038,1084p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1038,1084p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1200,1228p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1200,1228p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1174,1190p'"
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1290,1320p'"
+Running command: /bin/bash -lc 'git status --short -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r...
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1174,1190p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1290,1320p'" (exit 0)
+Command completed: /bin/bash -lc 'git status --short -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r... (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1086,1162p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1086,1162p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '6818,6860p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '6818,6860p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '410,428p'"
+Running command: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '7118,7126p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '410,428p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '7118,7126p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '428,456p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '428,456p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '456,482p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '456,482p'" (exit 0)
+Assistant message captured: One detail I’m checking before finalizing: the worker counters are present and the black-box ...
+Running command: /bin/bash -lc "rg -n \"add_executable\\(|density_main|ws_server|target_link\" CMakeLists.txt ...
+Command failed: /bin/bash -lc "rg -n \"add_executable\\(|density_main|ws_server|target_link\" CMakeLists.txt ... (exit 2)
+Running command: /bin/bash -lc 'rg -n "GET /stats|handle_stats|/stats|health|write_http_response" runtime/cpp/...
+Command completed: /bin/bash -lc 'rg -n "GET /stats|handle_stats|/stats|health|write_http_response" runtime/cpp/... (exit 0)
+Running command: /bin/bash -lc 'rg -n "stalegen-smoke|run_stale|drops_at_event_emit|drops_at_finalize_output|s...
+Command completed: /bin/bash -lc 'rg -n "stalegen-smoke|run_stale|drops_at_event_emit|drops_at_finalize_output|s... (exit 0)
+Running command: /bin/bash -lc 'rg -n "Step 9|stale-gen|stale_gen|drops_at_event_emit|ws-lifecycle-smoke|selft...
+Command failed: /bin/bash -lc 'rg -n "Step 9|stale-gen|stale_gen|drops_at_event_emit|ws-lifecycle-smoke|selft... (exit 2)
+Running command: /bin/bash -lc "sed -n '371,406p' STEP3B-WS-PLAN.md"
+Command completed: /bin/bash -lc "sed -n '371,406p' STEP3B-WS-PLAN.md" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '740,875p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '740,875p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '875,940p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '875,940p'" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,180p' runtime/cpp/lib/ws/routes.h && sed -n '1,220p' runtime/cpp/lib...
+Command completed: /bin/bash -lc "sed -n '1,180p' runtime/cpp/lib/ws/routes.h && sed -n '1,220p' runtime/cpp/lib... (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '6860,7045p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '6860,7045p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '7044,7105p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/density_main.cpp | sed -n '7044,7105p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1330,1425p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1330,1425p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1428,1495p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1428,1495p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1495,1535p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1495,1535p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1,120p' && nl -ba runtime/cpp/ws_se...
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1,120p' && nl -ba runtime/cpp/ws_se... (exit 0)
+Running command: /bin/bash -lc 'rg -n "struct ServerConfig|parse_args|NEMOTRON_" runtime/cpp/ws_server.cpp'
+Command completed: /bin/bash -lc 'rg -n "struct ServerConfig|parse_args|NEMOTRON_" runtime/cpp/ws_server.cpp' (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '500,620p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '500,620p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '220,285p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '220,285p'" (exit 0)
+Assistant message captured: I’m going to tighten the lifecycle smoke so it verifies the actual process-local stale-drop c...
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: The smoke now queries a private `__stale_gen_drops` endpoint only when `NEMOTRON_WS_STALEGEN_...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server density_main s...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build --target ws_server density_main s... (exit 0)
+Assistant message captured: The rebuild passed. I’m rerunning the lifecycle smoke first because it now has the stricter s...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lifecycle-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/ws_server --selftest-and-exit'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/ws_server --selftest-and-exit' (exit 0)
+Assistant message captured: The stricter lifecycle smoke passed, including `drops_at_event_emit=3` and `drops_at_finalize...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode b2-t1 --correctness-rows 4 ...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode b2-t1 --correctness-rows 4 ... (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode density-sweep --n-values 1,...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode density-sweep --n-values 1,... (exit 0)
+Assistant message captured: The heavier global gates are green: `b2-t1` and density sweep `1,2,4` OFF both passed after t...
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stalegen-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stalegen-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode admission-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode admission-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stats-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode stats-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode runtime-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode runtime-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode vad-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode vad-smoke artifacts' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lib-smoke artifacts'
+Command completed: /bin/bash -lc './container/enter.sh cpp/build/density_main --mode ws-lib-smoke artifacts' (exit 0)
+Assistant message captured: All focused smokes are passing. I’m doing the final static checks now: whitespace, modified-l...
+Running command: /bin/bash -lc 'git diff --check -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp run...
+Command completed: /bin/bash -lc 'git diff --check -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp run... (exit 0)
+Running command: /bin/bash -lc "grep -n \"stats_collector.record\\|StatsCollector::record\\|\\.record(\" runti...
+Command failed: /bin/bash -lc "grep -n \"stats_collector.record\\|StatsCollector::record\\|\\.record(\" runti... (exit 1)
+Running command: /bin/bash -lc 'git diff --numstat -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r...
+Running command: /bin/bash -lc "grep -n \"stats_collector.record\\|\\.record(\" runtime/cpp/ws_server.cpp"
+Running command: /bin/bash -lc 'git status --short -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r...
+Running command: /bin/bash -lc "rg -n \"drops_at_event_emit|drops_at_finalize_output|stats_collector\\.record|...
+Command completed: /bin/bash -lc 'git diff --numstat -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r... (exit 0)
+Command completed: /bin/bash -lc "grep -n \"stats_collector.record\\|\\.record(\" runtime/cpp/ws_server.cpp" (exit 0)
+Command completed: /bin/bash -lc 'git status --short -- runtime/cpp/ws_server.cpp runtime/cpp/density_main.cpp r... (exit 0)
+Command completed: /bin/bash -lc "rg -n \"drops_at_event_emit|drops_at_finalize_output|stats_collector\\.record|... (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1058,1100p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1058,1100p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1120,1146p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1120,1146p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1190,1202p'"
+Running command: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '428,468p'"
+Running command: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1328,1340p'"
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1190,1202p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/ws_server.cpp | sed -n '1328,1340p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba runtime/cpp/lib/session/runtime.cpp | sed -n '428,468p'" (exit 0)
+Assistant message captured: **Implemented** 1. Files modified: - [ws_server.cpp](/home/khkramer/src/nemotron-january-2026...
+Turn completed.
+**Implemented**
+
+1. Files modified:
+- [ws_server.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp): +579/-22
+- [density_main.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp): +336/-2
+- [runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp): +7/-3
+
+2. WS worker lifecycle:
+`accept -> lib/ws handshake -> query validation -> DensityAdmission -> SessionRuntime -> {"type":"ready"} -> poll recv-loop -> PCM/control dispatch -> emit/drop -> StatsCollector::record after final emit decision -> WS-1000 cleanup`.
+
+3. Stale-gen insertion points:
+- Interim generation captured before PCM drain at [ws_server.cpp:1196](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1196); stale interim drop check/counter at [ws_server.cpp:1067](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1067).
+- Final generation captured for `vad_stop` at [ws_server.cpp:1139](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1139) and timer finalization at [ws_server.cpp:1330](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1330).
+- Final stale drop/counter at [ws_server.cpp:1080](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1080); `was_suppressed` + `record()` after decision at [ws_server.cpp:1094](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1094).
+
+4. `ws-lifecycle-smoke`: PASS
+- `ready_exact`: PASS
+- `interim_ordering`: PASS, count=9
+- `final_transcript`: PASS
+- `finalize_timing_keys`: PASS
+- `stale_interim_drop`: PASS, `drops_at_event_emit=3`
+- `stale_final_record`: PASS, suppressed `0 -> 1`, `drops_at_finalize_output=1`
+- `stats_emitted_record`: PASS
+- `clean_close_1000`: PASS
+
+5. Selftest matrix:
+- Scenario 8 upgraded and PASS: `health=200 stats=200 ws_status=101 interim=true final=true timing=true close=1000`
+- Full matrix PASS: `passed=12 total=12`
+
+6. Global smoke set:
+- Build: PASS
+- `b2-t1 --correctness-rows 4`: PASS
+- density sweep `N=1,2,4`, batch OFF: PASS_TO_1B; N=4 row SLO_ROBUST
+- `stalegen-smoke`: PASS
+- `admission-smoke`: PASS
+- `stats-smoke`: PASS
+- `runtime-smoke`: PASS
+- `vad-smoke`: PASS
+- `ws-lib-smoke`: PASS
+- `session_main artifacts_n200_mel`: PASS, rows=200/200
+
+7. v5 §V compliance:
+- `runtime.cpp` grep for `stats_collector.record|StatsCollector::record|.record(`: zero hits.
+- `ws_server.cpp` grep: exactly one `stats_collector.record(...)` call at [ws_server.cpp:1097](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1097), after send/drop decision.
+- `SessionRuntime` generation now bumps on destructor/reset/end at [runtime.cpp:428](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:428) and [runtime.cpp:456](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:456).
+
+8. Design decisions:
+- Added env-gated test endpoint `/__stale_gen_drops` behind `NEMOTRON_WS_STALEGEN_TEST_ENDPOINT=1` so the lifecycle smoke can verify process-local WS stale counters without adding them to `/stats`.
+- No `session.cpp`, `stats_collector`, admission, scheduler, or `lib/ws` changes.
+- No EC2 touched.

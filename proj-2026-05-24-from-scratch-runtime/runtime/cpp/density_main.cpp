@@ -329,9 +329,10 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
       args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
       args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
-      args.mode != "vad-smoke" && args.mode != "ws-lib-smoke") {
+      args.mode != "vad-smoke" && args.mode != "ws-lib-smoke" &&
+      args.mode != "ws-lifecycle-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, or ws-lib-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, or ws-lifecycle-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -6791,6 +6792,336 @@ static bool run_ws_lib_smoke() {
   return ok;
 }
 
+static std::string density_exe_dir() {
+  char path[4096];
+  ssize_t n = ::readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (n <= 0) return ".";
+  path[n] = '\0';
+  fs::path exe(path);
+  return exe.has_parent_path() ? exe.parent_path().string() : ".";
+}
+
+static std::string shell_quote(const std::string& value) {
+  std::string out = "'";
+  for (char ch : value) {
+    if (ch == '\'') {
+      out += "'\\''";
+    } else {
+      out.push_back(ch);
+    }
+  }
+  out.push_back('\'');
+  return out;
+}
+
+static bool run_ws_lifecycle_smoke(const DensityArgs& args) {
+  std::string server_bin = (fs::path(density_exe_dir()) / "ws_server").string();
+  std::string python = file_exists("./.venv/bin/python") ? "./.venv/bin/python" : "python3";
+  fs::path script_path = fs::temp_directory_path() /
+                         ("ws_lifecycle_smoke_" + std::to_string(::getpid()) + ".py");
+
+  const char* script = R"PY(
+import base64
+import json
+import os
+import select
+import socket
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+server_bin = sys.argv[1]
+artifact_dir = Path(sys.argv[2]).resolve()
+
+def fail(name, detail):
+    print(f"WS_LIFECYCLE_ASSERT {name}=FAIL {detail}", flush=True)
+    raise SystemExit(1)
+
+def ok(name, detail=""):
+    print(f"WS_LIFECYCLE_ASSERT {name}=PASS {detail}", flush=True)
+
+def frame(opcode, payload=b""):
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    mask = os.urandom(4)
+    head = bytearray([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        head.append(0x80 | n)
+    elif n <= 0xFFFF:
+        head.append(0x80 | 126)
+        head.extend(struct.pack("!H", n))
+    else:
+        head.append(0x80 | 127)
+        head.extend(struct.pack("!Q", n))
+    head.extend(mask)
+    head.extend(bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+    return bytes(head)
+
+def recv_exact(sock, n):
+    out = bytearray()
+    while len(out) < n:
+        chunk = sock.recv(n - len(out))
+        if not chunk:
+            raise EOFError("socket closed")
+        out.extend(chunk)
+    return bytes(out)
+
+def read_frame(sock, timeout=30.0):
+    ready, _, _ = select.select([sock], [], [], timeout)
+    if not ready:
+        raise TimeoutError("timed out waiting for frame")
+    h = recv_exact(sock, 2)
+    opcode = h[0] & 0x0F
+    n = h[1] & 0x7F
+    if n == 126:
+        n = struct.unpack("!H", recv_exact(sock, 2))[0]
+    elif n == 127:
+        n = struct.unpack("!Q", recv_exact(sock, 8))[0]
+    payload = recv_exact(sock, n)
+    return opcode, payload
+
+def read_http(sock):
+    data = bytearray()
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(1)
+        if not chunk:
+            raise EOFError("http closed")
+        data.extend(chunk)
+        if len(data) > 65536:
+            raise RuntimeError("http response too large")
+    head, body = bytes(data).split(b"\r\n\r\n", 1)
+    headers = {}
+    lines = head.decode("iso-8859-1").split("\r\n")
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.lower()] = v.strip()
+    length = int(headers.get("content-length", "0"))
+    while len(body) < length:
+        body += sock.recv(length - len(body))
+    return lines[0], body
+
+def ws_connect(port, query=""):
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    target = "/" + (("?" + query) if query else "")
+    req = (
+        f"GET {target} HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "\r\n"
+    ).encode("ascii")
+    sock.sendall(req)
+    status, _ = read_http(sock)
+    if " 101 " not in status:
+        fail("handshake", status)
+    return sock
+
+def http_json(port, path):
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    sock.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode("ascii"))
+    status, body = read_http(sock)
+    sock.close()
+    if " 200 " not in status:
+        fail("http_" + path, status)
+    return json.loads(body.decode("utf-8"))
+
+def load_pcm():
+    bundle = torch.jit.load(str(artifact_dir / "session_audio_bundle.ts"), map_location="cpu")
+    audio = getattr(bundle, "utt0_audio").detach().cpu().to(torch.float32).contiguous().numpy()
+    pcm = np.clip(np.rint(audio * 32768.0), -32768, 32767).astype(np.int16)
+    return pcm.tobytes()
+
+def close_code(payload):
+    if len(payload) < 2:
+        return 0
+    return struct.unpack("!H", payload[:2])[0]
+
+env = os.environ.copy()
+env["NEMOTRON_ARTIFACT_DIR"] = str(artifact_dir)
+env["NEMOTRON_FINALIZE_SILENCE_MS"] = "0"
+env["NEMOTRON_WS_STALEGEN_TEST_ENDPOINT"] = "1"
+proc = subprocess.Popen(
+    [server_bin, "--port", "0", "--admission-active-cap", "4"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    env=env,
+)
+port = None
+captured = []
+deadline = time.time() + 120
+try:
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                fail("server_start", "".join(captured[-20:]))
+            continue
+        captured.append(line)
+        print("WS_SERVER_LOG " + line.rstrip(), flush=True)
+        if "ws_server listening on 127.0.0.1:" in line:
+            port = int(line.rsplit(":", 1)[1])
+            break
+    if port is None:
+        fail("server_start", "timeout")
+
+    pcm = load_pcm()
+    sock = ws_connect(port, "model=en")
+    opcode, payload = read_frame(sock, 10)
+    ready = payload.decode("utf-8")
+    if opcode != 1 or ready != '{"type":"ready"}':
+        fail("ready_exact", f"opcode={opcode} payload={ready!r}")
+    ok("ready_exact")
+
+    sock.sendall(frame(1, '{"type":"vad_start"}'))
+    chunk_bytes = 640
+    for pos in range(0, len(pcm), chunk_bytes):
+        sock.sendall(frame(2, pcm[pos:pos + chunk_bytes]))
+    sock.sendall(frame(1, '{"type":"vad_stop"}'))
+
+    interims = []
+    final = None
+    for _ in range(128):
+        opcode, payload = read_frame(sock, 60)
+        if opcode != 1:
+            continue
+        msg = json.loads(payload.decode("utf-8"))
+        if msg.get("type") != "transcript":
+            continue
+        if msg.get("is_final") is True:
+            final = msg
+            break
+        if msg.get("is_final") is False:
+            interims.append(msg)
+    if not interims or any((not m.get("text")) or m.get("is_final") is not False for m in interims):
+        fail("interim_ordering", f"count={len(interims)}")
+    ok("interim_ordering", f"count={len(interims)}")
+    if not final or final.get("is_final") is not True or not final.get("text"):
+        fail("final_transcript", str(final))
+    ok("final_transcript", final.get("text", "")[:48])
+    timing = final.get("finalize_timing")
+    expected = {
+        "reason",
+        "vad_stop",
+        "vad_stop_recv",
+        "debounce_expiry",
+        "fork_flush_start",
+        "fork_flush_done",
+        "final_sent",
+        "inference_lock_acquire_wait_ms",
+        "gil_attrib_enabled",
+    }
+    if not isinstance(timing, dict) or set(timing.keys()) != expected:
+        fail("finalize_timing_keys", str(timing))
+    ok("finalize_timing_keys")
+
+    drops_before = http_json(port, "/__stale_gen_drops")
+    event_drops_before = int(drops_before.get("drops_at_event_emit", 0))
+    sock.sendall(frame(2, pcm[: min(len(pcm), 32000)]) + frame(1, '{"type":"reset","finalize":false}'))
+    stale_window_interims = 0
+    deadline2 = time.time() + 10
+    while time.time() < deadline2:
+        ready, _, _ = select.select([sock], [], [], 0.2)
+        if not ready:
+            break
+        opcode, payload = read_frame(sock, 0.2)
+        if opcode != 1:
+            continue
+        msg = json.loads(payload.decode("utf-8"))
+        if msg.get("type") == "transcript" and msg.get("is_final") is False:
+            stale_window_interims += 1
+    event_drops_after = event_drops_before
+    deadline_drop = time.time() + 10
+    while time.time() < deadline_drop:
+        drops_after = http_json(port, "/__stale_gen_drops")
+        event_drops_after = int(drops_after.get("drops_at_event_emit", 0))
+        if event_drops_after > event_drops_before:
+            break
+        time.sleep(0.1)
+    if stale_window_interims != 0:
+        fail("stale_interim_drop", f"interims_after_reset={stale_window_interims}")
+    if event_drops_after <= event_drops_before:
+        fail("stale_interim_drop", f"drops_at_event_emit_before={event_drops_before} after={event_drops_after}")
+    ok("stale_interim_drop", f"drops_at_event_emit={event_drops_after}")
+
+    sock.sendall(frame(2, pcm[: min(len(pcm), 32000)]))
+    time.sleep(0.1)
+    stats_before = http_json(port, "/stats?last=10")
+    suppressed_before = int(stats_before.get("lifetime_suppressed", 0))
+    drops_before_final = http_json(port, "/__stale_gen_drops")
+    final_drops_before = int(drops_before_final.get("drops_at_finalize_output", 0))
+    sock.sendall(frame(1, '{"type":"vad_stop"}') + frame(1, '{"type":"reset","finalize":false}'))
+    stats_after = stats_before
+    suppressed_after = suppressed_before
+    final_drops_after = final_drops_before
+    deadline3 = time.time() + 60
+    while time.time() < deadline3:
+        ready, _, _ = select.select([sock], [], [], 0.2)
+        if ready:
+            opcode, payload = read_frame(sock, 0.2)
+            if opcode == 8:
+                break
+        stats_after = http_json(port, "/stats?last=10")
+        suppressed_after = int(stats_after.get("lifetime_suppressed", 0))
+        drops_after_final = http_json(port, "/__stale_gen_drops")
+        final_drops_after = int(drops_after_final.get("drops_at_finalize_output", 0))
+        if suppressed_after > suppressed_before and final_drops_after > final_drops_before:
+            break
+    if suppressed_after <= suppressed_before or final_drops_after <= final_drops_before:
+        fail("stale_final_record", f"suppressed_before={suppressed_before} after={suppressed_after} drops_before={final_drops_before} drops_after={final_drops_after} stats={json.dumps(stats_after, sort_keys=True)[:300]}")
+    ok("stale_final_record", f"suppressed_before={suppressed_before} after={suppressed_after} drops_at_finalize_output={final_drops_after}")
+    if int(stats_after.get("lifetime_emitted", 0)) < 1:
+        fail("stats_emitted_record", json.dumps(stats_after, sort_keys=True)[:200])
+    ok("stats_emitted_record")
+
+    sock.sendall(frame(8, struct.pack("!H", 1000)))
+    opcode, payload = read_frame(sock, 10)
+    if opcode != 8 or close_code(payload) != 1000:
+        fail("clean_close_1000", f"opcode={opcode} code={close_code(payload)}")
+    ok("clean_close_1000")
+    sock.close()
+    print("WS_LIFECYCLE_SMOKE PASS", flush=True)
+finally:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=20)
+)PY";
+
+  {
+    std::ofstream out(script_path, std::ios::out | std::ios::trunc);
+    if (!out) throw std::runtime_error("failed to write ws lifecycle smoke script");
+    out << script;
+  }
+
+  std::string command = shell_quote(python) + " " +
+                        shell_quote(script_path.string()) + " " +
+                        shell_quote(server_bin) + " " +
+                        shell_quote(args.dir);
+  int rc = std::system(command.c_str());
+  std::error_code ec;
+  fs::remove(script_path, ec);
+  bool ok = rc == 0;
+  std::printf("WS_LIFECYCLE_SMOKE %s rc=%d server=%s\n",
+              ok ? "PASS" : "FAIL",
+              rc,
+              server_bin.c_str());
+  return ok;
+}
+
 int main(int argc, char** argv) {
   try {
     DensityArgs args = parse_density_args(argc, argv);
@@ -6805,6 +7136,9 @@ int main(int argc, char** argv) {
     }
     if (args.mode == "stats-smoke") {
       return run_stats_smoke() ? 0 : 1;
+    }
+    if (args.mode == "ws-lifecycle-smoke") {
+      return run_ws_lifecycle_smoke(args) ? 0 : 1;
     }
     if (args.mode == "density-sweep") {
       const char* previous_cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");

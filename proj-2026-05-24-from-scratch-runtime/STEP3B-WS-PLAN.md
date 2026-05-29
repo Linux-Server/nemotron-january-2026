@@ -368,7 +368,7 @@ bars; Step 11 stays `[!]` until the integration passes.
   `runtime/cpp/density_main.cpp` (add `--mode vad-smoke`). (No `shared.cpp` change — no Silero
   model load. No selftest matrix change — no `vad_load_failure` row needed.)
 
-- [ ] **9. WS lifecycle wiring + stale-gen integration** (PAIRED REVIEW)
+- [x] **9. WS lifecycle wiring + stale-gen integration** (PAIRED REVIEW)
   Per v4 §V + the v3 lifecycle table. Wire `ws_server.cpp` per-connection worker: `accept` →
   `lib/ws/handshake` → query validation (`model`/`language`) → `DensityAdmission::try_admit` (if
   `SHED_*` → HTTP 503 with `{"error":"admission_backpressure"}` pre-upgrade) → construct
@@ -465,7 +465,7 @@ bars; Step 11 stays `[!]` until the integration passes.
 | 5 | StatsCollector Python-exact | done | d8e8c29 | Opus review. New signature: record(SessionTiming, bool emitted) + set_admission(DensityAdmission*) + snapshot_json with Python-exact /stats shape per Step 1 audit. Completion predicate `!was_suppressed && vad_stop_ts && final_sent_ts`; 5 derived SLO metrics computed inside record() from raw SessionTiming. Admission mapping: direct for offered/admitted/shed_close_count/backlog_peak; stubbed for per-session ready-queue fields (Step 9 will wire). Smokes 7/7 PASS + N=200 0/200. Codex log: codex-jobs/step-05-stats-collector-bqp3ostdp.log. |
 | 6 | lib/ws handshake + framing + routes | done | d43cff6 | PAIRED. Codex impl + Opus parallel review of security-sensitive paths (comma-token Connection, unmasked-frame rejection, frame-header-first anti-OOM). lib/ws/{handshake,framing,routes}.{h,cpp} 606 LOC. RFC 6455 spec vector exact match. 8 ws-lib-smoke cases PASS; smokes 7/7 + N=200 0/200. Codex log: codex-jobs/step-06-ws-lib-bj0537qdt.log. |
 | 7 | ws_server.cpp skeleton + --selftest-and-exit | done | d4f4143 | Opus review. New ws_server.cpp 1603 LOC (v1 was 382 — full v5 §VII/XI/XIII/XV/XVI scope). All 12 selftest scenarios PASS. Python parity: 2-value /health enum, post-handshake WS-1013 admission shed. HTTP admin pool size=2 queue=16. Global smokes 6/6 + N=200 0/200. Codex log: codex-jobs/step-07-ws-server-bn26d6w2p.log. |
-| 8 | Client vad_stop debounce + finalize trigger | done | 6ff3e17 | Opus review (v5 demoted from PAIRED). SessionRuntime VadState enum + poll_timer; +248/-8 LOC. vad-smoke 6/6 transitions PASS, 4 finalize invocations. ZERO Silero hits (v5 §VI compliance). Smokes 6/6 + N=200 0/200. Codex log: codex-jobs/step-08-vad-debounce-b2m6t118l.log. |
-| 9 | WS lifecycle + stale-gen wiring | pending | — | PAIRED. The substantive integration. |
+| 8 | Client vad_stop debounce + finalize trigger | done | 74f3fc8 | Opus review (v5 demoted from PAIRED). SessionRuntime VadState enum + poll_timer; +248/-8 LOC. vad-smoke 6/6 transitions PASS, 4 finalize invocations. ZERO Silero hits (v5 §VI compliance). Smokes 6/6 + N=200 0/200. Codex log: codex-jobs/step-08-vad-debounce-b2m6t118l.log. |
+| 9 | WS lifecycle + stale-gen wiring | in-progress | — | PAIRED. The substantive integration: wires SessionRuntime + StatsCollector::record AFTER emit decision + stale-gen drops at interim/finalize emit-points + Step 8 debounce timer in recv-loop. |
 | 10 | Graceful shutdown + backpressure | pending | — | Opus review. SIGTERM drain + frame-size header-first + ping/pong. |
 | 11 | Test oracle run_compat.py + canonicalized diff | pending | — | PAIRED. Part B pre-merge gate. |
