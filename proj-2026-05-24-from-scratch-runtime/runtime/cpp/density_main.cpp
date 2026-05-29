@@ -6,6 +6,9 @@
 #include "lib/session/session.h"
 #include "lib/session/runtime.h"
 #include "lib/telemetry/stats_collector.h"
+#include "lib/ws/framing.h"
+#include "lib/ws/handshake.h"
+#include "lib/ws/routes.h"
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -325,9 +328,10 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   }
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
       args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
-      args.mode != "stats-smoke" && args.mode != "runtime-smoke") {
+      args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
+      args.mode != "ws-lib-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, or runtime-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, or ws-lib-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -6458,9 +6462,165 @@ static bool run_stats_smoke() {
   return ok;
 }
 
+static bool response_starts_with(const std::string& response, const std::string& prefix) {
+  return response.size() >= prefix.size() &&
+         response.compare(0, prefix.size(), prefix) == 0;
+}
+
+static std::string bytes_to_string(const std::vector<uint8_t>& bytes) {
+  return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+static bool run_ws_lib_smoke() {
+  int failures = 0;
+  auto report = [&](const char* name, bool pass) {
+    if (!pass) ++failures;
+    std::printf("WS_LIB_SMOKE_CASE name=%s result=%s\n", name, pass ? "PASS" : "FAIL");
+  };
+
+  {
+    ws_handshake::HttpRequest req;
+    const std::string raw =
+        "GET /health HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "\r\n";
+    bool pass = ws_handshake::parse_http_request(raw, req) == ws_handshake::ParseResult::OK &&
+                ws_routes::dispatch(req).kind == ws_routes::RouteKind::HEALTH;
+    report("valid_health_route", pass);
+  }
+
+  {
+    ws_handshake::HttpRequest req;
+    const std::string raw =
+        "GET / HTTP/1.x\r\n"
+        "Host: localhost\r\n"
+        "\r\n";
+    auto result = ws_handshake::parse_http_request(raw, req);
+    std::string response = ws_handshake::build_http_error_response(400, "{\"error\":\"bad_request\"}");
+    bool pass = result == ws_handshake::ParseResult::MALFORMED &&
+                response_starts_with(response, "HTTP/1.1 400 Bad Request\r\n");
+    report("malformed_request_400", pass);
+  }
+
+  {
+    ws_handshake::HttpRequest req;
+    std::string raw =
+        "GET /health HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "X-Fill: ";
+    raw.append(ws_handshake::kMaxHttpHeaderBytes, 'a');
+    raw += "\r\n\r\n";
+    auto result = ws_handshake::parse_http_request(raw, req);
+    std::string response =
+        ws_handshake::build_http_error_response(431, "{\"error\":\"headers_too_large\"}");
+    bool pass = result == ws_handshake::ParseResult::OVERSIZE_HEADERS &&
+                response_starts_with(response,
+                                     "HTTP/1.1 431 Request Header Fields Too Large\r\n");
+    report("oversize_headers_431", pass);
+  }
+
+  {
+    ws_handshake::HttpRequest req;
+    const std::string raw =
+        "GET /missing HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "\r\n";
+    auto result = ws_handshake::parse_http_request(raw, req);
+    auto route = ws_routes::dispatch(req);
+    std::string response = ws_handshake::build_http_error_response(404, "{\"error\":\"not_found\"}");
+    bool pass = result == ws_handshake::ParseResult::OK &&
+                route.kind == ws_routes::RouteKind::NOT_FOUND &&
+                response_starts_with(response, "HTTP/1.1 404 Not Found\r\n");
+    report("unknown_route_404", pass);
+  }
+
+  {
+    ws_handshake::HttpRequest req;
+    const std::string key = "dGhlIHNhbXBsZSBub25jZQ==";
+    const std::string expected_accept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+    const std::string raw =
+        "GET /?model=en&language=auto HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Upgrade: WebSocket\r\n"
+        "Connection: keep-alive\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: " + key + "\r\n"
+        "\r\n";
+    auto result = ws_handshake::parse_http_request(raw, req);
+    auto route = ws_routes::dispatch(req);
+    std::string accept = ws_handshake::compute_accept_key(key);
+    std::string response = ws_handshake::build_handshake_response(accept);
+    bool pass = result == ws_handshake::ParseResult::OK &&
+                ws_handshake::is_websocket_upgrade(req) &&
+                route.kind == ws_routes::RouteKind::WEBSOCKET &&
+                route.path == "/" &&
+                route.query_params["model"] == "en" &&
+                accept == expected_accept &&
+                response.find("Sec-WebSocket-Accept: " + expected_accept + "\r\n") !=
+                    std::string::npos;
+    std::printf("WS_LIB_SMOKE_ACCEPT input=%s computed=%s expected=%s\n",
+                key.c_str(),
+                accept.c_str(),
+                expected_accept.c_str());
+    report("valid_ws_handshake_accept", pass);
+  }
+
+  {
+    std::string raw;
+    raw.push_back(static_cast<char>(0x82));
+    raw.push_back(static_cast<char>(0x80 | 127));
+    uint64_t len = static_cast<uint64_t>(ws_framing::kMaxMessageSize) + 1;
+    for (int shift = 56; shift >= 0; shift -= 8) {
+      raw.push_back(static_cast<char>((len >> shift) & 0xff));
+    }
+    ws_framing::Frame frame;
+    size_t consumed = 123;
+    bool pass = ws_framing::read_frame(raw, frame, consumed) ==
+                    ws_framing::ReadResult::FRAME_TOO_LARGE &&
+                consumed == 0;
+    report("frame_header_too_large", pass);
+  }
+
+  {
+    std::vector<uint8_t> wire = ws_framing::write_frame(ws_framing::Opcode::TEXT, "hello", true);
+    ws_framing::Frame frame;
+    size_t consumed = 0;
+    auto result = ws_framing::read_frame(bytes_to_string(wire), frame, consumed);
+    std::string payload(frame.payload.begin(), frame.payload.end());
+    bool pass = result == ws_framing::ReadResult::OK &&
+                consumed == wire.size() &&
+                frame.fin &&
+                frame.opcode == ws_framing::Opcode::TEXT &&
+                payload == "hello";
+    report("roundtrip_masked_text_frame", pass);
+  }
+
+  {
+    const std::string reason = "admission_backpressure";
+    std::vector<uint8_t> wire = ws_framing::write_close_frame(1013, reason);
+    size_t payload_len = 2 + reason.size();
+    std::string reason_wire(wire.begin() + 4, wire.end());
+    uint16_t code = static_cast<uint16_t>((static_cast<uint16_t>(wire[2]) << 8) | wire[3]);
+    bool pass = wire.size() == 2 + payload_len &&
+                wire[0] == 0x88 &&
+                wire[1] == payload_len &&
+                code == 1013 &&
+                reason_wire == reason;
+    report("close_1013_admission_backpressure", pass);
+  }
+
+  bool ok = failures == 0;
+  std::printf("WS_LIB_SMOKE %s failures=%d\n", ok ? "PASS" : "FAIL", failures);
+  return ok;
+}
+
 int main(int argc, char** argv) {
   try {
     DensityArgs args = parse_density_args(argc, argv);
+    if (args.mode == "ws-lib-smoke") {
+      return run_ws_lib_smoke() ? 0 : 1;
+    }
     if (args.mode == "admission-smoke") {
       return run_admission_smoke() ? 0 : 1;
     }

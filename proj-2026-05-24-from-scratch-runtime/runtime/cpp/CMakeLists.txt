@@ -38,13 +38,16 @@ add_library(nemotron_runtime STATIC
   lib/runtime_io/picohttpparser.c
   lib/admission/density_admission.cpp
   lib/scheduler/batched_steady_scheduler.cpp
-  lib/telemetry/stats_collector.cpp)
+  lib/telemetry/stats_collector.cpp
+  lib/ws/handshake.cpp
+  lib/ws/framing.cpp
+  lib/ws/routes.cpp)
 target_include_directories(nemotron_runtime PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${NEMOTRON_TORCH_INCLUDE_DIRS})
 target_compile_definitions(nemotron_runtime PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LINK_DIRS})
-target_link_libraries(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LIBS})
+target_link_libraries(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LIBS} OpenSSL::Crypto)
 
 add_executable(decode decode_main.cpp)
 target_include_directories(decode PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
