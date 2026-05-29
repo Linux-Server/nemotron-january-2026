@@ -1,4 +1,4 @@
-#include "batched_steady_scheduler.h"
+#include "lib/scheduler/batched_steady_scheduler.h"
 
 #include <torch/torch.h>
 

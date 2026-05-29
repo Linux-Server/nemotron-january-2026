@@ -33,7 +33,10 @@ set(NEMOTRON_TORCH_LIBS torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 
 add_library(nemotron_runtime STATIC
   lib/session/session.cpp
+  lib/runtime_io/io.cpp
   lib/runtime_io/picohttpparser.c
+  lib/admission/density_admission.cpp
+  lib/scheduler/batched_steady_scheduler.cpp
   lib/telemetry/stats_collector.cpp)
 target_include_directories(nemotron_runtime PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -87,7 +90,7 @@ set_target_properties(session_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${C
 add_custom_target(session DEPENDS session_main)
 
 # Phase 2 Step 0: native density/concurrency kill-gates over the validated session path.
-add_executable(density_main density_main.cpp batched_steady_scheduler.cpp density_admission.cpp)
+add_executable(density_main density_main.cpp)
 target_link_libraries(density_main PRIVATE nemotron_runtime)
 set_target_properties(density_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 

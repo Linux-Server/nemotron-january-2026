@@ -1,6 +1,6 @@
 #pragma once
 
-#include "steady_batch_primitive.h"
+#include "lib/scheduler/steady_batch_primitive.h"
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>

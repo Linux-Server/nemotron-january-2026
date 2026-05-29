@@ -58,9 +58,9 @@ struct ScopedCudaEvent {
   }
 };
 
-#include "steady_batch_primitive.h"
-#include "batched_steady_scheduler.h"
-#include "density_admission.h"
+#include "lib/scheduler/steady_batch_primitive.h"
+#include "lib/scheduler/batched_steady_scheduler.h"
+#include "lib/admission/density_admission.h"
 
 struct DensityArgs {
   std::string mode = "step0";

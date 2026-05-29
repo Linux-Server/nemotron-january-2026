@@ -1,4 +1,4 @@
-#include "density_admission.h"
+#include "lib/admission/density_admission.h"
 
 DensityAdmission::DensityAdmission(uint64_t active_cap, uint64_t backlog_cap)
     : active_cap_(active_cap), backlog_cap_(backlog_cap) {}
