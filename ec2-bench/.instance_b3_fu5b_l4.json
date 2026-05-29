@@ -1,0 +1,13 @@
+{
+  "aws_termination_confirmed": true,
+  "instance_id": "i-0b51f68cf9509bbc3",
+  "ip": "16.145.92.136",
+  "itype": "g6.4xlarge",
+  "key": "/home/khkramer/src/nemotron-january-2026/ec2-bench/nemotron-bench-key.pem",
+  "launch_time": "2026-05-29T01:04:15+00:00",
+  "name": "nemotron-bench-b3-fu5b-l4-20260529T010356Z",
+  "region": "us-west-2",
+  "state": "terminated",
+  "terminated_time": "2026-05-29T02:52:35Z",
+  "user": "ubuntu"
+}
