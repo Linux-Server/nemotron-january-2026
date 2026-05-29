@@ -98,9 +98,9 @@ add_executable(density_main density_main.cpp)
 target_link_libraries(density_main PRIVATE nemotron_runtime)
 set_target_properties(density_main PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 
-# NOTE: ws_server target removed pending STEP3B-WS-PLAN v5 Step 7 (rewrite ws_server.cpp from
-# scratch per architecture v5 §VII + §XII; v1 ws_server.cpp was salvage-audited out — see
-# reviews/part-a-v1-salvage-audit.md).
+add_executable(ws_server ws_server.cpp)
+target_link_libraries(ws_server PRIVATE nemotron_runtime Threads::Threads OpenSSL::Crypto)
+set_target_properties(ws_server PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 
 # STEADY-BATCH-0: fixed-B steady encoder AOTI per-row GPU-time microbench.
 add_executable(steady_batch_bench steady_batch_bench.cpp)
