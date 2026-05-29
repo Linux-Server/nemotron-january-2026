@@ -279,6 +279,12 @@ int read_env_int(const char* name, int fallback) {
   return parse_int_strict(raw, name);
 }
 
+std::optional<int> read_env_int_optional(const char* name) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') return std::nullopt;
+  return parse_int_strict(raw, name);
+}
+
 std::optional<uint64_t> read_env_u64_optional(const char* name) {
   const char* raw = std::getenv(name);
   if (raw == nullptr || raw[0] == '\0') return std::nullopt;
@@ -586,6 +592,7 @@ struct ServerConfig {
   int device_index = 0;
   int steady_num_runners = 1;
   int finalize_num_runners = 1;
+  int ws_lanes = 1;
 
   bool stats_enabled = true;
   size_t stats_window = kDefaultStatsWindow;
@@ -632,6 +639,19 @@ void populate_env_config(ServerConfig* cfg) {
     cfg->admission_backlog_cap = read_env_u64("NEMOTRON_DENSITY_ADMISSION_BACKLOG_CAP",
                                               kDefaultAdmissionBacklogCap);
   }
+
+  auto env_lanes = read_env_int_optional("NEMOTRON_WS_LANES");
+  if (env_lanes.has_value()) {
+    cfg->ws_lanes = *env_lanes;
+    if (cfg->ws_lanes <= 0) throw std::runtime_error("NEMOTRON_WS_LANES must be positive");
+    cfg->admission_active_cap = static_cast<uint64_t>(cfg->ws_lanes);
+    cfg->admission_active_cap_set = true;
+  } else if (cfg->admission_active_cap_set) {
+    if (cfg->admission_active_cap > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+      throw std::runtime_error("--admission-active-cap is too large for NEMOTRON_WS_LANES default");
+    }
+    cfg->ws_lanes = static_cast<int>(cfg->admission_active_cap);
+  }
 }
 
 void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
@@ -654,6 +674,9 @@ void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
   if (cfg->admission_active_cap_set && cfg->admission_active_cap == 0) {
     throw std::runtime_error("--admission-active-cap must be positive");
   }
+  if (cfg->ws_lanes <= 0) {
+    throw std::runtime_error("NEMOTRON_WS_LANES must be positive");
+  }
   if (cfg->batch_b_max != 1 && cfg->batch_b_max != 2 && cfg->batch_b_max != 4) {
     throw std::runtime_error("NEMOTRON_DENSITY_BATCH_MAX must be one of 1, 2, 4");
   }
@@ -674,6 +697,7 @@ std::string config_table(const ServerConfig& cfg) {
   std::ostringstream oss;
   oss << "[runtime]\n"
       << "  scheduler_enabled = " << json_bool(cfg.scheduler_enabled) << "\n"
+      << "  lanes = " << cfg.ws_lanes << "\n"
       << "  steady_batch_dir = " << cfg.effective_steady_batch_dir << "\n"
       << "\n[admission]\n"
       << "  active_cap = " << cfg.admission_active_cap << "\n"
@@ -1725,6 +1749,9 @@ class WsServer {
   void construct_runtime() {
     auto stats = std::make_unique<StatsCollector>(state_->cfg.stats_window, state_->cfg.stats_enabled);
 
+    std::string ws_lanes_env = std::to_string(state_->cfg.ws_lanes);
+    ::setenv("NEMOTRON_WS_LANES", ws_lanes_env.c_str(), 1);
+
     SharedRuntimeConfig shared_cfg;
     shared_cfg.bundle_path = (fs::path(state_->cfg.artifact_dir) / "session_audio_bundle.ts").string();
     shared_cfg.steady_artifacts_dir = state_->cfg.artifact_dir;
@@ -1984,7 +2011,8 @@ void clear_selftest_env(ScopedEnv* env) {
            "NEMOTRON_DENSITY_BATCH_MAX",
 	           "NEMOTRON_DENSITY_BATCH_WINDOW_MS",
 	           "NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS",
-	           "NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY",
+           "NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY",
+           "NEMOTRON_WS_LANES",
 	           "NEMOTRON_WS_SEND_TIMEOUT_SEC",
 	           "NEMOTRON_WS_PING_INTERVAL_SEC",
 	           "NEMOTRON_WS_PONG_TIMEOUT_SEC",
