@@ -67,8 +67,10 @@ FINALIZE_TIMING_KEYS = (
     "fork_flush_done",
     "final_sent",
     "inference_lock_acquire_wait_ms",
+    "enc_first_lock_wait_ms",
     "gil_attrib_enabled",
 )
+OPTIONAL_FINALIZE_TIMING_KEYS = {"enc_first_lock_wait_ms"}
 TIMING_NUMERIC_REQUIRED = {
     "vad_stop",
     "debounce_expiry",
@@ -77,7 +79,7 @@ TIMING_NUMERIC_REQUIRED = {
     "final_sent",
     "inference_lock_acquire_wait_ms",
 }
-TIMING_NUMERIC_NULLABLE = {"vad_stop_recv"}
+TIMING_NUMERIC_NULLABLE = {"vad_stop_recv", "enc_first_lock_wait_ms"}
 VOLATILE_TOP_LEVEL_KEYS = {
     "finalize_seq",
     "pid",
@@ -366,7 +368,8 @@ def validate_finalize_timing(timing: Any, *, label: str) -> None:
         raise CompatFailure(f"{label}: finalize_timing missing or not an object")
     keys = set(timing)
     expected = set(FINALIZE_TIMING_KEYS)
-    if keys != expected:
+    required = expected - OPTIONAL_FINALIZE_TIMING_KEYS
+    if not required.issubset(keys) or not keys.issubset(expected):
         raise CompatFailure(
             f"{label}: finalize_timing keys mismatch got={sorted(keys)} expected={sorted(expected)}"
         )
@@ -378,9 +381,10 @@ def validate_finalize_timing(timing: Any, *, label: str) -> None:
         if not is_number(timing[key]):
             raise CompatFailure(f"{label}: finalize_timing.{key} must be numeric, got {timing[key]!r}")
     for key in TIMING_NUMERIC_NULLABLE:
-        if timing[key] is not None and not is_number(timing[key]):
+        value = timing.get(key)
+        if value is not None and not is_number(value):
             raise CompatFailure(
-                f"{label}: finalize_timing.{key} must be numeric or null, got {timing[key]!r}"
+                f"{label}: finalize_timing.{key} must be numeric or null, got {value!r}"
             )
 
 
@@ -395,7 +399,7 @@ def canonicalize(obj: Any) -> Any:
             if key == "finalize_timing" and isinstance(value, dict):
                 out[key] = {
                     timing_key: canonical_timing_value(timing_key, value.get(timing_key))
-                    for timing_key in sorted(value)
+                    for timing_key in sorted(FINALIZE_TIMING_KEYS)
                 }
                 continue
             if key == "admission" and isinstance(value, dict):
@@ -413,6 +417,8 @@ def canonical_timing_value(key: str, value: Any) -> str:
         return "<string>" if isinstance(value, str) else f"<{type(value).__name__}>"
     if key == "gil_attrib_enabled":
         return "<bool>" if isinstance(value, bool) else f"<{type(value).__name__}>"
+    if key == "enc_first_lock_wait_ms" and (value is None or is_number(value)):
+        return "<number-or-null>"
     if value is None:
         return "<null>"
     if is_number(value):
@@ -672,6 +678,15 @@ def base_env(args: argparse.Namespace) -> dict[str, str]:
     env["NEMOTRON_DENSITY_BATCH_WINDOW_MS"] = str(args.batch_window_ms)
     env["NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS"] = str(args.batch_lone_timeout_ms)
     env["NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP"] = str(args.admission_active_cap)
+    ws_lanes = args.ws_lanes if args.ws_lanes is not None else args.admission_active_cap
+    ws_finalize_runners = (
+        args.ws_finalize_runners
+        if args.ws_finalize_runners is not None
+        else max(1, min(args.admission_active_cap, 2))
+    )
+    env["NEMOTRON_WS_LANES"] = str(ws_lanes)
+    env["NEMOTRON_WS_FINALIZE_RUNNERS"] = str(ws_finalize_runners)
+    env["NEMOTRON_DENSITY_FINALIZE_RUNNERS"] = str(ws_finalize_runners)
     prepend_env_path(env, "LD_LIBRARY_PATH", torch_lib_dir())
     return env
 
@@ -1236,6 +1251,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--realtime", action="store_true")
     parser.add_argument("--finalize-silence-ms", type=int, default=0)
     parser.add_argument("--admission-active-cap", type=int, default=64)
+    parser.add_argument("--ws-lanes", type=int, default=None)
+    parser.add_argument("--ws-finalize-runners", type=int, default=None)
     parser.add_argument("--batch-b-max", type=int, default=4)
     parser.add_argument("--batch-window-ms", type=int, default=10)
     parser.add_argument("--batch-lone-timeout-ms", type=int, default=0)
@@ -1251,6 +1268,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--density-timeout-s", type=float, default=900.0)
     parser.add_argument("--skip-perf-gate", action="store_true")
     args = parser.parse_args()
+    if args.ws_lanes is not None and args.ws_lanes <= 0:
+        parser.error("--ws-lanes must be positive")
+    if args.ws_finalize_runners is not None and args.ws_finalize_runners <= 0:
+        parser.error("--ws-finalize-runners must be positive")
     # Keep the venv symlink path. Resolving it executes the base interpreter
     # directly and loses the venv's site-packages.
     args.cpp_server = args.cpp_server.resolve()

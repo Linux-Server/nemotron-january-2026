@@ -136,6 +136,7 @@ void StatsCollector::record(SessionTiming timing, bool emitted) {
   sample.fork_flush_wall_ms = delta_ms(timing.fork_flush_done_ts, timing.fork_flush_start_ts);
   sample.vad_stop_recv_to_process_ms = delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts);
   sample.lock_wait_ms = timing.inference_lock_acquire_wait_ms;
+  sample.enc_first_lock_wait_ms = timing.enc_first_lock_wait_ms;
   sample.vad_stop_to_finalize_start_ms = delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts);
   sample.active_sessions_at_emit = timing.active_sessions_at_emit;
   sample.emitted = emitted;
@@ -183,12 +184,14 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
   std::vector<double> fork_flush_wall;
   std::vector<double> vad_stop_recv_to_process;
   std::vector<double> lock_wait;
+  std::vector<double> enc_first_lock_wait;
   std::vector<double> vad_stop_to_finalize_start;
   std::vector<double> active_sessions;
   vad_stop_to_sent.reserve(samples.size());
   fork_flush_wall.reserve(samples.size());
   vad_stop_recv_to_process.reserve(samples.size());
   lock_wait.reserve(samples.size());
+  enc_first_lock_wait.reserve(samples.size());
   vad_stop_to_finalize_start.reserve(samples.size());
   active_sessions.reserve(samples.size());
 
@@ -199,6 +202,7 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
       vad_stop_recv_to_process.push_back(*sample.vad_stop_recv_to_process_ms);
     }
     if (sample.lock_wait_ms) lock_wait.push_back(*sample.lock_wait_ms);
+    if (sample.enc_first_lock_wait_ms) enc_first_lock_wait.push_back(*sample.enc_first_lock_wait_ms);
     if (sample.vad_stop_to_finalize_start_ms) {
       vad_stop_to_finalize_start.push_back(*sample.vad_stop_to_finalize_start_ms);
     }
@@ -235,6 +239,7 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
       << ",\"fork_flush_wall_ms\":" << quantile_summary_json(std::move(fork_flush_wall))
       << ",\"vad_stop_recv_to_process_ms\":" << quantile_summary_json(std::move(vad_stop_recv_to_process))
       << ",\"lock_wait_ms\":" << quantile_summary_json(std::move(lock_wait))
+      << ",\"enc_first_lock_wait_ms\":" << quantile_summary_json(std::move(enc_first_lock_wait))
       << ",\"vad_stop_to_finalize_start_ms\":" << quantile_summary_json(std::move(vad_stop_to_finalize_start))
       << "},\"active_sessions_at_emit\":" << quantile_summary_json(std::move(active_sessions))
       << ",\"admission\":";

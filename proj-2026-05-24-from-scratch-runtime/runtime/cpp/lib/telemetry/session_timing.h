@@ -15,6 +15,7 @@ struct SessionTiming {
   std::optional<double> fork_flush_done_ts;
   std::optional<double> final_sent_ts;
   std::optional<double> inference_lock_acquire_wait_ms;
+  std::optional<double> enc_first_lock_wait_ms;
   bool gil_attrib_enabled = false;
 
   uint64_t finalize_seq = 0;
@@ -34,6 +35,9 @@ struct SessionTiming {
     out["inference_lock_acquire_wait_ms"] = inference_lock_acquire_wait_ms.has_value()
                                                 ? nlohmann::json(*inference_lock_acquire_wait_ms)
                                                 : nlohmann::json(nullptr);
+    out["enc_first_lock_wait_ms"] = enc_first_lock_wait_ms.has_value()
+                                        ? nlohmann::json(*enc_first_lock_wait_ms)
+                                        : nlohmann::json(nullptr);
     out["gil_attrib_enabled"] = gil_attrib_enabled;
     return out;
   }

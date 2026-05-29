@@ -229,6 +229,12 @@ struct ExecutionContext {
   torch::jit::Module& preproc;
 };
 
+class FinalizeBucketLoaderProvider {
+ public:
+  virtual ~FinalizeBucketLoaderProvider() = default;
+  virtual AOTIModelPackageLoader& get(int64_t drop, int64_t T) = 0;
+};
+
 int session_main_entrypoint(int argc, char** argv);
 
 bool file_exists(const std::string& path);
@@ -368,6 +374,16 @@ FinalizeOutcome session_runtime_finalize(SessionState& state,
                                          torch::jit::Module& bundle,
                                          RuntimeAudioFrontend& audio,
                                          std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+                                         const ExecutionContext& ctx,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         FinalizeFinish finish,
+                                         const std::string& label);
+FinalizeOutcome session_runtime_finalize(SessionState& state,
+                                         torch::jit::Module& bundle,
+                                         RuntimeAudioFrontend& audio,
+                                         FinalizeBucketLoaderProvider& finalize_loaders,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
                                          const Tokenizer& tokenizer,

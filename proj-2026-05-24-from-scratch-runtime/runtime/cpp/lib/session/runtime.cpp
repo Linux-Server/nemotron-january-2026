@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <sstream>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -263,41 +264,195 @@ std::string resolve_steady_batch_dir(const std::string& artifact_dir, const std:
   throw std::runtime_error("scheduler_enabled requested but steady batch artifacts were not found");
 }
 
-std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>> load_finalize_loaders_for_runtime(
-    const std::string& buckets_dir,
-    const std::string& shared_weights,
-    const std::string& shared_weights_pt,
-    torch::Device device,
-    int num_runners,
-    BucketManifest* manifest_out,
-    std::unordered_map<std::string, at::Tensor>* shared_constants_out) {
-  if (num_runners <= 0) throw std::runtime_error("finalize_num_runners must be positive");
-  if (!directory_exists(buckets_dir)) throw std::runtime_error("finalize buckets directory missing: " + buckets_dir);
-  if (!file_exists(shared_weights)) throw std::runtime_error("finalize shared weights missing: " + shared_weights);
+struct FinalizeLoaderMemoryRecord {
+  int64_t drop = 0;
+  int64_t T = 0;
+  int num_runners = 0;
+  size_t used_before = 0;
+  size_t used_after = 0;
+  size_t delta = 0;
+  size_t cumulative_delta = 0;
+};
 
-  auto bucket_paths = discover_finalize_buckets(buckets_dir);
-  if (bucket_paths.empty()) throw std::runtime_error("no finalize bucket packages found in " + buckets_dir);
-  std::string manifest_path = (fs::path(buckets_dir) / "manifest.json").string();
-  if (!file_exists(manifest_path)) {
-    throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
+class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
+ public:
+  FinalizeBucketLoaderPool(const std::string& buckets_dir,
+                           const std::string& shared_weights,
+                           const std::string& shared_weights_pt,
+                           torch::Device device,
+                           int num_runners,
+                           std::string policy)
+      : buckets_dir_(buckets_dir),
+        shared_weights_(shared_weights),
+        device_(device),
+        num_runners_(num_runners),
+        policy_(std::move(policy)) {
+    if (num_runners_ <= 0) throw std::runtime_error("finalize_num_runners must be positive");
+    if (!directory_exists(buckets_dir_)) {
+      throw std::runtime_error("finalize buckets directory missing: " + buckets_dir_);
+    }
+    if (!file_exists(shared_weights_)) {
+      throw std::runtime_error("finalize shared weights missing: " + shared_weights_);
+    }
+
+    bucket_paths_ = discover_finalize_buckets(buckets_dir_);
+    if (bucket_paths_.empty()) throw std::runtime_error("no finalize bucket packages found in " + buckets_dir_);
+    std::string manifest_path = (fs::path(buckets_dir_) / "manifest.json").string();
+    if (!file_exists(manifest_path)) {
+      throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
+    }
+    manifest_ = load_bucket_manifest(manifest_path);
+    verify_bucket_manifest(manifest_, bucket_paths_, buckets_dir_, shared_weights_pt);
+    std::printf("runtime finalize manifest verified: buckets=%zu weights_sha256=%s num_runners=%d policy=%s\n",
+                manifest_.buckets.size(),
+                manifest_.contract.weights_sha256.c_str(),
+                num_runners_,
+                policy_.c_str());
+
+    c10::cuda::CUDAGuard device_guard(device_.index());
+    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(before finalize shared constants)");
+    size_t before = gpu_used_bytes();
+    shared_constants_ = load_shared_constants(shared_weights_, device_);
+    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after finalize shared constants)");
+    size_t after = gpu_used_bytes();
+    shared_delta_bytes_ = after >= before ? after - before : 0;
+    std::printf("runtime finalize shared constants loaded: entries=%zu shared_delta_mib=%.3f policy=%s\n",
+                shared_constants_.size(),
+                bytes_to_mib(shared_delta_bytes_),
+                policy_.c_str());
+    std::fflush(stdout);
   }
-  BucketManifest manifest = load_bucket_manifest(manifest_path);
-  verify_bucket_manifest(manifest, bucket_paths, buckets_dir, shared_weights_pt);
-  auto shared_constants = load_shared_constants(shared_weights, device);
 
-  std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>> loaders;
-  for (const auto& kv : bucket_paths) {
+  AOTIModelPackageLoader& get(int64_t drop, int64_t T) override {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto key = std::make_pair(drop, T);
+    auto it = loaders_.find(key);
+    if (it != loaders_.end()) return *it->second;
+    auto loaded = load_bucket_locked(key);
+    return *loaded->second;
+  }
+
+  void preload_all() {
+    for (const auto& kv : bucket_paths_) {
+      (void)get(kv.first.first, kv.first.second);
+    }
+  }
+
+  std::vector<FinalizeBucketKey> bucket_keys() const {
+    std::vector<FinalizeBucketKey> keys;
+    keys.reserve(bucket_paths_.size());
+    for (const auto& kv : bucket_paths_) keys.push_back(kv.first);
+    return keys;
+  }
+
+  int num_runners() const noexcept { return num_runners_; }
+  size_t total_bucket_count() const noexcept { return bucket_paths_.size(); }
+
+  size_t loaded_bucket_count() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return loaders_.size();
+  }
+
+  size_t shared_delta_bytes() const noexcept { return shared_delta_bytes_; }
+
+  size_t total_loader_delta_bytes() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return total_loader_delta_bytes_;
+  }
+
+  std::string memory_json() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    size_t projected_all = 0;
+    if (!records_.empty()) {
+      long double mean = static_cast<long double>(total_loader_delta_bytes_) /
+                         static_cast<long double>(records_.size());
+      projected_all = static_cast<size_t>(mean * static_cast<long double>(bucket_paths_.size()));
+    }
+    std::ostringstream oss;
+    oss << "{\"policy\":\"" << policy_ << "\""
+        << ",\"num_runners_per_loaded_bucket\":" << num_runners_
+        << ",\"total_manifest_buckets\":" << bucket_paths_.size()
+        << ",\"loaded_buckets\":" << loaders_.size()
+        << ",\"shared_constants_delta_bytes\":" << shared_delta_bytes_
+        << ",\"loader_delta_bytes\":" << total_loader_delta_bytes_
+        << ",\"projected_all_buckets_same_runner_delta_bytes\":" << projected_all
+        << ",\"records\":[";
+    for (size_t i = 0; i < records_.size(); ++i) {
+      const auto& r = records_[i];
+      if (i > 0) oss << ",";
+      oss << "{\"drop\":" << r.drop
+          << ",\"T\":" << r.T
+          << ",\"num_runners\":" << r.num_runners
+          << ",\"used_before_bytes\":" << r.used_before
+          << ",\"used_after_bytes\":" << r.used_after
+          << ",\"delta_bytes\":" << r.delta
+          << ",\"cumulative_delta_bytes\":" << r.cumulative_delta
+          << "}";
+    }
+    oss << "]}";
+    return oss.str();
+  }
+
+ private:
+  std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>>::iterator load_bucket_locked(
+      const FinalizeBucketKey& key) {
+    auto path_it = bucket_paths_.find(key);
+    if (path_it == bucket_paths_.end()) {
+      throw std::runtime_error("runtime finalize missing bucket drop=" +
+                               std::to_string(key.first) +
+                               " T=" + std::to_string(key.second));
+    }
+
+    c10::cuda::CUDAGuard device_guard(device_.index());
+    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(before finalize bucket load)");
+    size_t before = gpu_used_bytes();
     auto loader = std::make_unique<AOTIModelPackageLoader>(
-        kv.second, "model", false, num_runners, device.index());
-    auto bucket_constants = constants_for_bucket(shared_constants, *loader, kv.second);
+        path_it->second, "model", false, num_runners_, device_.index());
+    auto bucket_constants = constants_for_bucket(shared_constants_, *loader, path_it->second);
     loader->load_constants(bucket_constants.values, false, false, true);
-    loaders.emplace(kv.first, std::move(loader));
+    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after finalize bucket load)");
+    size_t after = gpu_used_bytes();
+    size_t delta = after >= before ? after - before : 0;
+    total_loader_delta_bytes_ += delta;
+    records_.push_back({
+        key.first,
+        key.second,
+        num_runners_,
+        before,
+        after,
+        delta,
+        total_loader_delta_bytes_,
+    });
+    std::printf("runtime finalize bucket loaded: drop=%ld T=%ld constants=%zu direct=%zu alias=%zu "
+                "num_runners=%d loader_delta_mib=%.3f cumulative_loader_mib=%.3f policy=%s\n",
+                static_cast<long>(key.first),
+                static_cast<long>(key.second),
+                bucket_constants.values.size(),
+                bucket_constants.direct_matches,
+                bucket_constants.alias_fallbacks,
+                num_runners_,
+                bytes_to_mib(delta),
+                bytes_to_mib(total_loader_delta_bytes_),
+                policy_.c_str());
+    std::fflush(stdout);
+    auto inserted = loaders_.emplace(key, std::move(loader));
+    return inserted.first;
   }
 
-  if (manifest_out != nullptr) *manifest_out = std::move(manifest);
-  if (shared_constants_out != nullptr) *shared_constants_out = std::move(shared_constants);
-  return loaders;
-}
+  std::string buckets_dir_;
+  std::string shared_weights_;
+  torch::Device device_;
+  int num_runners_ = 1;
+  std::string policy_;
+  BucketManifest manifest_;
+  std::map<FinalizeBucketKey, std::string> bucket_paths_;
+  std::unordered_map<std::string, at::Tensor> shared_constants_;
+  std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>> loaders_;
+  mutable std::mutex mu_;
+  std::vector<FinalizeLoaderMemoryRecord> records_;
+  size_t shared_delta_bytes_ = 0;
+  size_t total_loader_delta_bytes_ = 0;
+};
 
 std::vector<float> pcm_to_float(const PCMFrame& frame) {
   if (frame.count > 0 && frame.samples == nullptr) {
@@ -359,11 +514,11 @@ std::optional<WarmupInput> make_bucket_warmup_input(const AudioGeometry& audio_g
 
 std::vector<WarmupInput> make_bucket_warmup_inputs(
     const AudioGeometry& audio_geometry,
-    const std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders) {
+    const std::vector<FinalizeBucketKey>& finalize_bucket_keys) {
   std::vector<WarmupInput> inputs;
-  inputs.reserve(finalize_loaders.size());
-  for (const auto& kv : finalize_loaders) {
-    auto input = make_bucket_warmup_input(audio_geometry, kv.first.first, kv.first.second);
+  inputs.reserve(finalize_bucket_keys.size());
+  for (const auto& key : finalize_bucket_keys) {
+    auto input = make_bucket_warmup_input(audio_geometry, key.first, key.second);
     if (input.has_value()) inputs.push_back(std::move(*input));
   }
   return inputs;
@@ -453,14 +608,23 @@ struct SharedRuntime::Impl {
         (fs::path(artifact_dir) / "enc_steady_aoti.pt2").string(), "model", false, cfg.steady_num_runners,
         device.index());
 
-    finalize_loaders = load_finalize_loaders_for_runtime(
+    finalize_loaders = std::make_unique<FinalizeBucketLoaderPool>(
         finalize_buckets_dir,
         (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
         (fs::path(artifact_dir) / "finalize_shared_weights.pt").string(),
         device,
         cfg.finalize_num_runners,
-        &finalize_bucket_manifest,
-        &shared_constants);
+        "ws_shared_finalize_pool");
+    finalize_loaders->preload_all();
+    std::printf("shared finalize loader pool ready: num_runners=%d loaded_buckets=%zu/%zu "
+                "shared_constants_mib=%.3f loader_mib=%.3f memory=%s\n",
+                finalize_loaders->num_runners(),
+                finalize_loaders->loaded_bucket_count(),
+                finalize_loaders->total_bucket_count(),
+                bytes_to_mib(finalize_loaders->shared_delta_bytes()),
+                bytes_to_mib(finalize_loaders->total_loader_delta_bytes()),
+                finalize_loaders->memory_json().c_str());
+    std::fflush(stdout);
 
     build_inference_lanes();
     warm_inference_lanes();
@@ -549,7 +713,7 @@ struct SharedRuntime::Impl {
 
   void warm_inference_lanes() {
     constexpr int kWarmupItersPerInput = 5;
-    auto inputs = make_bucket_warmup_inputs(audio_geometry, finalize_loaders);
+    auto inputs = make_bucket_warmup_inputs(audio_geometry, finalize_loaders->bucket_keys());
     const size_t bucket_warmup_inputs = inputs.size();
     if (inputs.empty()) {
       auto fixture = make_fixture_warmup_input(bundle);
@@ -596,7 +760,7 @@ struct SharedRuntime::Impl {
             (void)session_runtime_finalize(warm_state,
                                            bundle,
                                            *warm_audio,
-                                           finalize_loaders,
+                                           *finalize_loaders,
                                            ctx,
                                            device,
                                            tokenizer_value,
@@ -614,7 +778,7 @@ struct SharedRuntime::Impl {
                   lane.id(),
                   warmed,
                   inputs.size(),
-                  finalize_loaders.size());
+                  finalize_loaders->total_bucket_count());
       std::fflush(stdout);
     }
     std::printf("inference lane pool warmed: lanes=%d total_iters=%d warmup_inputs=%zu "
@@ -623,7 +787,7 @@ struct SharedRuntime::Impl {
                 total_warmed,
                 inputs.size(),
                 bucket_warmup_inputs,
-                finalize_loaders.size(),
+                finalize_loaders->total_bucket_count(),
                 bytes_to_mib(lane_delta_per_lane_bytes));
     std::fflush(stdout);
   }
@@ -638,9 +802,7 @@ struct SharedRuntime::Impl {
   torch::jit::Module enc_first;
   std::mutex enc_first_mutex;
   std::unique_ptr<AOTIModelPackageLoader> enc_steady;
-  std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>> finalize_loaders;
-  std::unordered_map<std::string, at::Tensor> shared_constants;
-  BucketManifest finalize_bucket_manifest;
+  std::unique_ptr<FinalizeBucketLoaderPool> finalize_loaders;
   AudioGeometry audio_geometry;
   int lane_count = 0;
   size_t lane_delta_bytes = 0;
@@ -752,7 +914,11 @@ struct SessionRuntime::Impl {
     lane().run([&]() {
       auto ctx = execution_context();
       if (state.emitted == 0) {
-        std::lock_guard<std::mutex> enc_first_lock(s.enc_first_mutex);
+        auto enc_first_wait_start = std::chrono::steady_clock::now();
+        std::unique_lock<std::mutex> enc_first_lock(s.enc_first_mutex);
+        enc_first_lock_wait_since_finalize_ms +=
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - enc_first_wait_start).count();
         session_runtime_append_pcm_and_drain(state,
                                              pcm,
                                              *audio,
@@ -790,7 +956,11 @@ struct SessionRuntime::Impl {
     lane().run([&]() {
       auto ctx = execution_context();
       if (state.emitted == 0) {
-        std::lock_guard<std::mutex> enc_first_lock(s.enc_first_mutex);
+        auto enc_first_wait_start = std::chrono::steady_clock::now();
+        std::unique_lock<std::mutex> enc_first_lock(s.enc_first_mutex);
+        enc_first_lock_wait_since_finalize_ms +=
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - enc_first_wait_start).count();
         session_runtime_vad_start(state,
                                   *audio,
                                   s.enc_first,
@@ -855,6 +1025,7 @@ struct SessionRuntime::Impl {
     timing.finalize_seq = ++finalize_seq;
     timing.active_sessions_at_emit = cfg.active_sessions_at_emit;
     timing.gil_attrib_enabled = cfg.gil_attrib_enabled || s.cfg.gil_attrib_enabled;
+    timing.enc_first_lock_wait_ms = enc_first_lock_wait_since_finalize_ms;
 
     if (finish == FinalizeFinish::SPECULATIVE_KEEP && state.mode == SessionMode::STREAMING) {
       vad_stop(state);
@@ -873,7 +1044,7 @@ struct SessionRuntime::Impl {
       auto result = session_runtime_finalize(state,
                                              s.bundle,
                                              *audio,
-                                             s.finalize_loaders,
+                                             *s.finalize_loaders,
                                              ctx,
                                              s.device,
                                              s.tokenizer_value,
@@ -889,6 +1060,7 @@ struct SessionRuntime::Impl {
     last_finalize_tokens = outcome.final_tokens;
     last_timing_value = timing;
     pending_timing.reset();
+    enc_first_lock_wait_since_finalize_ms = 0.0;
     debug_events.insert(debug_events.end(), events.begin(), events.end());
 
     // SessionRuntime leaves stats emission to the WS worker, which owns the stale-generation
@@ -918,6 +1090,7 @@ struct SessionRuntime::Impl {
   std::optional<SessionTiming> pending_timing;
   std::optional<SessionTiming> last_timing_value;
   uint64_t finalize_seq = 0;
+  double enc_first_lock_wait_since_finalize_ms = 0.0;
   std::vector<EmittedEvent> debug_events;
   std::vector<int64_t> last_finalize_tokens;
 };
@@ -957,6 +1130,7 @@ std::vector<WireEvent> SessionRuntime::reset(bool finalize) {
   bump_generation();
   if (!finalize) {
     impl_->clear_vad_state();
+    impl_->enc_first_lock_wait_since_finalize_ms = 0.0;
     return impl_->soft_final(false);
   }
   return impl_->finalize_and_idle("reset", FinalizeFinish::SPECULATIVE_KEEP);
@@ -966,6 +1140,7 @@ std::vector<WireEvent> SessionRuntime::end(bool finalize) {
   bump_generation();
   if (!finalize) {
     impl_->clear_vad_state();
+    impl_->enc_first_lock_wait_since_finalize_ms = 0.0;
     return impl_->soft_final(false);
   }
   return impl_->finalize_and_idle("end", FinalizeFinish::TRUE_BOUNDARY_COLD_RESET);

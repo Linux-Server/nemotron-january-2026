@@ -89,6 +89,12 @@ struct ExecutionContext {
   torch::jit::Module& preproc;
 };
 
+class FinalizeBucketLoaderProvider {
+ public:
+  virtual ~FinalizeBucketLoaderProvider() = default;
+  virtual AOTIModelPackageLoader& get(int64_t drop, int64_t T) = 0;
+};
+
 struct SessionState {
   std::atomic<uint64_t> generation{0};
   torch::Tensor clc;
@@ -3033,85 +3039,208 @@ static FinalizeOutcome run_finalize(SessionState& parent,
   return outcome;
 }
 
-static FinalizeOutcome run_finalize_runtime_on_stream(
-    SessionState& parent,
-    const std::string& label,
-    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
-    torch::jit::Module& joint,
-    torch::jit::Module& predict,
-    torch::Device device,
-    const Tokenizer& tokenizer,
-    std::vector<EmittedEvent>& events,
-    FinalizeFinish finish,
-    const FinalizeAudioInputs& audio_inputs,
-    c10::cuda::CUDAStream stream,
-    MarginStats* margin_stats = nullptr) {
+struct FinalizeInputSnapshot {
+  uint64_t generation = 0;
+  AsrSnapshot parent_snapshot;
+  SessionState input_state;
+  SessionState fork;
+  FinalizeAudioInputs audio_inputs;
+  std::vector<int64_t> base_continuous_emitted_tokens;
+  std::string base_continuous_emitted_text;
+  bool moved_true_boundary_audio = false;
+};
+
+struct FinalizeCommit {
+  std::vector<EmittedEvent> events;
+  std::vector<int64_t> committed_continuous_tokens;
+  std::string committed_continuous_text;
+  bool has_delta = false;
+};
+
+class MapFinalizeBucketLoaderProvider final : public FinalizeBucketLoaderProvider {
+ public:
+  explicit MapFinalizeBucketLoaderProvider(
+      std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& loaders)
+      : loaders_(loaders) {}
+
+  AOTIModelPackageLoader& get(int64_t drop, int64_t T) override {
+    auto it = loaders_.find(std::make_pair(drop, T));
+    if (it == loaders_.end()) {
+      throw std::runtime_error("runtime finalize missing bucket drop=" +
+                               std::to_string(drop) +
+                               " T=" + std::to_string(T));
+    }
+    return *it->second;
+  }
+
+ private:
+  std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& loaders_;
+};
+
+static FinalizeInputSnapshot make_finalize_input_snapshot(SessionState& parent,
+                                                          RuntimeAudioFrontend& audio,
+                                                          torch::Device device,
+                                                          const ExecutionContext& ctx,
+                                                          FinalizeFinish finish) {
   if (finish == FinalizeFinish::SPECULATIVE_KEEP && parent.mode != SessionMode::PENDING_FINALIZE) {
     throw std::runtime_error("runtime speculative finalize outside PENDING_FINALIZE");
   }
-  c10::cuda::CUDAGuard device_guard(device.index());
-  c10::cuda::CUDAStreamGuard stream_guard(stream);
-  auto snapshot = snapshot_asr(parent);
-  parent.mode = SessionMode::FINALIZED;
-  snapshot.mode = SessionMode::FINALIZED;
-  auto fork = clone_session(parent);
-
-  if (audio_inputs.final_T > 0) {
-    auto loader_it = finalize_loaders.find(std::make_pair(audio_inputs.drop_extra, audio_inputs.final_T));
-    if (loader_it == finalize_loaders.end()) {
-      throw std::runtime_error("runtime finalize missing bucket drop=" +
-                               std::to_string(audio_inputs.drop_extra) +
-                               " T=" + std::to_string(audio_inputs.final_T));
-    }
-    std::vector<at::Tensor> inputs = {
-        audio_inputs.chunk_mel.to(device).contiguous(),
-        fork.clc.contiguous(),
-        fork.clt.contiguous(),
-        fork.clcl.contiguous(),
-    };
-    auto out = run_aoti_loader_on_stream(*loader_it->second, inputs, stream);
-    if (out.size() < 2) throw std::runtime_error("runtime finalize AOTI bucket returned fewer than 2 outputs");
-    int64_t enc_len = scalar_i64(out[1]);
-    if (out.size() >= 5) {
-      fork.clc = out[2];
-      fork.clt = out[3];
-      fork.clcl = out[4];
-    }
-    decode_range(joint, predict, out[0], enc_len, fork.g, fork.h, fork.c, fork.hyp,
-                 margin_stats, label + ".final");
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET &&
+      parent.mode != SessionMode::STREAMING &&
+      parent.mode != SessionMode::PENDING_FINALIZE) {
+    throw std::runtime_error("runtime true-boundary finalize outside live state");
   }
 
-  FinalizeOutcome outcome;
-  outcome.token_ok = true;
-  outcome.emitted_tokens = fork.hyp.size();
-  outcome.final_tokens = fork.hyp;
-  outcome.final_text = tokenizer.ids_to_text(fork.hyp);
-  std::string delta_text = append_only_delta_text(outcome.final_text, parent.continuous_emitted_text);
-  auto delta_tokens = append_only_delta_tokens(fork.hyp, parent.continuous_emitted_tokens);
+  FinalizeInputSnapshot snapshot;
+  snapshot.generation = parent.generation.load(std::memory_order_acquire);
+  snapshot.parent_snapshot = snapshot_asr(parent);
+  snapshot.input_state = clone_session(parent);
+  snapshot.base_continuous_emitted_tokens = parent.continuous_emitted_tokens;
+  snapshot.base_continuous_emitted_text = parent.continuous_emitted_text;
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET &&
+      !snapshot.input_state.post_stop_audio.empty()) {
+    snapshot.input_state.pending_audio.insert(snapshot.input_state.pending_audio.end(),
+                                             snapshot.input_state.post_stop_audio.begin(),
+                                             snapshot.input_state.post_stop_audio.end());
+    snapshot.input_state.total_audio_samples +=
+        static_cast<int64_t>(snapshot.input_state.post_stop_audio.size());
+    snapshot.input_state.post_stop_audio.clear();
+    snapshot.moved_true_boundary_audio = true;
+  }
+  snapshot.audio_inputs = prepare_finalize_inputs_from_audio(snapshot.input_state,
+                                                             audio.audio,
+                                                             device,
+                                                             &ctx.preproc);
+  snapshot.input_state.mode = SessionMode::FINALIZED;
+  snapshot.fork = clone_session(snapshot.input_state);
+  return snapshot;
+}
+
+static FinalizeCommit make_finalize_commit(const FinalizeInputSnapshot& snapshot,
+                                           const FinalizeOutcome& outcome) {
+  FinalizeCommit commit;
+  std::string delta_text = append_only_delta_text(outcome.final_text,
+                                                  snapshot.base_continuous_emitted_text);
+  auto delta_tokens = append_only_delta_tokens(outcome.final_tokens,
+                                               snapshot.base_continuous_emitted_tokens);
   if (delta_text.empty()) {
-    emit_event(events,
+    emit_event(commit.events,
                EVENT_SUPPRESSED,
                {},
-               parent.continuous_emitted_tokens,
+               snapshot.base_continuous_emitted_tokens,
                "",
-               parent.continuous_emitted_text);
+               snapshot.base_continuous_emitted_text);
   } else {
-    auto collector_tokens = parent.continuous_emitted_tokens;
+    auto collector_tokens = snapshot.base_continuous_emitted_tokens;
     collector_tokens.insert(collector_tokens.end(), delta_tokens.begin(), delta_tokens.end());
-    std::string collector_text = append_delta_to_collector(parent.continuous_emitted_text, delta_text);
-    emit_event(events,
+    std::string collector_text = append_delta_to_collector(snapshot.base_continuous_emitted_text,
+                                                           delta_text);
+    emit_event(commit.events,
                EVENT_FINAL,
                delta_tokens,
                collector_tokens,
                delta_text,
                collector_text);
-    parent.continuous_emitted_tokens = std::move(collector_tokens);
-    parent.continuous_emitted_text = std::move(collector_text);
+    commit.committed_continuous_tokens = std::move(collector_tokens);
+    commit.committed_continuous_text = std::move(collector_text);
+    commit.has_delta = true;
   }
-  outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot);
+  return commit;
+}
+
+static bool commit_finalize_runtime(SessionState& parent,
+                                    torch::jit::Module* bundle,
+                                    torch::Device device,
+                                    const AudioGeometry* audio_geometry,
+                                    const FinalizeInputSnapshot& snapshot,
+                                    FinalizeFinish finish,
+                                    const FinalizeCommit& commit,
+                                    std::vector<EmittedEvent>& events,
+                                    FinalizeOutcome* outcome) {
+  uint64_t current_generation = parent.generation.load(std::memory_order_acquire);
+  if (current_generation != snapshot.generation) {
+    if (outcome != nullptr) outcome->stale_dropped = true;
+    return false;
+  }
+
+  if (snapshot.moved_true_boundary_audio) {
+    parent.pending_audio.insert(parent.pending_audio.end(),
+                                parent.post_stop_audio.begin(),
+                                parent.post_stop_audio.end());
+    parent.total_audio_samples += static_cast<int64_t>(parent.post_stop_audio.size());
+    parent.post_stop_audio.clear();
+  }
+  parent.mode = SessionMode::FINALIZED;
+  events.insert(events.end(), commit.events.begin(), commit.events.end());
+  if (commit.has_delta) {
+    parent.continuous_emitted_tokens = commit.committed_continuous_tokens;
+    parent.continuous_emitted_text = commit.committed_continuous_text;
+  }
   if (finish == FinalizeFinish::SPECULATIVE_KEEP) {
     finish_speculative_finalize(parent);
+  } else {
+    if (bundle == nullptr) {
+      throw std::runtime_error("runtime true-boundary finalize commit requires session bundle");
+    }
+    cold_reset_after_finalize(parent, *bundle, device, audio_geometry);
   }
+  return true;
+}
+
+static FinalizeOutcome run_finalize_runtime_on_stream(
+    SessionState& parent,
+    torch::jit::Module& bundle,
+    RuntimeAudioFrontend& audio,
+    const std::string& label,
+    FinalizeBucketLoaderProvider& finalize_loaders,
+    const ExecutionContext& ctx,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    std::vector<EmittedEvent>& events,
+    FinalizeFinish finish,
+    MarginStats* margin_stats = nullptr) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  auto snapshot = make_finalize_input_snapshot(parent, audio, device, ctx, finish);
+
+  if (snapshot.audio_inputs.final_T > 0) {
+    AOTIModelPackageLoader& loader = finalize_loaders.get(snapshot.audio_inputs.drop_extra,
+                                                          snapshot.audio_inputs.final_T);
+    std::vector<at::Tensor> inputs = {
+        snapshot.audio_inputs.chunk_mel.to(device).contiguous(),
+        snapshot.fork.clc.contiguous(),
+        snapshot.fork.clt.contiguous(),
+        snapshot.fork.clcl.contiguous(),
+    };
+    auto out = run_aoti_loader_on_stream(loader, inputs, ctx.stream);
+    if (out.size() < 2) throw std::runtime_error("runtime finalize AOTI bucket returned fewer than 2 outputs");
+    int64_t enc_len = scalar_i64(out[1]);
+    if (out.size() >= 5) {
+      snapshot.fork.clc = out[2];
+      snapshot.fork.clt = out[3];
+      snapshot.fork.clcl = out[4];
+    }
+    decode_range(ctx.joint, ctx.predict, out[0], enc_len,
+                 snapshot.fork.g, snapshot.fork.h, snapshot.fork.c, snapshot.fork.hyp,
+                 margin_stats, label + ".final");
+  }
+
+  FinalizeOutcome outcome;
+  outcome.token_ok = true;
+  outcome.emitted_tokens = snapshot.fork.hyp.size();
+  outcome.final_tokens = snapshot.fork.hyp;
+  outcome.final_text = tokenizer.ids_to_text(snapshot.fork.hyp);
+  outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot.parent_snapshot);
+  FinalizeCommit commit = make_finalize_commit(snapshot, outcome);
+  commit_finalize_runtime(parent,
+                          &bundle,
+                          device,
+                          finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET ? &audio.audio.g : nullptr,
+                          snapshot,
+                          finish,
+                          commit,
+                          events,
+                          &outcome);
   return outcome;
 }
 
@@ -3127,18 +3256,93 @@ static FinalizeOutcome run_finalize_runtime(
     FinalizeFinish finish,
     const FinalizeAudioInputs& audio_inputs,
     MarginStats* margin_stats = nullptr) {
-  return run_finalize_runtime_on_stream(parent,
-                                        label,
-                                        finalize_loaders,
-                                        joint,
-                                        predict,
-                                        device,
-                                        tokenizer,
-                                        events,
-                                        finish,
-                                        audio_inputs,
-                                        c10::cuda::getCurrentCUDAStream(device.index()),
-                                        margin_stats);
+  MapFinalizeBucketLoaderProvider provider(finalize_loaders);
+  c10::cuda::CUDAStream stream = c10::cuda::getCurrentCUDAStream(device.index());
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(stream);
+  if (finish != FinalizeFinish::SPECULATIVE_KEEP) {
+    throw std::runtime_error("legacy run_finalize_runtime supports only speculative finalize");
+  }
+  if (parent.mode != SessionMode::PENDING_FINALIZE) {
+    throw std::runtime_error("runtime speculative finalize outside PENDING_FINALIZE");
+  }
+
+  FinalizeInputSnapshot snapshot;
+  snapshot.generation = parent.generation.load(std::memory_order_acquire);
+  snapshot.parent_snapshot = snapshot_asr(parent);
+  snapshot.input_state = clone_session(parent);
+  snapshot.base_continuous_emitted_tokens = parent.continuous_emitted_tokens;
+  snapshot.base_continuous_emitted_text = parent.continuous_emitted_text;
+  snapshot.audio_inputs = audio_inputs;
+  snapshot.input_state.mode = SessionMode::FINALIZED;
+  snapshot.fork = clone_session(snapshot.input_state);
+
+  if (snapshot.audio_inputs.final_T > 0) {
+    AOTIModelPackageLoader& loader = provider.get(snapshot.audio_inputs.drop_extra,
+                                                  snapshot.audio_inputs.final_T);
+    std::vector<at::Tensor> inputs = {
+        snapshot.audio_inputs.chunk_mel.to(device).contiguous(),
+        snapshot.fork.clc.contiguous(),
+        snapshot.fork.clt.contiguous(),
+        snapshot.fork.clcl.contiguous(),
+    };
+    auto out = run_aoti_loader_on_stream(loader, inputs, stream);
+    if (out.size() < 2) throw std::runtime_error("runtime finalize AOTI bucket returned fewer than 2 outputs");
+    int64_t enc_len = scalar_i64(out[1]);
+    if (out.size() >= 5) {
+      snapshot.fork.clc = out[2];
+      snapshot.fork.clt = out[3];
+      snapshot.fork.clcl = out[4];
+    }
+    decode_range(joint, predict, out[0], enc_len,
+                 snapshot.fork.g, snapshot.fork.h, snapshot.fork.c, snapshot.fork.hyp,
+                 margin_stats, label + ".final");
+  }
+
+  FinalizeOutcome outcome;
+  outcome.token_ok = true;
+  outcome.emitted_tokens = snapshot.fork.hyp.size();
+  outcome.final_tokens = snapshot.fork.hyp;
+  outcome.final_text = tokenizer.ids_to_text(snapshot.fork.hyp);
+  outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot.parent_snapshot);
+  FinalizeCommit commit = make_finalize_commit(snapshot, outcome);
+  commit_finalize_runtime(parent,
+                          nullptr,
+                          device,
+                          nullptr,
+                          snapshot,
+                          finish,
+                          commit,
+                          events,
+                          &outcome);
+  return outcome;
+}
+
+FinalizeOutcome session_runtime_finalize(
+    SessionState& state,
+    torch::jit::Module& bundle,
+    RuntimeAudioFrontend& audio,
+    FinalizeBucketLoaderProvider& finalize_loaders,
+    const ExecutionContext& ctx,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    std::vector<EmittedEvent>& events,
+    FinalizeFinish finish,
+    const std::string& label) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  auto outcome = run_finalize_runtime_on_stream(state,
+                                                bundle,
+                                                audio,
+                                                label,
+                                                finalize_loaders,
+                                                ctx,
+                                                device,
+                                                tokenizer,
+                                                events,
+                                                finish,
+                                                &audio.audio.margin_stats);
+  return outcome;
 }
 
 FinalizeOutcome session_runtime_finalize(
@@ -3152,30 +3356,17 @@ FinalizeOutcome session_runtime_finalize(
     std::vector<EmittedEvent>& events,
     FinalizeFinish finish,
     const std::string& label) {
-  c10::cuda::CUDAGuard device_guard(device.index());
-  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
-  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET && !state.post_stop_audio.empty()) {
-    state.pending_audio.insert(state.pending_audio.end(), state.post_stop_audio.begin(), state.post_stop_audio.end());
-    state.total_audio_samples += static_cast<int64_t>(state.post_stop_audio.size());
-    state.post_stop_audio.clear();
-  }
-  FinalizeAudioInputs audio_inputs = prepare_finalize_inputs_from_audio(state, audio.audio, device, &ctx.preproc);
-  auto outcome = run_finalize_runtime_on_stream(state,
-                                                label,
-                                                finalize_loaders,
-                                                ctx.joint,
-                                                ctx.predict,
-                                                device,
-                                                tokenizer,
-                                                events,
-                                                finish,
-                                                audio_inputs,
-                                                ctx.stream,
-                                                &audio.audio.margin_stats);
-  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET) {
-    cold_reset_after_finalize(state, bundle, device, &audio.audio.g);
-  }
-  return outcome;
+  MapFinalizeBucketLoaderProvider provider(finalize_loaders);
+  return session_runtime_finalize(state,
+                                  bundle,
+                                  audio,
+                                  provider,
+                                  ctx,
+                                  device,
+                                  tokenizer,
+                                  events,
+                                  finish,
+                                  label);
 }
 
 FinalizeOutcome session_runtime_finalize(

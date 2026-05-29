@@ -6359,6 +6359,7 @@ struct StatsSmokeSample {
   std::optional<double> fork_flush_wall_ms;
   std::optional<double> vad_stop_recv_to_process_ms;
   std::optional<double> lock_wait_ms;
+  std::optional<double> enc_first_lock_wait_ms;
   std::optional<double> vad_stop_to_finalize_start_ms;
   double active_sessions_at_emit = 0.0;
   bool emitted = false;
@@ -6427,6 +6428,7 @@ static StatsSmokeSample expected_sample_from_timing(const SessionTiming& timing,
   sample.fork_flush_wall_ms = smoke_delta_ms(timing.fork_flush_done_ts, timing.fork_flush_start_ts);
   sample.vad_stop_recv_to_process_ms = smoke_delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts);
   sample.lock_wait_ms = timing.inference_lock_acquire_wait_ms;
+  sample.enc_first_lock_wait_ms = timing.enc_first_lock_wait_ms;
   sample.vad_stop_to_finalize_start_ms = smoke_delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts);
   sample.active_sessions_at_emit = static_cast<double>(timing.active_sessions_at_emit);
   sample.emitted = emitted;
@@ -6443,6 +6445,7 @@ static SessionTiming make_fixture_timing(double vad_stop,
   timing.fork_flush_done_ts = vad_stop + 0.005859375;
   timing.vad_stop_recv_ts = vad_stop - 0.00390625;
   timing.inference_lock_acquire_wait_ms = 0.5;
+  timing.enc_first_lock_wait_ms = 0.25;
   timing.active_sessions_at_emit = active_sessions_at_emit;
   return timing;
 }
@@ -6476,6 +6479,7 @@ static bool run_stats_smoke() {
         *timing.fork_flush_start_ts + (20.0 + static_cast<double>(i % 7)) / 1000.0;
     timing.vad_stop_recv_ts = base - (30.0 + static_cast<double>(i % 11)) / 1000.0;
     timing.inference_lock_acquire_wait_ms = static_cast<double>(i % 6) + 0.25;
+    timing.enc_first_lock_wait_ms = static_cast<double>(i % 4) + 0.125;
     timing.finalize_seq = static_cast<uint64_t>(i + 1);
     timing.active_sessions_at_emit = i % 8;
 
@@ -6485,6 +6489,7 @@ static bool run_stats_smoke() {
     }
     if (i % 11 == 0) timing.vad_stop_recv_ts.reset();
     if (i % 9 == 0) timing.inference_lock_acquire_wait_ms.reset();
+    if (i % 8 == 0) timing.enc_first_lock_wait_ms.reset();
     if (i % 13 == 0) timing.was_suppressed = true;
     if (i % 17 == 0) timing.final_sent_ts.reset();
 
@@ -6520,6 +6525,7 @@ static bool run_stats_smoke() {
   auto collect_fork = [](const StatsSmokeSample& sample) { return sample.fork_flush_wall_ms; };
   auto collect_recv = [](const StatsSmokeSample& sample) { return sample.vad_stop_recv_to_process_ms; };
   auto collect_lock = [](const StatsSmokeSample& sample) { return sample.lock_wait_ms; };
+  auto collect_enc_first_lock = [](const StatsSmokeSample& sample) { return sample.enc_first_lock_wait_ms; };
   auto collect_finalize_start = [](const StatsSmokeSample& sample) {
     return sample.vad_stop_to_finalize_start_ms;
   };
@@ -6546,6 +6552,8 @@ static bool run_stats_smoke() {
                             collect_stats_smoke_values(expected_samples, collect_recv)) &&
       stats_summary_matches(full["metrics"]["lock_wait_ms"],
                             collect_stats_smoke_values(expected_samples, collect_lock)) &&
+      stats_summary_matches(full["metrics"]["enc_first_lock_wait_ms"],
+                            collect_stats_smoke_values(expected_samples, collect_enc_first_lock)) &&
       stats_summary_matches(full["metrics"]["vad_stop_to_finalize_start_ms"],
                             collect_stats_smoke_values(expected_samples, collect_finalize_start)) &&
       stats_summary_matches(full["active_sessions_at_emit"],
@@ -6613,6 +6621,8 @@ static bool run_stats_smoke() {
       "\"p95\":3.90625,\"p99\":3.90625,\"max\":3.90625,\"count\":2},"
       "\"lock_wait_ms\":{\"p50\":0.5,\"p90\":0.5,\"p95\":0.5,\"p99\":0.5,"
       "\"max\":0.5,\"count\":2},"
+      "\"enc_first_lock_wait_ms\":{\"p50\":0.25,\"p90\":0.25,\"p95\":0.25,"
+      "\"p99\":0.25,\"max\":0.25,\"count\":3},"
       "\"vad_stop_to_finalize_start_ms\":{\"p50\":1.953125,\"p90\":1.953125,"
       "\"p95\":1.953125,\"p99\":1.953125,\"max\":1.953125,\"count\":2}},"
       "\"active_sessions_at_emit\":{\"p50\":3,\"p90\":5,\"p95\":5,\"p99\":5,"
@@ -7025,6 +7035,7 @@ try:
         "fork_flush_done",
         "final_sent",
         "inference_lock_acquire_wait_ms",
+        "enc_first_lock_wait_ms",
         "gil_attrib_enabled",
     }
     if not isinstance(timing, dict) or set(timing.keys()) != expected:

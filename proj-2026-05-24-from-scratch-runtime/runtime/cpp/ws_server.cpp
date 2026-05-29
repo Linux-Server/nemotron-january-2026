@@ -296,6 +296,14 @@ uint64_t read_env_u64(const char* name, uint64_t fallback) {
   return value.value_or(fallback);
 }
 
+int capped_general_finalize_runners(uint64_t active_cap) {
+  uint64_t clamped = std::max<uint64_t>(1, std::min<uint64_t>(active_cap, 2));
+  if (clamped > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(clamped);
+}
+
 size_t read_env_size_t(const char* name, size_t fallback) {
   uint64_t value = read_env_u64(name, fallback);
   if (value == 0 || value > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
@@ -617,7 +625,6 @@ void populate_env_config(ServerConfig* cfg) {
       read_env_int("NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY", kDefaultBatchQueueCapacity);
   cfg->device_index = read_env_int("NEMOTRON_DENSITY_DEVICE_INDEX", 0);
   cfg->steady_num_runners = read_env_int("NEMOTRON_DENSITY_STEADY_RUNNERS", 1);
-  cfg->finalize_num_runners = read_env_int("NEMOTRON_DENSITY_FINALIZE_RUNNERS", 1);
   cfg->stats_enabled = read_env_enabled("NEMOTRON_STATS_ENABLED", true);
   cfg->stats_window = read_env_size_t("NEMOTRON_STATS_WINDOW", kDefaultStatsWindow);
   cfg->ws_max_message_size =
@@ -651,6 +658,16 @@ void populate_env_config(ServerConfig* cfg) {
       throw std::runtime_error("--admission-active-cap is too large for NEMOTRON_WS_LANES default");
     }
     cfg->ws_lanes = static_cast<int>(cfg->admission_active_cap);
+  }
+
+  auto env_finalize_runners = read_env_int_optional("NEMOTRON_WS_FINALIZE_RUNNERS");
+  if (env_finalize_runners.has_value()) {
+    cfg->finalize_num_runners = *env_finalize_runners;
+  } else {
+    uint64_t active_cap = cfg->admission_active_cap_set
+                              ? cfg->admission_active_cap
+                              : static_cast<uint64_t>(cfg->ws_lanes);
+    cfg->finalize_num_runners = capped_general_finalize_runners(active_cap);
   }
 }
 
@@ -698,6 +715,8 @@ std::string config_table(const ServerConfig& cfg) {
   oss << "[runtime]\n"
       << "  scheduler_enabled = " << json_bool(cfg.scheduler_enabled) << "\n"
       << "  lanes = " << cfg.ws_lanes << "\n"
+      << "  steady_runners = " << cfg.steady_num_runners << "\n"
+      << "  finalize_runners = " << cfg.finalize_num_runners << "\n"
       << "  steady_batch_dir = " << cfg.effective_steady_batch_dir << "\n"
       << "\n[admission]\n"
       << "  active_cap = " << cfg.admission_active_cap << "\n"
@@ -2013,6 +2032,7 @@ void clear_selftest_env(ScopedEnv* env) {
 	           "NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS",
            "NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY",
            "NEMOTRON_WS_LANES",
+           "NEMOTRON_WS_FINALIZE_RUNNERS",
 	           "NEMOTRON_WS_SEND_TIMEOUT_SEC",
 	           "NEMOTRON_WS_PING_INTERVAL_SEC",
 	           "NEMOTRON_WS_PONG_TIMEOUT_SEC",
@@ -2214,6 +2234,7 @@ bool has_raw_finalize_timing_keys(const nlohmann::json& event) {
       "fork_flush_done",
       "final_sent",
       "inference_lock_acquire_wait_ms",
+      "enc_first_lock_wait_ms",
       "gil_attrib_enabled",
   };
   if (timing.size() != keys.size()) return false;
