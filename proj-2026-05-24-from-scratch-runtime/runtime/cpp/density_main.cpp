@@ -4,6 +4,7 @@
 // and libnemotron_runtime.a. The harness glue below only adds concurrency,
 // explicit-stream AOTI calls, timing, and telemetry.
 #include "lib/session/session.h"
+#include "lib/session/runtime.h"
 #include "lib/telemetry/stats_collector.h"
 
 #include <c10/cuda/CUDAGuard.h>
@@ -18,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -61,6 +63,9 @@ struct ScopedCudaEvent {
 #include "lib/scheduler/steady_batch_primitive.h"
 #include "lib/scheduler/batched_steady_scheduler.h"
 #include "lib/admission/density_admission.h"
+
+std::vector<EmittedEvent> session_runtime_debug_events(const SessionRuntime& runtime);
+std::vector<int64_t> session_runtime_debug_last_final_tokens(const SessionRuntime& runtime);
 
 struct DensityArgs {
   std::string mode = "step0";
@@ -319,9 +324,9 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   }
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
       args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
-      args.mode != "stats-smoke") {
+      args.mode != "stats-smoke" && args.mode != "runtime-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, or stats-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, or runtime-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -2101,10 +2106,14 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
   }
   if (stats_collector != nullptr) {
     static std::atomic<uint64_t> finalize_seq{0};
+    double total_ms = elapsed_ms_since(total_start);
     SessionTiming timing;
-    timing.fork_flush_wall_ms = elapsed_ms_since(total_start);
-    timing.lock_wait_ms = std::max(0.0, runner_host_ms - gpu_ms);
-    timing.vad_stop_to_finalize_start_ms = 0.0;
+    timing.reason = "density";
+    timing.vad_stop_ts = 0.0;
+    timing.fork_flush_start_ts = 0.0;
+    timing.fork_flush_done_ts = total_ms / 1000.0;
+    timing.final_sent_ts = timing.fork_flush_done_ts;
+    timing.inference_lock_acquire_wait_ms = std::max(0.0, runner_host_ms - gpu_ms);
     timing.finalize_seq = finalize_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     timing.active_sessions_at_emit = 0;
     stats_collector->record(timing);
@@ -6063,6 +6072,98 @@ static bool run_stalegen_smoke() {
   return ok;
 }
 
+static std::vector<int16_t> audio_tensor_to_pcm_int16(torch::Tensor tensor) {
+  auto flat = tensor.to(torch::kCPU).to(torch::kFloat32).contiguous().view({-1});
+  std::vector<int16_t> out;
+  out.reserve(static_cast<size_t>(flat.numel()));
+  for (int64_t i = 0; i < flat.numel(); ++i) {
+    long value = std::lrint(static_cast<double>(flat[i].item<float>()) * 32768.0);
+    value = std::max<long>(-32768, std::min<long>(32767, value));
+    out.push_back(static_cast<int16_t>(value));
+  }
+  return out;
+}
+
+static bool run_runtime_smoke(const DensityArgs& args, torch::Device device) {
+  std::string bundle_path = (fs::path(args.dir) / "session_audio_bundle.ts").string();
+  auto bundle = torch::jit::load(bundle_path);
+  verify_session_bundle_meta(bundle, false);
+  int rows_total = static_cast<int>(scalar_i64(attr_tensor(bundle, "num_utts")));
+  int rows = std::min(4, rows_total);
+  if (rows <= 0) throw std::runtime_error("runtime-smoke requires at least one audio fixture row");
+
+  SharedRuntimeConfig shared_cfg;
+  shared_cfg.bundle_path = bundle_path;
+  shared_cfg.steady_artifacts_dir = args.dir;
+  std::string stripped = (fs::path(args.dir) / "stripped_finalize_buckets").string();
+  shared_cfg.finalize_buckets_dir = directory_exists(stripped)
+                                        ? stripped
+                                        : (fs::path(args.dir) / "finalize_buckets").string();
+  shared_cfg.scheduler_enabled = false;
+  shared_cfg.device_index = device.index();
+  SharedRuntime shared(shared_cfg);
+
+  int token_divergences = 0;
+  int event_divergences = 0;
+  int errors = 0;
+  size_t wire_events_total = 0;
+  constexpr size_t kPcm20msSamples = 320;
+
+  for (int utt = 0; utt < rows; ++utt) {
+    std::string prefix = "utt" + std::to_string(utt);
+    std::string label = "runtime.utt" + std::to_string(utt);
+    SessionConfig session_cfg;
+    session_cfg.label = label;
+    session_cfg.finalize_silence_ms = 0;
+    SessionRuntime runtime(shared, session_cfg);
+    try {
+      runtime.handle_vad_start();
+      auto pcm = audio_tensor_to_pcm_int16(prefix_tensor(bundle, prefix, "audio"));
+      for (size_t pos = 0; pos < pcm.size(); pos += kPcm20msSamples) {
+        size_t count = std::min(kPcm20msSamples, pcm.size() - pos);
+        auto wire = runtime.append_pcm_and_drain(PCMFrame{pcm.data() + pos, count});
+        wire_events_total += wire.size();
+      }
+      auto final_wire = runtime.finalize_now();
+      wire_events_total += final_wire.size();
+
+      auto final_tokens = session_runtime_debug_last_final_tokens(runtime);
+      auto gold_tokens = tensor_to_vec(prefix_tensor(bundle, prefix, "gold_tokens"));
+      bool tokens_ok = final_tokens == gold_tokens;
+      if (!tokens_ok) {
+        ++token_divergences;
+        equal_tokens(final_tokens, gold_tokens, "runtime final cumulative", label);
+      }
+      auto events = session_runtime_debug_events(runtime);
+      auto gold_events = gold_events_from_bundle(bundle, utt);
+      bool events_ok = strict_events_equal(events, gold_events, label + ".events");
+      if (!events_ok) ++event_divergences;
+      std::printf("RUNTIME_SMOKE_ROW utt=%d samples=%zu chunks=%zu final_tokens=%s events=%s "
+                  "wire_events=%zu timing=%s\n",
+                  utt,
+                  pcm.size(),
+                  (pcm.size() + kPcm20msSamples - 1) / kPcm20msSamples,
+                  tokens_ok ? "PASS" : "FAIL",
+                  events_ok ? "PASS" : "FAIL",
+                  final_wire.size(),
+                  runtime.last_timing().has_value() ? "PASS" : "FAIL");
+    } catch (const std::exception& e) {
+      ++errors;
+      std::printf("RUNTIME_SMOKE_ROW utt=%d error=%s\n", utt, e.what());
+    }
+  }
+
+  bool ok = errors == 0 && token_divergences == 0 && event_divergences == 0;
+  std::printf("RUNTIME_SMOKE %s rows=%d token_divergences=%d event_divergences=%d errors=%d wire_events=%zu\n",
+              ok ? "PASS" : "FAIL",
+              rows,
+              token_divergences,
+              event_divergences,
+              errors,
+              wire_events_total);
+  return ok;
+}
+
 static bool json_contains(const std::string& json, const std::string& needle) {
   return json.find(needle) != std::string::npos;
 }
@@ -6074,11 +6175,16 @@ static bool run_stats_smoke() {
   StatsCollector collector(16, true);
   for (int i = 0; i < 50; ++i) {
     SessionTiming timing;
-    if (i % 5 != 0) timing.vad_stop_to_sent_ms = 10.0 + static_cast<double>(i);
-    timing.fork_flush_wall_ms = 20.0 + static_cast<double>(i);
-    timing.vad_stop_recv_to_process_ms = 30.0 + static_cast<double>(i % 7);
-    timing.lock_wait_ms = static_cast<double>(i % 3);
-    timing.vad_stop_to_finalize_start_ms = 40.0 + static_cast<double>(i);
+    double base = 1000.0 + static_cast<double>(i);
+    timing.vad_stop_ts = base;
+    if (i % 5 != 0) {
+      timing.final_sent_ts = base + (10.0 + static_cast<double>(i)) / 1000.0;
+    }
+    timing.fork_flush_start_ts = base + (40.0 + static_cast<double>(i)) / 1000.0;
+    timing.fork_flush_done_ts =
+        *timing.fork_flush_start_ts + (20.0 + static_cast<double>(i)) / 1000.0;
+    timing.vad_stop_recv_ts = base - (30.0 + static_cast<double>(i % 7)) / 1000.0;
+    timing.inference_lock_acquire_wait_ms = static_cast<double>(i % 3);
     timing.finalize_seq = static_cast<uint64_t>(i + 1);
     timing.active_sessions_at_emit = i % 4;
     collector.record(timing);
@@ -6088,7 +6194,8 @@ static bool run_stats_smoke() {
   std::string full = collector.snapshot_json();
   StatsCollector disabled(16, false);
   SessionTiming disabled_timing;
-  disabled_timing.vad_stop_to_sent_ms = 1.0;
+  disabled_timing.vad_stop_ts = 10.0;
+  disabled_timing.final_sent_ts = 10.001;
   disabled.record(disabled_timing);
   std::string disabled_json = disabled.snapshot_json();
 
@@ -6147,6 +6254,10 @@ int main(int argc, char** argv) {
     auto device = torch::Device(torch::kCUDA, 0);
     c10::cuda::CUDAGuard device_guard(device.index());
     std::string stamp = timestamp_utc();
+    if (args.mode == "runtime-smoke") {
+      bool ok = run_runtime_smoke(args, device);
+      return ok ? 0 : 1;
+    }
     auto shared_bundle = load_shared_session_bundle(args.dir);
     int rows_total = static_cast<int>(scalar_i64(attr_tensor(*shared_bundle, "num_utts")));
     int requested_rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total) : rows_total;

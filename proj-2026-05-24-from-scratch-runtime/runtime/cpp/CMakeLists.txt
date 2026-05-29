@@ -33,6 +33,7 @@ set(NEMOTRON_TORCH_LIBS torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 
 add_library(nemotron_runtime STATIC
   lib/session/session.cpp
+  lib/session/runtime.cpp
   lib/runtime_io/io.cpp
   lib/runtime_io/picohttpparser.c
   lib/admission/density_admission.cpp

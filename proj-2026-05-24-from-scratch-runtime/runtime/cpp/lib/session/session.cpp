@@ -2082,6 +2082,10 @@ struct AudioFrontend {
   }
 };
 
+struct RuntimeAudioFrontend {
+  AudioFrontend audio;
+};
+
 static PreprocDeterminismStats run_preproc_determinism_check(const AudioFrontend& audio) {
   std::vector<float> raw_ring(static_cast<size_t>(audio.g.raw_audio_ring_samples), 0.0f);
   std::vector<float> new_audio(static_cast<size_t>(audio.g.preprocess_new_audio_samples), 0.0f);
@@ -2476,6 +2480,88 @@ static int vad_start(SessionState& state,
   throw std::runtime_error("vad_start called after FINALIZED");
 }
 
+AudioGeometry session_runtime_audio_geometry_from_bundle(torch::jit::Module& bundle) {
+  return audio_geometry_from_bundle(bundle);
+}
+
+std::string session_runtime_verify_preproc_manifest(const std::string& dir,
+                                                    const std::string& preproc_path,
+                                                    const AudioGeometry& audio_geometry) {
+  return verify_preproc_manifest(dir, preproc_path, audio_geometry);
+}
+
+void destroy_session_runtime_audio_frontend(RuntimeAudioFrontend* audio) {
+  delete audio;
+}
+
+std::unique_ptr<RuntimeAudioFrontend, void (*)(RuntimeAudioFrontend*)>
+make_session_runtime_audio_frontend(torch::jit::Module& bundle,
+                                    torch::jit::Module& preproc,
+                                    torch::Device device) {
+  auto out = std::unique_ptr<RuntimeAudioFrontend, void (*)(RuntimeAudioFrontend*)>(
+      new RuntimeAudioFrontend(), destroy_session_runtime_audio_frontend);
+  out->audio.g = audio_geometry_from_bundle(bundle);
+  out->audio.preproc = &preproc;
+  out->audio.device = device;
+  out->audio.mel_atol = scalar_f64(attr_tensor(bundle, "mel_ci_atol"));
+  out->audio.cache_atol = scalar_f64(attr_tensor(bundle, "cache_ci_atol"));
+  if (out->audio.mel_atol < 0.0 || out->audio.cache_atol < 0.0) {
+    throw std::runtime_error("audio CI thresholds must be non-negative");
+  }
+  out->audio.ci_stats = audio_ci_stats_from_bundle(bundle);
+  return out;
+}
+
+void reset_session_runtime_audio_front(SessionState& state, RuntimeAudioFrontend& audio) {
+  reset_audio_front(state, audio.audio.g);
+}
+
+int session_runtime_append_pcm_and_drain(SessionState& state,
+                                         const std::vector<float>& pcm,
+                                         RuntimeAudioFrontend& audio,
+                                         torch::jit::Module& enc_first,
+                                         AOTIModelPackageLoader& enc_steady,
+                                         torch::jit::Module& joint,
+                                         torch::jit::Module& predict,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         const std::string& label) {
+  return append_pcm_and_drain_runtime(state,
+                                      pcm,
+                                      audio.audio,
+                                      enc_first,
+                                      enc_steady,
+                                      joint,
+                                      predict,
+                                      device,
+                                      tokenizer,
+                                      events,
+                                      label);
+}
+
+int session_runtime_vad_start(SessionState& state,
+                              RuntimeAudioFrontend& audio,
+                              torch::jit::Module& enc_first,
+                              AOTIModelPackageLoader& enc_steady,
+                              torch::jit::Module& joint,
+                              torch::jit::Module& predict,
+                              torch::Device device,
+                              const Tokenizer& tokenizer,
+                              std::vector<EmittedEvent>& events,
+                              const std::string& label) {
+  return vad_start(state,
+                   audio.audio,
+                   enc_first,
+                   enc_steady,
+                   joint,
+                   predict,
+                   device,
+                   tokenizer,
+                   events,
+                   label);
+}
+
 static int append_audio_and_drain(SessionState& state,
                                   torch::jit::Module& bundle,
                                   const std::string& prefix,
@@ -2819,6 +2905,41 @@ static FinalizeOutcome run_finalize_runtime(SessionState& parent,
   outcome.fork_ok = fork_assert_parent_unchanged(parent, snapshot);
   if (finish == FinalizeFinish::SPECULATIVE_KEEP) {
     finish_speculative_finalize(parent);
+  }
+  return outcome;
+}
+
+FinalizeOutcome session_runtime_finalize(
+    SessionState& state,
+    torch::jit::Module& bundle,
+    RuntimeAudioFrontend& audio,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    std::vector<EmittedEvent>& events,
+    FinalizeFinish finish,
+    const std::string& label) {
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET && !state.post_stop_audio.empty()) {
+    state.pending_audio.insert(state.pending_audio.end(), state.post_stop_audio.begin(), state.post_stop_audio.end());
+    state.total_audio_samples += static_cast<int64_t>(state.post_stop_audio.size());
+    state.post_stop_audio.clear();
+  }
+  FinalizeAudioInputs audio_inputs = prepare_finalize_inputs_from_audio(state, audio.audio, device);
+  auto outcome = run_finalize_runtime(state,
+                                      label,
+                                      finalize_loaders,
+                                      joint,
+                                      predict,
+                                      device,
+                                      tokenizer,
+                                      events,
+                                      finish,
+                                      audio_inputs,
+                                      &audio.audio.margin_stats);
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET) {
+    cold_reset_after_finalize(state, bundle, device, &audio.audio.g);
   }
   return outcome;
 }

@@ -46,6 +46,14 @@ void append_optional_number(std::ostringstream& oss, std::optional<double> value
   }
 }
 
+std::optional<double> delta_ms(std::optional<double> end, std::optional<double> start) {
+  if (!end.has_value() || !start.has_value()) return std::nullopt;
+  double value = (*end - *start) * 1000.0;
+  double rounded = std::round(value);
+  if (std::abs(value - rounded) < 1.0e-9) return rounded;
+  return value;
+}
+
 std::string quantile_summary_json(std::vector<double> values) {
   std::ostringstream oss;
   oss << std::setprecision(17);
@@ -116,14 +124,20 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
 
   for (const auto& sample : samples) {
     const auto& timing = sample.timing;
-    if (timing.vad_stop_to_sent_ms) vad_stop_to_sent.push_back(*timing.vad_stop_to_sent_ms);
-    if (timing.fork_flush_wall_ms) fork_flush_wall.push_back(*timing.fork_flush_wall_ms);
-    if (timing.vad_stop_recv_to_process_ms) {
-      vad_stop_recv_to_process.push_back(*timing.vad_stop_recv_to_process_ms);
+    if (auto v = delta_ms(timing.final_sent_ts, timing.vad_stop_ts)) {
+      vad_stop_to_sent.push_back(*v);
     }
-    if (timing.lock_wait_ms) lock_wait.push_back(*timing.lock_wait_ms);
-    if (timing.vad_stop_to_finalize_start_ms) {
-      vad_stop_to_finalize_start.push_back(*timing.vad_stop_to_finalize_start_ms);
+    if (auto v = delta_ms(timing.fork_flush_done_ts, timing.fork_flush_start_ts)) {
+      fork_flush_wall.push_back(*v);
+    }
+    if (auto v = delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts)) {
+      vad_stop_recv_to_process.push_back(*v);
+    }
+    if (timing.inference_lock_acquire_wait_ms) {
+      lock_wait.push_back(*timing.inference_lock_acquire_wait_ms);
+    }
+    if (auto v = delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts)) {
+      vad_stop_to_finalize_start.push_back(*v);
     }
     active_sessions.push_back(static_cast<double>(timing.active_sessions_at_emit));
   }
