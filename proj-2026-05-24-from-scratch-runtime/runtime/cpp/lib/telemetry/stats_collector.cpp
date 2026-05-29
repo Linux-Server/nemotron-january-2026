@@ -1,15 +1,15 @@
 #include "stats_collector.h"
 
+#include "lib/admission/density_admission.h"
+
 #include <algorithm>
 #include <cerrno>
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -33,11 +33,6 @@ bool read_env_enabled(const char* name, bool fallback) {
   return std::string(raw) != "0";
 }
 
-double unix_now_seconds() {
-  using namespace std::chrono;
-  return duration<double>(system_clock::now().time_since_epoch()).count();
-}
-
 void append_optional_number(std::ostringstream& oss, std::optional<double> value) {
   if (value.has_value()) {
     oss << *value;
@@ -48,7 +43,7 @@ void append_optional_number(std::ostringstream& oss, std::optional<double> value
 
 std::optional<double> delta_ms(std::optional<double> end, std::optional<double> start) {
   if (!end.has_value() || !start.has_value()) return std::nullopt;
-  double value = (*end - *start) * 1000.0;
+  double value = std::max(0.0, (*end - *start) * 1000.0);
   double rounded = std::round(value);
   if (std::abs(value - rounded) < 1.0e-9) return rounded;
   return value;
@@ -77,6 +72,40 @@ std::string quantile_summary_json(std::vector<double> values) {
   return oss.str();
 }
 
+void append_admission_json(std::ostringstream& oss, const DensityAdmission* admission) {
+  uint64_t attempted = 0;
+  uint64_t admitted = 0;
+  uint64_t rejected = 0;
+  uint64_t max_backlog = 0;
+  uint64_t queued_events = 0;
+  uint64_t ready_count = 0;
+  uint64_t backlog_count = 0;
+
+  if (admission != nullptr) {
+    AdmissionTelemetry telemetry = admission->telemetry_snapshot();
+    attempted = telemetry.offered;
+    admitted = telemetry.admitted;
+    rejected = telemetry.shed_close_count;
+    max_backlog = telemetry.backlog_peak;
+    queued_events = telemetry.backlog_count;
+    backlog_count = telemetry.active_count + telemetry.backlog_count;
+  }
+
+  oss << "{\"enabled\":" << (admission != nullptr ? "true" : "false")
+      << ",\"attempted\":" << attempted
+      << ",\"admitted\":" << admitted
+      << ",\"rejected\":" << rejected
+      << ",\"max_backlog\":" << max_backlog
+      << ",\"max_ready_age_ms\":0"
+      << ",\"signal\":{"
+      << "\"queued_events\":" << queued_events
+      << ",\"ready_count\":" << ready_count
+      << ",\"backlog_count\":" << backlog_count
+      << ",\"oldest_ready_age_ms\":0"
+      << ",\"oldest_ready_session_id\":null"
+      << "}}";
+}
+
 }  // namespace
 
 StatsCollector::StatsCollector(size_t window_size, bool enabled)
@@ -88,20 +117,61 @@ StatsCollector::StatsCollector(size_t window_size, bool enabled)
   if (!enabled) enabled_ = false;
 }
 
-void StatsCollector::record(SessionTiming timing) {
+void StatsCollector::record(SessionTiming timing, bool emitted) {
   if (!enabled_) return;
+
+  const bool complete = !timing.was_suppressed &&
+                        timing.vad_stop_ts.has_value() &&
+                        timing.final_sent_ts.has_value();
+
   std::lock_guard<std::mutex> lock(mutex_);
-  samples_.push_back({unix_now_seconds(), std::move(timing)});
+  if (!complete) {
+    ++lifetime_suppressed_;
+    return;
+  }
+
+  Sample sample;
+  sample.ts_unix = *timing.final_sent_ts;
+  sample.vad_stop_to_sent_ms = delta_ms(timing.final_sent_ts, timing.vad_stop_ts);
+  sample.fork_flush_wall_ms = delta_ms(timing.fork_flush_done_ts, timing.fork_flush_start_ts);
+  sample.vad_stop_recv_to_process_ms = delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts);
+  sample.lock_wait_ms = timing.inference_lock_acquire_wait_ms;
+  sample.vad_stop_to_finalize_start_ms = delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts);
+  sample.active_sessions_at_emit = timing.active_sessions_at_emit;
+  sample.emitted = emitted;
+
+  samples_.push_back(sample);
   while (samples_.size() > window_size_) samples_.pop_front();
-  ++lifetime_records_;
+  if (emitted) {
+    ++lifetime_emitted_;
+  } else {
+    ++lifetime_suppressed_;
+  }
+}
+
+void StatsCollector::set_admission(const DensityAdmission* admission) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  admission_ = admission;
+}
+
+bool StatsCollector::enabled() const {
+  return enabled_;
+}
+
+size_t StatsCollector::window_size() const {
+  return window_size_;
 }
 
 std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
   std::vector<Sample> samples;
-  uint64_t lifetime_records = 0;
+  uint64_t lifetime_emitted = 0;
+  uint64_t lifetime_suppressed = 0;
+  const DensityAdmission* admission = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    lifetime_records = lifetime_records_;
+    lifetime_emitted = lifetime_emitted_;
+    lifetime_suppressed = lifetime_suppressed_;
+    admission = admission_;
     size_t start = 0;
     if (last_n.has_value() && *last_n > 0 && *last_n < samples_.size()) {
       start = samples_.size() - *last_n;
@@ -123,23 +193,16 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
   active_sessions.reserve(samples.size());
 
   for (const auto& sample : samples) {
-    const auto& timing = sample.timing;
-    if (auto v = delta_ms(timing.final_sent_ts, timing.vad_stop_ts)) {
-      vad_stop_to_sent.push_back(*v);
+    if (sample.vad_stop_to_sent_ms) vad_stop_to_sent.push_back(*sample.vad_stop_to_sent_ms);
+    if (sample.fork_flush_wall_ms) fork_flush_wall.push_back(*sample.fork_flush_wall_ms);
+    if (sample.vad_stop_recv_to_process_ms) {
+      vad_stop_recv_to_process.push_back(*sample.vad_stop_recv_to_process_ms);
     }
-    if (auto v = delta_ms(timing.fork_flush_done_ts, timing.fork_flush_start_ts)) {
-      fork_flush_wall.push_back(*v);
+    if (sample.lock_wait_ms) lock_wait.push_back(*sample.lock_wait_ms);
+    if (sample.vad_stop_to_finalize_start_ms) {
+      vad_stop_to_finalize_start.push_back(*sample.vad_stop_to_finalize_start_ms);
     }
-    if (auto v = delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts)) {
-      vad_stop_recv_to_process.push_back(*v);
-    }
-    if (timing.inference_lock_acquire_wait_ms) {
-      lock_wait.push_back(*timing.inference_lock_acquire_wait_ms);
-    }
-    if (auto v = delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts)) {
-      vad_stop_to_finalize_start.push_back(*v);
-    }
-    active_sessions.push_back(static_cast<double>(timing.active_sessions_at_emit));
+    active_sessions.push_back(static_cast<double>(sample.active_sessions_at_emit));
   }
 
   std::optional<double> since;
@@ -148,9 +211,14 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
     since = samples.front().ts_unix;
     until = samples.back().ts_unix;
   }
+  const uint64_t emitted_in_window =
+      static_cast<uint64_t>(std::count_if(samples.begin(), samples.end(), [](const Sample& sample) {
+        return sample.emitted;
+      }));
+  const uint64_t suppressed_in_window = static_cast<uint64_t>(samples.size()) - emitted_in_window;
 
   std::ostringstream oss;
-  oss << std::boolalpha << std::setprecision(17);
+  oss << std::setprecision(17);
   oss << "{\"enabled\":" << (enabled_ ? "true" : "false")
       << ",\"window_size\":" << window_size_
       << ",\"samples\":" << samples.size()
@@ -158,10 +226,10 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
   append_optional_number(oss, since);
   oss << ",\"until_unix\":";
   append_optional_number(oss, until);
-  oss << ",\"emitted_in_window\":" << samples.size()
-      << ",\"suppressed_in_window\":0"
-      << ",\"lifetime_emitted\":" << lifetime_records
-      << ",\"lifetime_suppressed\":0"
+  oss << ",\"emitted_in_window\":" << emitted_in_window
+      << ",\"suppressed_in_window\":" << suppressed_in_window
+      << ",\"lifetime_emitted\":" << lifetime_emitted
+      << ",\"lifetime_suppressed\":" << lifetime_suppressed
       << ",\"metrics\":{"
       << "\"vad_stop_to_sent_ms\":" << quantile_summary_json(std::move(vad_stop_to_sent))
       << ",\"fork_flush_wall_ms\":" << quantile_summary_json(std::move(fork_flush_wall))
@@ -169,6 +237,8 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
       << ",\"lock_wait_ms\":" << quantile_summary_json(std::move(lock_wait))
       << ",\"vad_stop_to_finalize_start_ms\":" << quantile_summary_json(std::move(vad_stop_to_finalize_start))
       << "},\"active_sessions_at_emit\":" << quantile_summary_json(std::move(active_sessions))
-      << "}";
+      << ",\"admission\":";
+  append_admission_json(oss, admission);
+  oss << "}";
   return oss.str();
 }

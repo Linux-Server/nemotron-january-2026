@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -2063,6 +2064,7 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     outcome.fork_ok = true;
     return outcome;
   }
+  bool emitted_to_client = !delta_text.empty();
   if (delta_text.empty()) {
     emit_event(events,
                EVENT_SUPPRESSED,
@@ -2116,7 +2118,8 @@ static FinalizeOutcome run_finalize_density(SessionState& parent,
     timing.inference_lock_acquire_wait_ms = std::max(0.0, runner_host_ms - gpu_ms);
     timing.finalize_seq = finalize_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     timing.active_sessions_at_emit = 0;
-    stats_collector->record(timing);
+    timing.was_suppressed = !emitted_to_client;
+    stats_collector->record(timing, emitted_to_client);
   }
   return outcome;
 }
@@ -6164,68 +6167,293 @@ static bool run_runtime_smoke(const DensityArgs& args, torch::Device device) {
   return ok;
 }
 
-static bool json_contains(const std::string& json, const std::string& needle) {
-  return json.find(needle) != std::string::npos;
+struct StatsSmokeSample {
+  std::optional<double> vad_stop_to_sent_ms;
+  std::optional<double> fork_flush_wall_ms;
+  std::optional<double> vad_stop_recv_to_process_ms;
+  std::optional<double> lock_wait_ms;
+  std::optional<double> vad_stop_to_finalize_start_ms;
+  double active_sessions_at_emit = 0.0;
+  bool emitted = false;
+};
+
+static std::optional<double> smoke_delta_ms(std::optional<double> end, std::optional<double> start) {
+  if (!end.has_value() || !start.has_value()) return std::nullopt;
+  double value = std::max(0.0, (*end - *start) * 1000.0);
+  double rounded = std::round(value);
+  if (std::abs(value - rounded) < 1.0e-9) return rounded;
+  return value;
+}
+
+static std::vector<double> collect_stats_smoke_values(
+    const std::vector<StatsSmokeSample>& samples,
+    const std::function<std::optional<double>(const StatsSmokeSample&)>& pick) {
+  std::vector<double> values;
+  for (const auto& sample : samples) {
+    std::optional<double> value = pick(sample);
+    if (value.has_value()) values.push_back(*value);
+  }
+  return values;
+}
+
+static std::vector<double> collect_stats_smoke_active(
+    const std::vector<StatsSmokeSample>& samples) {
+  std::vector<double> values;
+  values.reserve(samples.size());
+  for (const auto& sample : samples) values.push_back(sample.active_sessions_at_emit);
+  return values;
+}
+
+static bool json_number_eq(const nlohmann::json& value, double expected) {
+  return value.is_number() && std::abs(value.get<double>() - expected) < 1.0e-9;
+}
+
+static bool stats_summary_matches(const nlohmann::json& summary, std::vector<double> values) {
+  if (!summary.is_object()) return false;
+  if (values.empty()) {
+    return summary.value("count", -1) == 0 &&
+           summary.contains("p50") && summary["p50"].is_null() &&
+           summary.contains("p90") && summary["p90"].is_null() &&
+           summary.contains("p95") && summary["p95"].is_null() &&
+           summary.contains("p99") && summary["p99"].is_null() &&
+           summary.contains("max") && summary["max"].is_null();
+  }
+
+  std::sort(values.begin(), values.end());
+  const size_t n = values.size();
+  auto percentile = [&](double p) {
+    size_t idx = static_cast<size_t>(std::llround(p * static_cast<double>(n - 1)));
+    if (idx >= n) idx = n - 1;
+    return values[idx];
+  };
+  return summary.value("count", -1) == static_cast<int>(n) &&
+         json_number_eq(summary.at("p50"), percentile(0.50)) &&
+         json_number_eq(summary.at("p90"), percentile(0.90)) &&
+         json_number_eq(summary.at("p95"), percentile(0.95)) &&
+         json_number_eq(summary.at("p99"), percentile(0.99)) &&
+         json_number_eq(summary.at("max"), values.back());
+}
+
+static StatsSmokeSample expected_sample_from_timing(const SessionTiming& timing, bool emitted) {
+  StatsSmokeSample sample;
+  sample.vad_stop_to_sent_ms = smoke_delta_ms(timing.final_sent_ts, timing.vad_stop_ts);
+  sample.fork_flush_wall_ms = smoke_delta_ms(timing.fork_flush_done_ts, timing.fork_flush_start_ts);
+  sample.vad_stop_recv_to_process_ms = smoke_delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts);
+  sample.lock_wait_ms = timing.inference_lock_acquire_wait_ms;
+  sample.vad_stop_to_finalize_start_ms = smoke_delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts);
+  sample.active_sessions_at_emit = static_cast<double>(timing.active_sessions_at_emit);
+  sample.emitted = emitted;
+  return sample;
+}
+
+static SessionTiming make_fixture_timing(double vad_stop,
+                                         double final_sent,
+                                         int active_sessions_at_emit) {
+  SessionTiming timing;
+  timing.vad_stop_ts = vad_stop;
+  timing.final_sent_ts = final_sent;
+  timing.fork_flush_start_ts = vad_stop + 0.001953125;
+  timing.fork_flush_done_ts = vad_stop + 0.005859375;
+  timing.vad_stop_recv_ts = vad_stop - 0.00390625;
+  timing.inference_lock_acquire_wait_ms = 0.5;
+  timing.active_sessions_at_emit = active_sessions_at_emit;
+  return timing;
 }
 
 static bool run_stats_smoke() {
   unsetenv("NEMOTRON_STATS_ENABLED");
   unsetenv("NEMOTRON_STATS_WINDOW");
 
-  StatsCollector collector(16, true);
+  DensityAdmission admission(2, 3);
+  (void)admission.try_admit("stats-active-0");
+  (void)admission.try_admit("stats-active-1");
+  (void)admission.try_admit("stats-backlog-0");
+  (void)admission.try_admit("stats-backlog-1");
+  (void)admission.try_admit("stats-backlog-2");
+  (void)admission.try_admit("stats-shed-0");
+
+  StatsCollector collector(64, true);
+  collector.set_admission(&admission);
+  std::vector<StatsSmokeSample> expected_samples;
+  expected_samples.reserve(50);
+  uint64_t expected_lifetime_emitted = 0;
+  uint64_t expected_lifetime_suppressed = 0;
+
   for (int i = 0; i < 50; ++i) {
     SessionTiming timing;
     double base = 1000.0 + static_cast<double>(i);
     timing.vad_stop_ts = base;
-    if (i % 5 != 0) {
-      timing.final_sent_ts = base + (10.0 + static_cast<double>(i)) / 1000.0;
-    }
-    timing.fork_flush_start_ts = base + (40.0 + static_cast<double>(i)) / 1000.0;
+    timing.final_sent_ts = base + (10.0 + static_cast<double>(i)) / 1000.0;
+    timing.fork_flush_start_ts = base + (4.0 + static_cast<double>(i % 5)) / 1000.0;
     timing.fork_flush_done_ts =
-        *timing.fork_flush_start_ts + (20.0 + static_cast<double>(i)) / 1000.0;
-    timing.vad_stop_recv_ts = base - (30.0 + static_cast<double>(i % 7)) / 1000.0;
-    timing.inference_lock_acquire_wait_ms = static_cast<double>(i % 3);
+        *timing.fork_flush_start_ts + (20.0 + static_cast<double>(i % 7)) / 1000.0;
+    timing.vad_stop_recv_ts = base - (30.0 + static_cast<double>(i % 11)) / 1000.0;
+    timing.inference_lock_acquire_wait_ms = static_cast<double>(i % 6) + 0.25;
     timing.finalize_seq = static_cast<uint64_t>(i + 1);
-    timing.active_sessions_at_emit = i % 4;
-    collector.record(timing);
+    timing.active_sessions_at_emit = i % 8;
+
+    if (i % 7 == 0) {
+      timing.fork_flush_start_ts.reset();
+      timing.fork_flush_done_ts.reset();
+    }
+    if (i % 11 == 0) timing.vad_stop_recv_ts.reset();
+    if (i % 9 == 0) timing.inference_lock_acquire_wait_ms.reset();
+    if (i % 13 == 0) timing.was_suppressed = true;
+    if (i % 17 == 0) timing.final_sent_ts.reset();
+
+    bool complete = !timing.was_suppressed &&
+                    timing.vad_stop_ts.has_value() &&
+                    timing.final_sent_ts.has_value();
+    bool emitted = complete && (i % 10 != 0);
+    collector.record(timing, emitted);
+    if (!complete) {
+      ++expected_lifetime_suppressed;
+    } else {
+      expected_samples.push_back(expected_sample_from_timing(timing, emitted));
+      if (emitted) {
+        ++expected_lifetime_emitted;
+      } else {
+        ++expected_lifetime_suppressed;
+      }
+    }
   }
 
-  std::string last10 = collector.snapshot_json(10);
-  std::string full = collector.snapshot_json();
+  std::string full_json_text = collector.snapshot_json();
+  std::string last10_json_text = collector.snapshot_json(10);
+  nlohmann::json full = nlohmann::json::parse(full_json_text);
+  nlohmann::json last10 = nlohmann::json::parse(last10_json_text);
+
+  std::vector<StatsSmokeSample> last10_expected = expected_samples;
+  if (last10_expected.size() > 10) {
+    last10_expected.erase(last10_expected.begin(),
+                          last10_expected.end() - static_cast<std::ptrdiff_t>(10));
+  }
+
+  auto collect_vad = [](const StatsSmokeSample& sample) { return sample.vad_stop_to_sent_ms; };
+  auto collect_fork = [](const StatsSmokeSample& sample) { return sample.fork_flush_wall_ms; };
+  auto collect_recv = [](const StatsSmokeSample& sample) { return sample.vad_stop_recv_to_process_ms; };
+  auto collect_lock = [](const StatsSmokeSample& sample) { return sample.lock_wait_ms; };
+  auto collect_finalize_start = [](const StatsSmokeSample& sample) {
+    return sample.vad_stop_to_finalize_start_ms;
+  };
+
+  const uint64_t emitted_in_window =
+      static_cast<uint64_t>(std::count_if(expected_samples.begin(), expected_samples.end(),
+                                          [](const StatsSmokeSample& sample) { return sample.emitted; }));
+  const uint64_t suppressed_in_window =
+      static_cast<uint64_t>(expected_samples.size()) - emitted_in_window;
+
+  bool full_ok =
+      full.value("enabled", false) &&
+      full.value("window_size", 0) == 64 &&
+      full.value("samples", -1) == static_cast<int>(expected_samples.size()) &&
+      full.value("emitted_in_window", -1) == static_cast<int>(emitted_in_window) &&
+      full.value("suppressed_in_window", -1) == static_cast<int>(suppressed_in_window) &&
+      full.value("lifetime_emitted", -1) == static_cast<int>(expected_lifetime_emitted) &&
+      full.value("lifetime_suppressed", -1) == static_cast<int>(expected_lifetime_suppressed) &&
+      stats_summary_matches(full["metrics"]["vad_stop_to_sent_ms"],
+                            collect_stats_smoke_values(expected_samples, collect_vad)) &&
+      stats_summary_matches(full["metrics"]["fork_flush_wall_ms"],
+                            collect_stats_smoke_values(expected_samples, collect_fork)) &&
+      stats_summary_matches(full["metrics"]["vad_stop_recv_to_process_ms"],
+                            collect_stats_smoke_values(expected_samples, collect_recv)) &&
+      stats_summary_matches(full["metrics"]["lock_wait_ms"],
+                            collect_stats_smoke_values(expected_samples, collect_lock)) &&
+      stats_summary_matches(full["metrics"]["vad_stop_to_finalize_start_ms"],
+                            collect_stats_smoke_values(expected_samples, collect_finalize_start)) &&
+      stats_summary_matches(full["active_sessions_at_emit"],
+                            collect_stats_smoke_active(expected_samples));
+
+  bool last10_ok =
+      last10.value("samples", -1) == 10 &&
+      stats_summary_matches(last10["metrics"]["vad_stop_to_sent_ms"],
+                            collect_stats_smoke_values(last10_expected, collect_vad)) &&
+      stats_summary_matches(last10["active_sessions_at_emit"],
+                            collect_stats_smoke_active(last10_expected));
+
+  const nlohmann::json& admission_json = full["admission"];
+  bool admission_ok =
+      admission_json.value("enabled", false) &&
+      admission_json.value("attempted", -1) == 6 &&
+      admission_json.value("admitted", -1) == 5 &&
+      admission_json.value("rejected", -1) == 1 &&
+      admission_json.value("max_backlog", -1) == 3 &&
+      json_number_eq(admission_json["max_ready_age_ms"], 0.0) &&
+      admission_json["signal"].value("queued_events", -1) == 3 &&
+      admission_json["signal"].value("ready_count", -1) == 0 &&
+      admission_json["signal"].value("backlog_count", -1) == 5 &&
+      json_number_eq(admission_json["signal"]["oldest_ready_age_ms"], 0.0) &&
+      admission_json["signal"]["oldest_ready_session_id"].is_null();
+
   StatsCollector disabled(16, false);
   SessionTiming disabled_timing;
   disabled_timing.vad_stop_ts = 10.0;
   disabled_timing.final_sent_ts = 10.001;
-  disabled.record(disabled_timing);
-  std::string disabled_json = disabled.snapshot_json();
-
-  bool last10_ok =
-      json_contains(last10, "\"samples\":10") &&
-      json_contains(last10,
-                    "\"vad_stop_to_sent_ms\":{\"p50\":56,\"p90\":58,\"p95\":59,\"p99\":59,\"max\":59,\"count\":8}");
-  bool full_ok =
-      json_contains(full, "\"samples\":16") &&
-      json_contains(full,
-                    "\"vad_stop_to_sent_ms\":{\"p50\":52,\"p90\":58,\"p95\":58,\"p99\":59,\"max\":59,\"count\":13}");
+  disabled.record(disabled_timing, true);
+  nlohmann::json disabled_json = nlohmann::json::parse(disabled.snapshot_json());
   bool disabled_ok =
-      json_contains(disabled_json, "\"enabled\":false") &&
-      json_contains(disabled_json, "\"samples\":0") &&
-      json_contains(disabled_json, "\"vad_stop_to_sent_ms\":{\"p50\":null");
+      !disabled_json.value("enabled", true) &&
+      disabled_json.value("samples", -1) == 0 &&
+      disabled_json.value("lifetime_emitted", -1) == 0 &&
+      disabled_json.value("lifetime_suppressed", -1) == 0 &&
+      disabled_json["metrics"]["vad_stop_to_sent_ms"]["p50"].is_null() &&
+      !disabled_json["admission"].value("enabled", true);
+
+  StatsCollector fixture(8, true);
+  SessionTiming fixture_a = make_fixture_timing(1000.0, 1000.0078125, 1);
+  SessionTiming fixture_b = make_fixture_timing(1001.0, 1001.015625, 3);
+  fixture_b.fork_flush_start_ts.reset();
+  fixture_b.fork_flush_done_ts.reset();
+  fixture_b.inference_lock_acquire_wait_ms.reset();
+  SessionTiming fixture_c;
+  fixture_c.vad_stop_ts = 1002.0;
+  SessionTiming fixture_d = make_fixture_timing(1003.0, 1003.0234375, 5);
+  fixture_d.vad_stop_recv_ts.reset();
+  fixture.record(fixture_a, true);
+  fixture.record(fixture_b, false);
+  fixture.record(fixture_c, true);
+  fixture.record(fixture_d, true);
+  std::string fixture_json = fixture.snapshot_json();
+  const std::string expected_fixture_json =
+      "{\"enabled\":true,\"window_size\":8,\"samples\":3,\"since_unix\":1000.0078125,"
+      "\"until_unix\":1003.0234375,\"emitted_in_window\":2,\"suppressed_in_window\":1,"
+      "\"lifetime_emitted\":2,\"lifetime_suppressed\":2,\"metrics\":{"
+      "\"vad_stop_to_sent_ms\":{\"p50\":15.625,\"p90\":23.4375,\"p95\":23.4375,"
+      "\"p99\":23.4375,\"max\":23.4375,\"count\":3},"
+      "\"fork_flush_wall_ms\":{\"p50\":3.90625,\"p90\":3.90625,\"p95\":3.90625,"
+      "\"p99\":3.90625,\"max\":3.90625,\"count\":2},"
+      "\"vad_stop_recv_to_process_ms\":{\"p50\":3.90625,\"p90\":3.90625,"
+      "\"p95\":3.90625,\"p99\":3.90625,\"max\":3.90625,\"count\":2},"
+      "\"lock_wait_ms\":{\"p50\":0.5,\"p90\":0.5,\"p95\":0.5,\"p99\":0.5,"
+      "\"max\":0.5,\"count\":2},"
+      "\"vad_stop_to_finalize_start_ms\":{\"p50\":1.953125,\"p90\":1.953125,"
+      "\"p95\":1.953125,\"p99\":1.953125,\"max\":1.953125,\"count\":2}},"
+      "\"active_sessions_at_emit\":{\"p50\":3,\"p90\":5,\"p95\":5,\"p99\":5,"
+      "\"max\":5,\"count\":3},\"admission\":{\"enabled\":false,\"attempted\":0,"
+      "\"admitted\":0,\"rejected\":0,\"max_backlog\":0,\"max_ready_age_ms\":0,"
+      "\"signal\":{\"queued_events\":0,\"ready_count\":0,\"backlog_count\":0,"
+      "\"oldest_ready_age_ms\":0,\"oldest_ready_session_id\":null}}}";
+  bool fixture_ok = fixture_json == expected_fixture_json;
 
   bool ok = collector.enabled() &&
-            collector.window_size() == 16 &&
-            last10_ok &&
+            collector.window_size() == 64 &&
             full_ok &&
-            disabled_ok;
-  std::printf("STATS_SMOKE pass=%s last10=%s full_window=%s disabled=%s\n",
+            last10_ok &&
+            admission_ok &&
+            disabled_ok &&
+            fixture_ok;
+  std::printf("STATS_SMOKE pass=%s full_window=%s last10=%s admission=%s disabled=%s fixture=%s\n",
               ok ? "true" : "false",
-              last10_ok ? "PASS" : "FAIL",
               full_ok ? "PASS" : "FAIL",
-              disabled_ok ? "PASS" : "FAIL");
+              last10_ok ? "PASS" : "FAIL",
+              admission_ok ? "PASS" : "FAIL",
+              disabled_ok ? "PASS" : "FAIL",
+              fixture_ok ? "PASS" : "FAIL");
+  std::printf("STATS_SMOKE_SAMPLE_JSON %s\n", full_json_text.c_str());
   if (!ok) {
-    std::printf("STATS_SMOKE last10=%s\n", last10.c_str());
-    std::printf("STATS_SMOKE full=%s\n", full.c_str());
-    std::printf("STATS_SMOKE disabled=%s\n", disabled_json.c_str());
+    std::printf("STATS_SMOKE last10=%s\n", last10_json_text.c_str());
+    std::printf("STATS_SMOKE fixture_actual=%s\n", fixture_json.c_str());
+    std::printf("STATS_SMOKE fixture_expected=%s\n", expected_fixture_json.c_str());
   }
   return ok;
 }
