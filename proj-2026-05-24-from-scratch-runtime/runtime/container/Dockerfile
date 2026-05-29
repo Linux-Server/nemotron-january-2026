@@ -6,6 +6,7 @@ FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev cmake g++ git libsndfile1 ffmpeg \
+      libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # AOTInductor/Triton compile its cuda_utils.c with `gcc -lcuda`; the devel image ships only the stub libcuda.so.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(decode LANGUAGES CXX)   # pure C++; link prebuilt libtorch, no nvcc (glibc-2.41 workaround, as 0.1b)
+project(decode LANGUAGES C CXX) # C for vendored picohttpparser; C++ links prebuilt libtorch, no nvcc (glibc-2.41 workaround, as 0.1b)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
@@ -33,6 +33,7 @@ set(NEMOTRON_TORCH_LIBS torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
 
 add_library(nemotron_runtime STATIC
   lib/session/session.cpp
+  lib/runtime_io/picohttpparser.c
   lib/telemetry/stats_collector.cpp)
 target_include_directories(nemotron_runtime PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}

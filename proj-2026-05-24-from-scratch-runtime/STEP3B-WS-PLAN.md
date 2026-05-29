@@ -190,7 +190,7 @@ bars; Step 11 stays `[!]` until the integration passes.
   steps' contract decisions. This step is markdown-only (no code).
   Key files: `src/nemotron_speech/server.py` (read), `reviews/server-py-protocol-audit.md` (write).
 
-- [ ] **2. Dockerfile libssl-dev + vendor nlohmann::json + picohttpparser** (Opus review)
+- [x] **2. Dockerfile libssl-dev + vendor nlohmann::json + picohttpparser** (Opus review)
   v4 §X: add `libssl-dev` to `runtime/container/Dockerfile` (Option A; needed for OpenSSL SHA1 +
   base64 in WS handshake) OR (Option B) extend `lib/runtime_io/io.h` to expose a repo-local SHA1
   (using the SHA256 pattern already there). Recommend Option A (one-line Dockerfile edit; container
@@ -458,8 +458,8 @@ bars; Step 11 stays `[!]` until the integration passes.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | server.py protocol audit | done | c422e7a | PAIRED. Codex draft (527 lines) + Opus parallel pass — no disagreements. 6 explicit v5-architecture deviations flagged: /health enum (2 vs 4 values), finalize_silence_ms default 150 vs 0, no NEMOTRON_VAD_WARMUP_MS, post-handshake 1013 vs pre-handshake 503, no Python emits 1003/1008/1011, **finalize_timing wire = 9 RAW timing keys NOT 5 derived SLO metrics**. Codex log: codex-jobs/step-01-server-py-audit-bkddcxjjd.log. |
-| 2 | Dockerfile libssl-dev + vendor nlohmann::json + picohttpparser | pending | — | Opus review. Small Dockerfile + 2 vendored single-headers. |
+| 1 | server.py protocol audit | done | 54fbd24 | PAIRED. Codex draft (527 lines) + Opus parallel pass — no disagreements. 6 explicit v5-architecture deviations flagged: /health enum (2 vs 4 values), finalize_silence_ms default 150 vs 0, no NEMOTRON_VAD_WARMUP_MS, post-handshake 1013 vs pre-handshake 503, no Python emits 1003/1008/1011, **finalize_timing wire = 9 RAW timing keys NOT 5 derived SLO metrics**. Codex log: codex-jobs/step-01-server-py-audit-bkddcxjjd.log. |
+| 2 | Dockerfile libssl-dev + vendor nlohmann::json + picohttpparser | done | (pending) | Opus review. Dockerfile +1 line (libssl-dev → OpenSSL 3.0.13). lib/runtime_io/: nlohmann/json v3.11.3 (24,765 LOC, MIT) + picohttpparser h+c (803 LOC, MIT-or-Perl). CMakeLists: project LANGUAGES C CXX + picohttpparser.c in nemotron_runtime. Smoke set 5/5 PASS (b2-t1 0/0, density-sweep N=4 OFF 0/0/0, stalegen/admission/stats), N=200 gate 0/200. Codex log: codex-jobs/step-02-vendoring-b7ikzs2hi.log. |
 | 3 | CMakeLists library carve + density_main migration | pending | — | PAIRED. Major refactor; smokes MUST stay green. Discard v1 ws_server.cpp; salvage only mechanical pieces. |
 | 4 | SessionRuntime + SharedRuntime + concrete public DTOs | pending | — | Opus review. Static-global ownership transfer per v4 §II 1.5. |
 | 5 | StatsCollector Python-exact | pending | — | Opus review. Per-metric count + completion predicate per v4 §IV. |
