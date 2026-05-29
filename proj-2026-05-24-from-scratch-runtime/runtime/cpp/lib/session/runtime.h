@@ -59,6 +59,8 @@ struct SessionConfig {
   bool gil_attrib_enabled = false;
 };
 
+enum class VadState { IDLE, SPEAKING, PENDING_FINALIZE };
+
 class SessionRuntime;
 
 class SharedRuntime {
@@ -89,8 +91,14 @@ class SessionRuntime {
 
   std::vector<WireEvent> append_pcm_and_drain(const PCMFrame& frame);
 
+  // Client-side VAD control hooks. vad_stop either finalizes immediately when
+  // finalize_silence_ms is 0, or arms a per-session debounce deadline.
   void handle_vad_start();
   std::vector<WireEvent> handle_vad_stop();
+  std::vector<WireEvent> poll_timer(double now_unix_ts);
+
+  VadState vad_state() const noexcept;
+  std::optional<double> vad_deadline_ts() const noexcept;
 
   std::vector<WireEvent> reset(bool finalize);
   std::vector<WireEvent> end(bool finalize);

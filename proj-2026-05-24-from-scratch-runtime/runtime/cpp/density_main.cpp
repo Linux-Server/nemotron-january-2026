@@ -329,9 +329,9 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
       args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
       args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
-      args.mode != "ws-lib-smoke") {
+      args.mode != "vad-smoke" && args.mode != "ws-lib-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, or ws-lib-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, or ws-lib-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -6171,6 +6171,182 @@ static bool run_runtime_smoke(const DensityArgs& args, torch::Device device) {
   return ok;
 }
 
+static const char* vad_state_name(VadState state) {
+  switch (state) {
+    case VadState::IDLE: return "IDLE";
+    case VadState::SPEAKING: return "SPEAKING";
+    case VadState::PENDING_FINALIZE: return "PENDING_FINALIZE";
+  }
+  return "UNKNOWN";
+}
+
+static double vad_smoke_unix_now_seconds() {
+  using namespace std::chrono;
+  return duration<double>(system_clock::now().time_since_epoch()).count();
+}
+
+static uint64_t vad_smoke_finalize_count(const SessionRuntime& runtime) {
+  auto timing = runtime.last_timing();
+  return timing.has_value() ? timing->finalize_seq : 0;
+}
+
+static bool run_vad_smoke(const DensityArgs& args, torch::Device device) {
+  std::string bundle_path = (fs::path(args.dir) / "session_audio_bundle.ts").string();
+  SharedRuntimeConfig shared_cfg;
+  shared_cfg.bundle_path = bundle_path;
+  shared_cfg.steady_artifacts_dir = args.dir;
+  std::string stripped = (fs::path(args.dir) / "stripped_finalize_buckets").string();
+  shared_cfg.finalize_buckets_dir = directory_exists(stripped)
+                                        ? stripped
+                                        : (fs::path(args.dir) / "finalize_buckets").string();
+  shared_cfg.scheduler_enabled = false;
+  shared_cfg.device_index = device.index();
+  SharedRuntime shared(shared_cfg);
+
+  int failures = 0;
+  int total_finalize_invocations = 0;
+  auto report = [&](const char* name, bool pass, const SessionRuntime& runtime) {
+    if (!pass) ++failures;
+    std::printf("VAD_SMOKE_CASE name=%s result=%s state=%s deadline=%s finalize_seq=%llu\n",
+                name,
+                pass ? "PASS" : "FAIL",
+                vad_state_name(runtime.vad_state()),
+                runtime.vad_deadline_ts().has_value() ? "set" : "none",
+                static_cast<unsigned long long>(vad_smoke_finalize_count(runtime)));
+  };
+
+  {
+    SessionConfig cfg;
+    cfg.label = "vad_smoke.start";
+    cfg.finalize_silence_ms = 150;
+    SessionRuntime runtime(shared, cfg);
+    runtime.handle_vad_start();
+    bool pass = runtime.vad_state() == VadState::SPEAKING &&
+                !runtime.vad_deadline_ts().has_value() &&
+                vad_smoke_finalize_count(runtime) == 0;
+    report("vad_start_to_speaking", pass, runtime);
+  }
+
+  {
+    SessionConfig cfg;
+    cfg.label = "vad_smoke.default_immediate";
+    SessionRuntime runtime(shared, cfg);
+    runtime.handle_vad_start();
+    auto wire = runtime.handle_vad_stop();
+    (void)wire;
+    uint64_t count = vad_smoke_finalize_count(runtime);
+    total_finalize_invocations += static_cast<int>(count);
+    bool pass = runtime.vad_state() == VadState::IDLE &&
+                !runtime.vad_deadline_ts().has_value() &&
+                count == 1 &&
+                runtime.last_timing().has_value() &&
+                runtime.last_timing()->reason == "debounce_expired";
+    report("vad_stop_zero_immediate_default", pass, runtime);
+  }
+
+  std::optional<double> canceled_deadline;
+  {
+    SessionConfig cfg;
+    cfg.label = "vad_smoke.debounced_cancel";
+    cfg.finalize_silence_ms = 150;
+    SessionRuntime runtime(shared, cfg);
+    runtime.handle_vad_start();
+    double before = vad_smoke_unix_now_seconds();
+    auto wire = runtime.handle_vad_stop();
+    (void)wire;
+    canceled_deadline = runtime.vad_deadline_ts();
+    bool deadline_ok = canceled_deadline.has_value() &&
+                       *canceled_deadline >= before + 0.100 &&
+                       *canceled_deadline <= before + 0.250;
+    bool pending_pass = runtime.vad_state() == VadState::PENDING_FINALIZE &&
+                        deadline_ok &&
+                        vad_smoke_finalize_count(runtime) == 0;
+    report("vad_stop_150_pending_deadline", pending_pass, runtime);
+
+    runtime.handle_vad_start();
+    auto late = runtime.poll_timer(canceled_deadline.value_or(before) + 1.0);
+    bool cancel_pass = runtime.vad_state() == VadState::SPEAKING &&
+                       !runtime.vad_deadline_ts().has_value() &&
+                       late.empty() &&
+                       vad_smoke_finalize_count(runtime) == 0;
+    report("vad_start_cancels_pending", cancel_pass, runtime);
+  }
+
+  {
+    SessionConfig cfg;
+    cfg.label = "vad_smoke.timer";
+    cfg.finalize_silence_ms = 150;
+    SessionRuntime runtime(shared, cfg);
+    runtime.handle_vad_start();
+    runtime.handle_vad_stop();
+    double deadline = runtime.vad_deadline_ts().value_or(vad_smoke_unix_now_seconds());
+    auto early = runtime.poll_timer(deadline - 0.001);
+    bool early_pass = early.empty() &&
+                      runtime.vad_state() == VadState::PENDING_FINALIZE &&
+                      vad_smoke_finalize_count(runtime) == 0;
+    auto final_wire = runtime.poll_timer(deadline + 0.001);
+    (void)final_wire;
+    uint64_t count = vad_smoke_finalize_count(runtime);
+    total_finalize_invocations += static_cast<int>(count);
+    auto extra = runtime.poll_timer(deadline + 1.0);
+    bool timer_pass = early_pass &&
+                      runtime.vad_state() == VadState::IDLE &&
+                      !runtime.vad_deadline_ts().has_value() &&
+                      count == 1 &&
+                      extra.empty() &&
+                      vad_smoke_finalize_count(runtime) == 1;
+    report("timer_fires_no_cancel", timer_pass, runtime);
+  }
+
+  {
+    SessionConfig cfg;
+    cfg.label = "vad_smoke.reset_bypass";
+    cfg.finalize_silence_ms = 150;
+    SessionRuntime reset_runtime(shared, cfg);
+    reset_runtime.handle_vad_start();
+    reset_runtime.handle_vad_stop();
+    double reset_deadline = reset_runtime.vad_deadline_ts().value_or(vad_smoke_unix_now_seconds());
+    auto reset_wire = reset_runtime.reset(true);
+    (void)reset_wire;
+    uint64_t reset_count = vad_smoke_finalize_count(reset_runtime);
+    auto reset_late = reset_runtime.poll_timer(reset_deadline + 1.0);
+    bool reset_pass = reset_runtime.vad_state() == VadState::IDLE &&
+                      !reset_runtime.vad_deadline_ts().has_value() &&
+                      reset_count == 1 &&
+                      reset_late.empty() &&
+                      vad_smoke_finalize_count(reset_runtime) == 1 &&
+                      reset_runtime.last_timing().has_value() &&
+                      reset_runtime.last_timing()->reason == "reset";
+
+    cfg.label = "vad_smoke.end_bypass";
+    SessionRuntime end_runtime(shared, cfg);
+    end_runtime.handle_vad_start();
+    end_runtime.handle_vad_stop();
+    double end_deadline = end_runtime.vad_deadline_ts().value_or(vad_smoke_unix_now_seconds());
+    auto end_wire = end_runtime.end(true);
+    (void)end_wire;
+    uint64_t end_count = vad_smoke_finalize_count(end_runtime);
+    auto end_late = end_runtime.poll_timer(end_deadline + 1.0);
+    bool end_pass = end_runtime.vad_state() == VadState::IDLE &&
+                    !end_runtime.vad_deadline_ts().has_value() &&
+                    end_count == 1 &&
+                    end_late.empty() &&
+                    vad_smoke_finalize_count(end_runtime) == 1 &&
+                    end_runtime.last_timing().has_value() &&
+                    end_runtime.last_timing()->reason == "end";
+    total_finalize_invocations += static_cast<int>(reset_count + end_count);
+    report("reset_true_bypasses_debounce", reset_pass, reset_runtime);
+    report("end_true_bypasses_debounce", end_pass, end_runtime);
+  }
+
+  bool ok = failures == 0 && total_finalize_invocations == 4;
+  std::printf("VAD_SMOKE %s failures=%d finalize_invocations=%d expected_finalize_invocations=4\n",
+              ok ? "PASS" : "FAIL",
+              failures,
+              total_finalize_invocations);
+  return ok;
+}
+
 struct StatsSmokeSample {
   std::optional<double> vad_stop_to_sent_ms;
   std::optional<double> fork_flush_wall_ms;
@@ -6644,6 +6820,10 @@ int main(int argc, char** argv) {
     std::string stamp = timestamp_utc();
     if (args.mode == "runtime-smoke") {
       bool ok = run_runtime_smoke(args, device);
+      return ok ? 0 : 1;
+    }
+    if (args.mode == "vad-smoke") {
+      bool ok = run_vad_smoke(args, device);
       return ok ? 0 : 1;
     }
     auto shared_bundle = load_shared_session_bundle(args.dir);

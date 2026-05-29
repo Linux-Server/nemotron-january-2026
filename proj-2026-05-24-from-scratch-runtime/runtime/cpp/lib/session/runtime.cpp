@@ -21,6 +21,13 @@ double unix_now_seconds() {
   return duration<double>(system_clock::now().time_since_epoch()).count();
 }
 
+int validate_finalize_silence_ms(int value) {
+  if (value < 0 || value >= 10000) {
+    throw std::runtime_error("finalize_silence_ms must be in [0,10000)");
+  }
+  return value;
+}
+
 std::string parent_dir(const std::string& path) {
   fs::path p(path);
   if (p.has_parent_path()) return p.parent_path().string();
@@ -259,6 +266,7 @@ struct SessionRuntime::Impl {
   Impl(const SharedRuntime& shared_in, SessionConfig config)
       : shared(shared_in),
         cfg(std::move(config)),
+        finalize_silence_ms(validate_finalize_silence_ms(cfg.finalize_silence_ms)),
         audio(nullptr, nullptr) {
     auto& s = *shared.impl_;
     torch::NoGradGuard ng;
@@ -290,6 +298,8 @@ struct SessionRuntime::Impl {
   }
 
   void vad_start() {
+    vad_state = VadState::SPEAKING;
+    vad_deadline_ts.reset();
     pending_timing.reset();
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
@@ -317,8 +327,18 @@ struct SessionRuntime::Impl {
     timing.gil_attrib_enabled = cfg.gil_attrib_enabled || shared.impl_->cfg.gil_attrib_enabled;
     pending_timing = timing;
     vad_stop(state);
-    if (cfg.finalize_silence_ms == 0) return finalize_with("debounce_expired", FinalizeFinish::SPECULATIVE_KEEP);
+    if (finalize_silence_ms == 0) {
+      return finalize_and_idle("debounce_expired", FinalizeFinish::SPECULATIVE_KEEP);
+    }
+    vad_state = VadState::PENDING_FINALIZE;
+    vad_deadline_ts = now + static_cast<double>(finalize_silence_ms) / 1000.0;
     return {};
+  }
+
+  std::vector<WireEvent> poll_timer(double now_unix_ts) {
+    if (vad_state != VadState::PENDING_FINALIZE || !vad_deadline_ts.has_value()) return {};
+    if (now_unix_ts < *vad_deadline_ts) return {};
+    return finalize_and_idle("debounce_expired", FinalizeFinish::SPECULATIVE_KEEP);
   }
 
   std::vector<WireEvent> soft_final(bool finalize_flag) const {
@@ -377,10 +397,24 @@ struct SessionRuntime::Impl {
     return project_events(events, timing);
   }
 
+  std::vector<WireEvent> finalize_and_idle(const std::string& reason, FinalizeFinish finish) {
+    auto events = finalize_with(reason, finish);
+    clear_vad_state();
+    return events;
+  }
+
+  void clear_vad_state() {
+    vad_state = VadState::IDLE;
+    vad_deadline_ts.reset();
+  }
+
   const SharedRuntime& shared;
   SessionConfig cfg;
+  int finalize_silence_ms = 0;
   SessionState state;
   RuntimeAudioFrontendPtr audio;
+  VadState vad_state = VadState::IDLE;
+  std::optional<double> vad_deadline_ts;
   std::optional<SessionTiming> pending_timing;
   std::optional<SessionTiming> last_timing_value;
   uint64_t finalize_seq = 0;
@@ -405,18 +439,36 @@ std::vector<WireEvent> SessionRuntime::handle_vad_stop() {
   return impl_->vad_stop_and_maybe_finalize();
 }
 
+std::vector<WireEvent> SessionRuntime::poll_timer(double now_unix_ts) {
+  return impl_->poll_timer(now_unix_ts);
+}
+
+VadState SessionRuntime::vad_state() const noexcept {
+  return impl_->vad_state;
+}
+
+std::optional<double> SessionRuntime::vad_deadline_ts() const noexcept {
+  return impl_->vad_deadline_ts;
+}
+
 std::vector<WireEvent> SessionRuntime::reset(bool finalize) {
-  if (!finalize) return impl_->soft_final(false);
-  return impl_->finalize_with("reset", FinalizeFinish::SPECULATIVE_KEEP);
+  if (!finalize) {
+    impl_->clear_vad_state();
+    return impl_->soft_final(false);
+  }
+  return impl_->finalize_and_idle("reset", FinalizeFinish::SPECULATIVE_KEEP);
 }
 
 std::vector<WireEvent> SessionRuntime::end(bool finalize) {
-  if (!finalize) return impl_->soft_final(false);
-  return impl_->finalize_with("end", FinalizeFinish::TRUE_BOUNDARY_COLD_RESET);
+  if (!finalize) {
+    impl_->clear_vad_state();
+    return impl_->soft_final(false);
+  }
+  return impl_->finalize_and_idle("end", FinalizeFinish::TRUE_BOUNDARY_COLD_RESET);
 }
 
 std::vector<WireEvent> SessionRuntime::finalize_now() {
-  return impl_->finalize_with("debounce_expired", FinalizeFinish::SPECULATIVE_KEEP);
+  return impl_->finalize_and_idle("debounce_expired", FinalizeFinish::SPECULATIVE_KEEP);
 }
 
 uint64_t SessionRuntime::generation() const noexcept {
