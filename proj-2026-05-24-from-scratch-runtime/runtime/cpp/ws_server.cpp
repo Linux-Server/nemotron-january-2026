@@ -11,7 +11,9 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -39,7 +41,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -73,6 +77,15 @@ void reset_stale_gen_drops_for_test() {
 }  // namespace ws_server
 
 namespace {
+std::atomic<bool> g_sigterm_requested{false};
+
+void handle_sigterm(int) {
+  g_sigterm_requested.store(true, std::memory_order_release);
+}
+
+void install_sigterm_handler() {
+  ::signal(SIGTERM, handle_sigterm);
+}
 
 constexpr int kAdminWorkers = 2;
 constexpr size_t kAdminQueueDepth = 16;
@@ -83,6 +96,7 @@ constexpr int kDefaultBatchLoneTimeoutMs = 0;
 constexpr int kDefaultBatchQueueCapacity = 16;
 constexpr size_t kDefaultStatsWindow = 2048;
 constexpr size_t kDefaultWsMaxMessageSize = ws_framing::kMaxMessageSize;
+constexpr int kDefaultWsSendTimeoutSec = 5;
 constexpr int kDefaultWsPingIntervalSec = 60;
 constexpr int kDefaultWsPongTimeoutSec = 30;
 constexpr int kDefaultShutdownDrainSec = 30;
@@ -145,7 +159,17 @@ std::string build_json_response(int status, const std::string& body) {
   return oss.str();
 }
 
-bool send_all(int fd, const void* data, size_t size) {
+enum class SendResult {
+  OK,
+  TIMEOUT,
+  ERROR,
+};
+
+bool is_send_timeout_errno(int value) {
+  return value == EAGAIN || value == EWOULDBLOCK;
+}
+
+SendResult send_all_result(int fd, const void* data, size_t size) {
   const char* p = static_cast<const char*>(data);
   size_t sent = 0;
   while (sent < size) {
@@ -155,9 +179,14 @@ bool send_all(int fd, const void* data, size_t size) {
       continue;
     }
     if (n < 0 && errno == EINTR) continue;
-    return false;
+    if (n < 0 && is_send_timeout_errno(errno)) return SendResult::TIMEOUT;
+    return SendResult::ERROR;
   }
-  return true;
+  return SendResult::OK;
+}
+
+bool send_all(int fd, const void* data, size_t size) {
+  return send_all_result(fd, data, size) == SendResult::OK;
 }
 
 bool send_all(int fd, const std::string& data) {
@@ -166,6 +195,13 @@ bool send_all(int fd, const std::string& data) {
 
 bool send_all(int fd, const std::vector<uint8_t>& data) {
   return send_all(fd, data.data(), data.size());
+}
+
+bool configure_send_timeout(int fd, int timeout_sec) {
+  timeval timeout{};
+  timeout.tv_sec = timeout_sec;
+  timeout.tv_usec = 0;
+  return ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0;
 }
 
 void close_fd(int* fd) {
@@ -554,6 +590,7 @@ struct ServerConfig {
   bool stats_enabled = true;
   size_t stats_window = kDefaultStatsWindow;
   size_t ws_max_message_size = kDefaultWsMaxMessageSize;
+  int ws_send_timeout_sec = kDefaultWsSendTimeoutSec;
   int ws_ping_interval_sec = kDefaultWsPingIntervalSec;
   int ws_pong_timeout_sec = kDefaultWsPongTimeoutSec;
   int shutdown_drain_sec = kDefaultShutdownDrainSec;
@@ -578,6 +615,7 @@ void populate_env_config(ServerConfig* cfg) {
   cfg->stats_window = read_env_size_t("NEMOTRON_STATS_WINDOW", kDefaultStatsWindow);
   cfg->ws_max_message_size =
       read_env_size_t("NEMOTRON_WS_MAX_MESSAGE_SIZE", kDefaultWsMaxMessageSize);
+  cfg->ws_send_timeout_sec = read_env_int("NEMOTRON_WS_SEND_TIMEOUT_SEC", kDefaultWsSendTimeoutSec);
   cfg->ws_ping_interval_sec = read_env_int("NEMOTRON_WS_PING_INTERVAL_SEC", kDefaultWsPingIntervalSec);
   cfg->ws_pong_timeout_sec = read_env_int("NEMOTRON_WS_PONG_TIMEOUT_SEC", kDefaultWsPongTimeoutSec);
   cfg->shutdown_drain_sec = read_env_int("NEMOTRON_SHUTDOWN_DRAIN_SEC", kDefaultShutdownDrainSec);
@@ -626,6 +664,10 @@ void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
   if (cfg->steady_num_runners <= 0 || cfg->finalize_num_runners <= 0) {
     throw std::runtime_error("runner counts must be positive");
   }
+  if (cfg->ws_send_timeout_sec <= 0 || cfg->ws_ping_interval_sec <= 0 ||
+      cfg->ws_pong_timeout_sec <= 0 || cfg->shutdown_drain_sec < 0) {
+    throw std::runtime_error("WS timeout env vars must be positive; shutdown drain must be non-negative");
+  }
 }
 
 std::string config_table(const ServerConfig& cfg) {
@@ -641,6 +683,7 @@ std::string config_table(const ServerConfig& cfg) {
       << "  window_size = " << cfg.stats_window << "\n"
       << "\n[ws]\n"
       << "  max_message_size = " << cfg.ws_max_message_size << "\n"
+      << "  send_timeout_sec = " << cfg.ws_send_timeout_sec << "\n"
       << "  ping_interval_sec = " << cfg.ws_ping_interval_sec << "\n"
       << "  pong_timeout_sec = " << cfg.ws_pong_timeout_sec << "\n"
       << "\n[shutdown]\n"
@@ -765,6 +808,17 @@ std::optional<size_t> parse_last_query(const ws_routes::Route& route, std::strin
   return static_cast<size_t>(parsed);
 }
 
+struct ActiveWsSession {
+  ActiveWsSession(std::string id, int socket_fd) : stream_id(std::move(id)), fd(socket_fd) {}
+
+  std::string stream_id;
+  int fd = -1;
+  std::atomic<bool> drain_requested{false};
+  std::atomic<bool> forced{false};
+  std::atomic<bool> closed{false};
+  std::mutex send_mutex;
+};
+
 struct ServerState {
   explicit ServerState(ServerConfig c) : cfg(std::move(c)) {}
 
@@ -776,7 +830,57 @@ struct ServerState {
   std::unique_ptr<BatchedSteadyScheduler> scheduler;
   std::atomic<bool> model_loaded{false};
   std::atomic<uint64_t> next_stream_id{1};
+  std::atomic<bool> shutting_down{false};
+  std::mutex sessions_mutex;
+  std::unordered_map<std::string, std::shared_ptr<ActiveWsSession>> sessions;
 };
+
+bool is_shutting_down(const ServerState& state) {
+  return state.shutting_down.load(std::memory_order_acquire) ||
+         (state.admission && state.admission->is_shutting_down());
+}
+
+std::shared_ptr<ActiveWsSession> register_session(const std::shared_ptr<ServerState>& state,
+                                                  const std::string& stream_id,
+                                                  int fd) {
+  auto session = std::make_shared<ActiveWsSession>(stream_id, fd);
+  if (is_shutting_down(*state)) {
+    session->drain_requested.store(true, std::memory_order_release);
+  }
+  std::lock_guard<std::mutex> lock(state->sessions_mutex);
+  state->sessions[stream_id] = session;
+  return session;
+}
+
+void unregister_session(const std::shared_ptr<ServerState>& state,
+                        const std::shared_ptr<ActiveWsSession>& session) {
+  if (!session) return;
+  session->closed.store(true, std::memory_order_release);
+  std::lock_guard<std::mutex> lock(state->sessions_mutex);
+  auto it = state->sessions.find(session->stream_id);
+  if (it != state->sessions.end() && it->second == session) {
+    state->sessions.erase(it);
+  }
+}
+
+std::vector<std::shared_ptr<ActiveWsSession>> session_snapshot(const std::shared_ptr<ServerState>& state) {
+  std::vector<std::shared_ptr<ActiveWsSession>> out;
+  std::lock_guard<std::mutex> lock(state->sessions_mutex);
+  out.reserve(state->sessions.size());
+  for (const auto& kv : state->sessions) out.push_back(kv.second);
+  return out;
+}
+
+size_t active_session_count(const std::shared_ptr<ServerState>& state) {
+  std::lock_guard<std::mutex> lock(state->sessions_mutex);
+  return state->sessions.size();
+}
+
+void request_session_drains(const std::shared_ptr<ServerState>& state) {
+  for (const auto& session : session_snapshot(state)) {
+    session->drain_requested.store(true, std::memory_order_release);
+  }
+}
 
 std::string health_json(const ServerState& state) {
   bool loaded = state.model_loaded.load(std::memory_order_acquire);
@@ -868,6 +972,7 @@ class AdminHandlerPool {
       } else switch (job.route.kind) {
         case ws_routes::RouteKind::HEALTH:
           body = health_json(*state_);
+          if (is_shutting_down(*state_)) status = 503;
           break;
         case ws_routes::RouteKind::STATS: {
           std::string error_body;
@@ -945,8 +1050,82 @@ std::string error_event_json(const std::string& message) {
   return wire_event_json(event);
 }
 
-bool send_ws_text(int fd, const std::string& json) {
-  return send_all(fd, ws_framing::write_frame(ws_framing::Opcode::TEXT, json));
+bool send_ws_frame_checked(int fd,
+                           const std::vector<uint8_t>& frame,
+                           const std::shared_ptr<ActiveWsSession>& active,
+                           bool* protocol_close_sent) {
+  std::unique_lock<std::mutex> lock;
+  if (active) lock = std::unique_lock<std::mutex>(active->send_mutex);
+  SendResult result = send_all_result(fd, frame.data(), frame.size());
+  if (result == SendResult::OK) return true;
+  if (result == SendResult::TIMEOUT) {
+    if (protocol_close_sent != nullptr) *protocol_close_sent = true;
+    std::vector<uint8_t> close = ws_framing::write_close_frame(1011, "send_timeout");
+    (void)send_all_result(fd, close.data(), close.size());
+  }
+  return false;
+}
+
+bool send_ws_text(int fd,
+                  const std::string& json,
+                  const std::shared_ptr<ActiveWsSession>& active,
+                  bool* protocol_close_sent) {
+  return send_ws_frame_checked(fd,
+                               ws_framing::write_frame(ws_framing::Opcode::TEXT, json),
+                               active,
+                               protocol_close_sent);
+}
+
+bool send_ws_close(int fd,
+                   uint16_t code,
+                   std::string_view reason,
+                   const std::shared_ptr<ActiveWsSession>& active,
+                   bool* protocol_close_sent) {
+  if (protocol_close_sent != nullptr) *protocol_close_sent = true;
+  return send_ws_frame_checked(fd, ws_framing::write_close_frame(code, reason), active, protocol_close_sent);
+}
+
+bool send_ws_control(int fd,
+                     ws_framing::Opcode opcode,
+                     std::string_view payload,
+                     const std::shared_ptr<ActiveWsSession>& active,
+                     bool* protocol_close_sent) {
+  return send_ws_frame_checked(fd, ws_framing::write_frame(opcode, payload), active, protocol_close_sent);
+}
+
+void best_effort_force_close(const std::shared_ptr<ActiveWsSession>& session) {
+  if (!session || session->closed.load(std::memory_order_acquire)) return;
+  session->forced.store(true, std::memory_order_release);
+  std::vector<uint8_t> close = ws_framing::write_close_frame(1001, "going_away");
+  std::unique_lock<std::mutex> lock(session->send_mutex, std::try_to_lock);
+  if (lock.owns_lock()) {
+    (void)::send(session->fd, close.data(), close.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+  }
+  (void)::shutdown(session->fd, SHUT_RDWR);
+}
+
+void drain_peer_after_clean_close(int fd, int timeout_ms) {
+  (void)::shutdown(fd, SHUT_WR);
+  auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
+  char discard[4096];
+  for (;;) {
+    auto now = Clock::now();
+    if (now >= deadline) return;
+    pollfd pfd{};
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    int wait_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+    if (wait_ms < 0) wait_ms = 0;
+    int pr = ::poll(&pfd, 1, wait_ms);
+    if (pr <= 0) return;
+    if (pfd.revents & (POLLERR | POLLNVAL)) return;
+    if (pfd.revents & (POLLIN | POLLHUP)) {
+      ssize_t n = ::recv(fd, discard, sizeof(discard), 0);
+      if (n > 0) continue;
+      return;
+    }
+  }
 }
 
 std::string accepted_model_aliases_text(const std::vector<std::string>& aliases) {
@@ -1005,6 +1184,14 @@ std::optional<std::string> validate_ws_query(const ws_routes::Route& route,
   return std::nullopt;
 }
 
+int selftest_drain_hold_ms(const ws_routes::Route& route) {
+  if (!stale_gen_test_endpoint_enabled()) return 0;
+  auto it = route.query_params.find("__selftest_drain_hold_ms");
+  if (it == route.query_params.end() || it->second.empty()) return 0;
+  int value = parse_int_strict(it->second, "__selftest_drain_hold_ms");
+  return std::max(0, value);
+}
+
 struct PendingOutput {
   enum class Kind {
     EVENT,
@@ -1059,7 +1246,9 @@ void enqueue_finalize_output(std::deque<PendingOutput>* pending,
 bool flush_pending_outputs(int fd,
                            const SessionRuntime& session,
                            StatsCollector& stats_collector,
-                           std::deque<PendingOutput>* pending) {
+                           std::deque<PendingOutput>* pending,
+                           const std::shared_ptr<ActiveWsSession>& active,
+                           bool* protocol_close_sent) {
   while (!pending->empty()) {
     PendingOutput output = std::move(pending->front());
     pending->pop_front();
@@ -1071,7 +1260,7 @@ bool flush_pending_outputs(int fd,
         continue;
       }
       for (const auto& event : output.events) {
-        if (!send_ws_text(fd, wire_event_json(event))) return false;
+        if (!send_ws_text(fd, wire_event_json(event), active, protocol_close_sent)) return false;
       }
       continue;
     }
@@ -1084,7 +1273,7 @@ bool flush_pending_outputs(int fd,
     } else {
       emitted = !output.events.empty();
       for (const auto& event : output.events) {
-        if (!send_ws_text(fd, wire_event_json(event))) {
+        if (!send_ws_text(fd, wire_event_json(event), active, protocol_close_sent)) {
           emitted = false;
           break;
         }
@@ -1186,10 +1375,10 @@ bool process_binary_pcm(const ws_framing::Frame& frame,
                         SessionRuntime& session,
                         std::deque<PendingOutput>* pending,
                         bool* protocol_close_sent,
-                        int fd) {
+                        int fd,
+                        const std::shared_ptr<ActiveWsSession>& active) {
   if ((frame.payload.size() % 2) != 0) {
-    (void)send_all(fd, ws_framing::write_close_frame(1003, "unsupported_data"));
-    *protocol_close_sent = true;
+    (void)send_ws_close(fd, 1003, "unsupported_data", active, protocol_close_sent);
     return false;
   }
 
@@ -1202,31 +1391,64 @@ bool process_binary_pcm(const ws_framing::Frame& frame,
   return true;
 }
 
+void cap_poll_timeout(int* timeout_ms, int cap_ms) {
+  if (cap_ms < 0) return;
+  if (*timeout_ms < 0 || cap_ms < *timeout_ms) *timeout_ms = cap_ms;
+}
+
+int ms_until(Clock::time_point deadline, Clock::time_point now) {
+  if (deadline <= now) return 0;
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+  if (ms > std::numeric_limits<int>::max()) return std::numeric_limits<int>::max();
+  return static_cast<int>(ms);
+}
+
+bool enqueue_shutdown_finalize(SessionRuntime& session,
+                               std::deque<PendingOutput>* pending,
+                               uint64_t* last_enqueued_finalize_seq) {
+  auto events = session.reset(true);
+  uint64_t generation = session.generation();
+  enqueue_finalize_output(pending,
+                          std::move(events),
+                          generation,
+                          session,
+                          last_enqueued_finalize_seq);
+  return true;
+}
+
 void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route route) {
   UniqueFd conn(fd);
+  if (!configure_send_timeout(conn.get(), state->cfg.ws_send_timeout_sec)) {
+    return;
+  }
+  bool protocol_close_sent = false;
   std::string stream_id = "ws-" + std::to_string(::getpid()) + "-" +
                           std::to_string(state->next_stream_id.fetch_add(1));
 
   if (auto query_error = validate_ws_query(route, *state); query_error.has_value()) {
-    (void)send_ws_text(conn.get(), error_event_json(*query_error));
-    (void)send_all(conn.get(), ws_framing::write_frame(ws_framing::Opcode::CLOSE, ""));
+    (void)send_ws_text(conn.get(), error_event_json(*query_error), nullptr, &protocol_close_sent);
+    (void)send_ws_control(conn.get(), ws_framing::Opcode::CLOSE, "", nullptr, &protocol_close_sent);
     return;
   }
 
   AdmitResult admit = state->admission->try_admit(stream_id);
   if (admit.shed()) {
-    (void)send_all(conn.get(), ws_framing::write_close_frame(1013, "admission_backpressure"));
+    (void)send_ws_close(conn.get(), 1013, "admission_backpressure", nullptr, &protocol_close_sent);
     return;
   }
   if (admit.decision == AdmissionDecision::QUEUED) {
     while (!state->admission->try_admit_complete(stream_id)) {
+      if (is_shutting_down(*state)) {
+        (void)send_ws_close(conn.get(), 1000, "", nullptr, &protocol_close_sent);
+        return;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
   AdmissionCloseGuard guard(state->admission.get(), stream_id);
   if (!state->shared_runtime) {
-    (void)send_all(conn.get(), ws_framing::write_close_frame(1011, "runtime_unavailable"));
+    (void)send_ws_close(conn.get(), 1011, "runtime_unavailable", nullptr, &protocol_close_sent);
     return;
   }
 
@@ -1236,25 +1458,94 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
       static_cast<int>(state->admission->telemetry_snapshot().active_count);
   session_cfg.label = stream_id;
   SessionRuntime session(*state->shared_runtime, session_cfg);
+  std::shared_ptr<ActiveWsSession> active = register_session(state, stream_id, conn.get());
 
-  if (!send_ws_text(conn.get(), "{\"type\":\"ready\"}")) return;
+  if (!send_ws_text(conn.get(), "{\"type\":\"ready\"}", active, &protocol_close_sent)) {
+    unregister_session(state, active);
+    return;
+  }
 
   std::string recv_buffer;
   recv_buffer.reserve(4096);
   std::deque<PendingOutput> pending_outputs;
   uint64_t last_enqueued_finalize_seq = 0;
   bool should_close = false;
-  bool protocol_close_sent = false;
+  bool shutdown_finalize_requested = false;
+  int drain_hold_ms = selftest_drain_hold_ms(route);
+  bool ping_waiting_for_pong = false;
+  uint64_t ping_sequence = 0;
+  auto last_recv_activity = Clock::now();
+  auto ping_sent_at = Clock::time_point{};
 
   while (!should_close) {
+    if (active->forced.load(std::memory_order_acquire)) {
+      protocol_close_sent = true;
+      break;
+    }
+    if ((active->drain_requested.load(std::memory_order_acquire) || is_shutting_down(*state)) &&
+        !shutdown_finalize_requested) {
+      active->drain_requested.store(true, std::memory_order_release);
+      if (drain_hold_ms > 0) {
+        auto hold_deadline = Clock::now() + std::chrono::milliseconds(drain_hold_ms);
+        while (!active->forced.load(std::memory_order_acquire) && Clock::now() < hold_deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+      }
+      if (active->forced.load(std::memory_order_acquire)) {
+        protocol_close_sent = true;
+        break;
+      }
+      shutdown_finalize_requested = enqueue_shutdown_finalize(session,
+                                                              &pending_outputs,
+                                                              &last_enqueued_finalize_seq);
+      should_close = true;
+    }
+    if (!flush_pending_outputs(conn.get(),
+                               session,
+                               *state->stats,
+                               &pending_outputs,
+                               active,
+                               &protocol_close_sent)) {
+      break;
+    }
+    if (should_close) break;
+
+    auto now = Clock::now();
+    if (ping_waiting_for_pong &&
+        now - ping_sent_at >= std::chrono::seconds(state->cfg.ws_pong_timeout_sec)) {
+      (void)send_ws_close(conn.get(), 1011, "pong_timeout", active, &protocol_close_sent);
+      break;
+    }
+    if (!ping_waiting_for_pong &&
+        now - last_recv_activity >= std::chrono::seconds(state->cfg.ws_ping_interval_sec)) {
+      std::string payload = "ping:" + std::to_string(++ping_sequence);
+      if (!send_ws_control(conn.get(), ws_framing::Opcode::PING, payload, active, &protocol_close_sent)) {
+        break;
+      }
+      ping_waiting_for_pong = true;
+      ping_sent_at = Clock::now();
+    }
+
     pollfd pfd{};
     pfd.fd = conn.get();
     pfd.events = POLLIN;
-    int pr = ::poll(&pfd, 1, poll_timeout_ms(session));
+    int timeout_ms = poll_timeout_ms(session);
+    now = Clock::now();
+    if (ping_waiting_for_pong) {
+      cap_poll_timeout(&timeout_ms,
+                       ms_until(ping_sent_at + std::chrono::seconds(state->cfg.ws_pong_timeout_sec), now));
+    } else {
+      cap_poll_timeout(&timeout_ms,
+                       ms_until(last_recv_activity + std::chrono::seconds(state->cfg.ws_ping_interval_sec), now));
+    }
+    cap_poll_timeout(&timeout_ms, 250);
+    if (active->drain_requested.load(std::memory_order_acquire) || is_shutting_down(*state)) {
+      cap_poll_timeout(&timeout_ms, 100);
+    }
+    int pr = ::poll(&pfd, 1, timeout_ms);
     if (pr < 0) {
       if (errno == EINTR) continue;
-      (void)send_all(conn.get(), ws_framing::write_close_frame(1011, "poll_failed"));
-      protocol_close_sent = true;
+      (void)send_ws_close(conn.get(), 1011, "poll_failed", active, &protocol_close_sent);
       break;
     }
 
@@ -1267,6 +1558,7 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
       ssize_t n = ::recv(conn.get(), buf, sizeof(buf), 0);
       if (n > 0) {
         recv_buffer.append(buf, static_cast<size_t>(n));
+        last_recv_activity = Clock::now();
       } else if (n == 0) {
         should_close = true;
       } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -1280,14 +1572,12 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
             ws_framing::read_frame(recv_buffer, frame, consumed, state->cfg.ws_max_message_size);
         if (read == ws_framing::ReadResult::NEED_MORE) break;
         if (read == ws_framing::ReadResult::FRAME_TOO_LARGE) {
-          (void)send_all(conn.get(), ws_framing::write_close_frame(1009, "message_too_big"));
-          protocol_close_sent = true;
+          (void)send_ws_close(conn.get(), 1009, "message_too_big", active, &protocol_close_sent);
           should_close = true;
           break;
         }
         if (read == ws_framing::ReadResult::MALFORMED) {
-          (void)send_all(conn.get(), ws_framing::write_close_frame(1003, "unsupported_data"));
-          protocol_close_sent = true;
+          (void)send_ws_close(conn.get(), 1003, "unsupported_data", active, &protocol_close_sent);
           should_close = true;
           break;
         }
@@ -1298,7 +1588,8 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
                                   session,
                                   &pending_outputs,
                                   &protocol_close_sent,
-                                  conn.get())) {
+                                  conn.get(),
+                                  active)) {
             should_close = true;
             break;
           }
@@ -1313,10 +1604,12 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
           }
         } else if (frame.opcode == ws_framing::Opcode::PING) {
           std::string payload(frame.payload.begin(), frame.payload.end());
-          if (!send_all(conn.get(), ws_framing::write_frame(ws_framing::Opcode::PONG, payload))) {
+          if (!send_ws_control(conn.get(), ws_framing::Opcode::PONG, payload, active, &protocol_close_sent)) {
             should_close = true;
             break;
           }
+        } else if (frame.opcode == ws_framing::Opcode::PONG) {
+          ping_waiting_for_pong = false;
         } else if (frame.opcode == ws_framing::Opcode::CLOSE) {
           should_close = true;
           break;
@@ -1324,7 +1617,12 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
       }
     }
 
-    if (!flush_pending_outputs(conn.get(), session, *state->stats, &pending_outputs)) break;
+    if (!flush_pending_outputs(conn.get(),
+                               session,
+                               *state->stats,
+                               &pending_outputs,
+                               active,
+                               &protocol_close_sent)) break;
 
     if (!should_close) {
       uint64_t finalize_gen = session.generation();
@@ -1334,13 +1632,23 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
                               finalize_gen,
                               session,
                               &last_enqueued_finalize_seq);
-      if (!flush_pending_outputs(conn.get(), session, *state->stats, &pending_outputs)) break;
+      if (!flush_pending_outputs(conn.get(),
+                                 session,
+                                 *state->stats,
+                                 &pending_outputs,
+                                 active,
+                                 &protocol_close_sent)) break;
     }
   }
 
-  if (!protocol_close_sent) {
-    (void)send_all(conn.get(), ws_framing::write_close_frame(1000, ""));
+  bool sent_clean_close = false;
+  if (!protocol_close_sent && !active->forced.load(std::memory_order_acquire)) {
+    sent_clean_close = send_ws_close(conn.get(), 1000, "", active, &protocol_close_sent);
   }
+  if (sent_clean_close) {
+    drain_peer_after_clean_close(conn.get(), 1000);
+  }
+  unregister_session(state, active);
 }
 
 class WsServer {
@@ -1364,24 +1672,49 @@ class WsServer {
   }
 
   void stop() {
-    if (!running_.exchange(false)) return;
-    if (listen_fd_.get() >= 0) {
-      (void)::shutdown(listen_fd_.get(), SHUT_RDWR);
-    }
-    listen_fd_.reset();
-    if (accept_thread_.joinable()) accept_thread_.join();
-    if (admin_pool_) {
-      admin_pool_->stop();
-      admin_pool_.reset();
-    }
-    {
-      std::lock_guard<std::mutex> lock(ws_threads_mutex_);
-      for (auto& worker : ws_threads_) {
-        if (worker.joinable()) worker.join();
-      }
-      ws_threads_.clear();
-    }
+    if (!state_) return;
+    running_.store(false, std::memory_order_release);
+    stop_accepting();
+    stop_admin_pool();
+    join_ws_threads();
+    close_scheduler_after_workers();
     state_.reset();
+  }
+
+  void begin_drain() {
+    if (!state_) return;
+    bool expected = false;
+    if (state_->shutting_down.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+      if (state_->admission) state_->admission->shutting_down(true);
+      request_session_drains(state_);
+      std::cout << "WS_SHUTDOWN_DRAIN_BEGIN drain_sec=" << state_->cfg.shutdown_drain_sec << "\n";
+      std::cout.flush();
+    } else {
+      request_session_drains(state_);
+    }
+  }
+
+  bool drain_and_stop() {
+    if (!state_) return false;
+    begin_drain();
+    const auto deadline = Clock::now() + std::chrono::seconds(state_->cfg.shutdown_drain_sec);
+    while (active_session_count(state_) > 0 && Clock::now() < deadline) {
+      request_session_drains(state_);
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    bool forced = active_session_count(state_) > 0;
+    if (forced) {
+      force_close_active_sessions();
+    }
+
+    stop_accepting();
+    stop_admin_pool();
+    join_ws_threads();
+    close_scheduler_after_workers();
+    emit_stats_lifetime();
+    state_.reset();
+    return forced;
   }
 
   int port() const {
@@ -1474,6 +1807,7 @@ class WsServer {
 
   void accept_loop() {
     while (running_.load(std::memory_order_acquire)) {
+      if (g_sigterm_requested.load(std::memory_order_acquire)) begin_drain();
       sockaddr_in peer{};
       socklen_t peer_len = sizeof(peer);
       int fd = ::accept(listen_fd_.get(), reinterpret_cast<sockaddr*>(&peer), &peer_len);
@@ -1484,6 +1818,58 @@ class WsServer {
       }
       handle_accepted(fd);
     }
+  }
+
+  void stop_accepting() {
+    running_.store(false, std::memory_order_release);
+    if (listen_fd_.get() >= 0) {
+      (void)::shutdown(listen_fd_.get(), SHUT_RDWR);
+    }
+    listen_fd_.reset();
+    if (accept_thread_.joinable()) accept_thread_.join();
+  }
+
+  void stop_admin_pool() {
+    if (admin_pool_) {
+      admin_pool_->stop();
+      admin_pool_.reset();
+    }
+  }
+
+  void join_ws_threads() {
+    std::lock_guard<std::mutex> lock(ws_threads_mutex_);
+    for (auto& worker : ws_threads_) {
+      if (worker.joinable()) worker.join();
+    }
+    ws_threads_.clear();
+  }
+
+  void close_scheduler_after_workers() {
+    if (state_ && state_->scheduler) state_->scheduler->close();
+  }
+
+  void emit_stats_lifetime() const {
+    uint64_t emitted = 0;
+    uint64_t suppressed = 0;
+    if (state_ && state_->stats) {
+      nlohmann::json stats = nlohmann::json::parse(state_->stats->snapshot_json(), nullptr, false);
+      if (!stats.is_discarded()) {
+        emitted = stats.value("lifetime_emitted", 0ULL);
+        suppressed = stats.value("lifetime_suppressed", 0ULL);
+      }
+    }
+    std::cout << "STATS_LIFETIME emitted=" << emitted << " suppressed=" << suppressed << "\n";
+    std::cout.flush();
+  }
+
+  void force_close_active_sessions() {
+    std::vector<std::shared_ptr<ActiveWsSession>> sessions = session_snapshot(state_);
+    for (const auto& session : sessions) {
+      if (!session || session->closed.load(std::memory_order_acquire)) continue;
+      std::cout << "WS_SHUTDOWN_FORCE_CLOSE session_id=" << session->stream_id << "\n";
+      best_effort_force_close(session);
+    }
+    std::cout.flush();
   }
 
   void handle_accepted(int fd) {
@@ -1520,6 +1906,10 @@ class WsServer {
     }
 
     if (route.kind == ws_routes::RouteKind::WEBSOCKET) {
+      if (is_shutting_down(*state_)) {
+        (void)send_all(conn.get(), build_json_response(503, "{\"error\":\"draining\"}"));
+        return;
+      }
       auto key_it = read.request.headers.find("sec-websocket-key");
       std::string accept_key = ws_handshake::compute_accept_key(key_it->second);
       if (!send_all(conn.get(), ws_handshake::build_handshake_response(accept_key))) return;
@@ -1592,11 +1982,15 @@ void clear_selftest_env(ScopedEnv* env) {
            "NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP",
            "NEMOTRON_DENSITY_ADMISSION_BACKLOG_CAP",
            "NEMOTRON_DENSITY_BATCH_MAX",
-           "NEMOTRON_DENSITY_BATCH_WINDOW_MS",
-           "NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS",
-           "NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY",
-           "NEMOTRON_WS_STALEGEN_TEST_ENDPOINT",
-       }) {
+	           "NEMOTRON_DENSITY_BATCH_WINDOW_MS",
+	           "NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS",
+	           "NEMOTRON_DENSITY_BATCH_QUEUE_CAPACITY",
+	           "NEMOTRON_WS_SEND_TIMEOUT_SEC",
+	           "NEMOTRON_WS_PING_INTERVAL_SEC",
+	           "NEMOTRON_WS_PONG_TIMEOUT_SEC",
+	           "NEMOTRON_SHUTDOWN_DRAIN_SEC",
+	           "NEMOTRON_WS_STALEGEN_TEST_ENDPOINT",
+	       }) {
     env->unset(name);
   }
 }
@@ -2141,19 +2535,22 @@ int main(int argc, char** argv) {
     }
 
     validate_config(&cfg, true);
-    if (cfg.print_config) {
-      std::cout << config_table(cfg);
-    }
+	    if (cfg.print_config) {
+	      std::cout << config_table(cfg);
+	    }
+	    install_sigterm_handler();
 
-    WsServer server(cfg);
-    server.start();
-    std::cout << "ws_server listening on 127.0.0.1:" << server.port() << "\n";
-    std::cout.flush();
+	    WsServer server(cfg);
+	    server.start();
+	    std::cout << "ws_server listening on 127.0.0.1:" << server.port() << "\n";
+	    std::cout.flush();
 
-    for (;;) {
-      std::this_thread::sleep_for(std::chrono::hours(24));
-    }
-  } catch (const std::exception& e) {
+	    while (!g_sigterm_requested.load(std::memory_order_acquire)) {
+	      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	    }
+	    bool forced = server.drain_and_stop();
+	    return forced ? 1 : 0;
+	  } catch (const std::exception& e) {
     std::cerr << "ws_server startup error: " << e.what() << "\n";
     return 1;
   }

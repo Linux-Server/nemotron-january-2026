@@ -48,6 +48,10 @@ void DensityAdmission::remember_stream(const std::string& stream_id, StreamSlot 
 
 AdmitResult DensityAdmission::try_admit(const std::string& stream_id) {
   offered_.fetch_add(1, std::memory_order_relaxed);
+  if (shutting_down_.load(std::memory_order_acquire)) {
+    shed_close_count_.fetch_add(1, std::memory_order_relaxed);
+    return {AdmissionDecision::SHED_ACTIVE_CAP};
+  }
 
   uint64_t active_after = 0;
   if (try_increment_below(active_count_, active_cap_, &active_after)) {
@@ -158,4 +162,12 @@ AdmissionTelemetry DensityAdmission::telemetry_snapshot() const {
                             : static_cast<double>(out.shed_close_count) /
                                   static_cast<double>(out.offered);
   return out;
+}
+
+void DensityAdmission::shutting_down(bool value) {
+  shutting_down_.store(value, std::memory_order_release);
+}
+
+bool DensityAdmission::is_shutting_down() const {
+  return shutting_down_.load(std::memory_order_acquire);
 }

@@ -23,14 +23,19 @@
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <sstream>
 #include <sys/resource.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 using Clock = std::chrono::steady_clock;
 
@@ -330,9 +335,10 @@ static DensityArgs parse_density_args(int argc, char** argv) {
       args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
       args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
       args.mode != "vad-smoke" && args.mode != "ws-lib-smoke" &&
-      args.mode != "ws-lifecycle-smoke") {
+      args.mode != "ws-lifecycle-smoke" && args.mode != "shutdown-smoke" &&
+      args.mode != "backpressure-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, or ws-lifecycle-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -7122,6 +7128,564 @@ finally:
   return ok;
 }
 
+static bool run_shutdown_smoke(const DensityArgs& args) {
+  std::string server_bin = (fs::path(density_exe_dir()) / "ws_server").string();
+  std::string python = file_exists("./.venv/bin/python") ? "./.venv/bin/python" : "python3";
+  fs::path script_path = fs::temp_directory_path() /
+                         ("shutdown_smoke_" + std::to_string(::getpid()) + ".py");
+
+  const char* script = R"PY(
+import base64
+import json
+import os
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+server_bin = sys.argv[1]
+artifact_dir = Path(sys.argv[2]).resolve()
+
+def fail(name, detail):
+    print(f"SHUTDOWN_SMOKE_ASSERT {name}=FAIL {detail}", flush=True)
+    raise SystemExit(1)
+
+def ok(name, detail=""):
+    print(f"SHUTDOWN_SMOKE_ASSERT {name}=PASS {detail}", flush=True)
+
+def frame(opcode, payload=b""):
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    mask = os.urandom(4)
+    head = bytearray([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        head.append(0x80 | n)
+    elif n <= 0xFFFF:
+        head.append(0x80 | 126)
+        head.extend(struct.pack("!H", n))
+    else:
+        head.append(0x80 | 127)
+        head.extend(struct.pack("!Q", n))
+    head.extend(mask)
+    head.extend(bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+    return bytes(head)
+
+def recv_exact(sock, n):
+    out = bytearray()
+    while len(out) < n:
+        chunk = sock.recv(n - len(out))
+        if not chunk:
+            raise EOFError("socket closed")
+        out.extend(chunk)
+    return bytes(out)
+
+def read_frame(sock, timeout=30.0):
+    ready, _, _ = select.select([sock], [], [], timeout)
+    if not ready:
+        raise TimeoutError("timed out waiting for frame")
+    h = recv_exact(sock, 2)
+    opcode = h[0] & 0x0F
+    n = h[1] & 0x7F
+    if n == 126:
+        n = struct.unpack("!H", recv_exact(sock, 2))[0]
+    elif n == 127:
+        n = struct.unpack("!Q", recv_exact(sock, 8))[0]
+    payload = recv_exact(sock, n)
+    return opcode, payload
+
+def read_http(sock):
+    data = bytearray()
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(1)
+        if not chunk:
+            raise EOFError("http closed")
+        data.extend(chunk)
+        if len(data) > 65536:
+            raise RuntimeError("http response too large")
+    head, body = bytes(data).split(b"\r\n\r\n", 1)
+    headers = {}
+    lines = head.decode("iso-8859-1").split("\r\n")
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.lower()] = v.strip()
+    length = int(headers.get("content-length", "0"))
+    while len(body) < length:
+        chunk = sock.recv(length - len(body))
+        if not chunk:
+            break
+        body += chunk
+    return lines[0], body
+
+def http_get(port, path):
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    sock.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode("ascii"))
+    status, body = read_http(sock)
+    sock.close()
+    return status, body
+
+def ws_connect(port, query=""):
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    target = "/" + (("?" + query) if query else "")
+    req = (
+        f"GET {target} HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "\r\n"
+    ).encode("ascii")
+    sock.sendall(req)
+    status, body = read_http(sock)
+    return sock, status, body
+
+def close_code(payload):
+    if len(payload) < 2:
+        return 0
+    return struct.unpack("!H", payload[:2])[0]
+
+def load_pcm():
+    bundle = torch.jit.load(str(artifact_dir / "session_audio_bundle.ts"), map_location="cpu")
+    audio = getattr(bundle, "utt0_audio").detach().cpu().to(torch.float32).contiguous().numpy()
+    pcm = np.clip(np.rint(audio * 32768.0), -32768, 32767).astype(np.int16)
+    return pcm.tobytes()
+
+def start_server(extra_env=None):
+    env = os.environ.copy()
+    env["NEMOTRON_ARTIFACT_DIR"] = str(artifact_dir)
+    env["NEMOTRON_FINALIZE_SILENCE_MS"] = "0"
+    env["NEMOTRON_WS_STALEGEN_TEST_ENDPOINT"] = "1"
+    if extra_env:
+        env.update(extra_env)
+    proc = subprocess.Popen(
+        [server_bin, "--port", "0", "--admission-active-cap", "4"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+        bufsize=1,
+    )
+    captured = []
+    port = None
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                fail("server_start", "".join(captured[-20:]))
+            continue
+        captured.append(line)
+        print("WS_SERVER_LOG " + line.rstrip(), flush=True)
+        if "ws_server listening on 127.0.0.1:" in line:
+            port = int(line.rsplit(":", 1)[1])
+            break
+    if port is None:
+        fail("server_start", "timeout")
+    return proc, port, captured
+
+def collect_exit(proc, captured, timeout=60):
+    try:
+        rest, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rest, _ = proc.communicate(timeout=20)
+    if rest:
+        for line in rest.splitlines():
+            print("WS_SERVER_LOG " + line, flush=True)
+        captured.extend([line + "\n" for line in rest.splitlines()])
+    return proc.returncode, "".join(captured)
+
+def wait_health_503(port):
+    last = ""
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            status, body = http_get(port, "/health")
+            last = status + " " + body.decode("utf-8", "replace")
+            if " 503 " in status:
+                parsed = json.loads(body.decode("utf-8"))
+                if parsed.get("status") not in ("healthy", "loading"):
+                    fail("health_drain_enum", parsed)
+                ok("health_during_drain", last)
+                return
+        except Exception as exc:
+            last = repr(exc)
+        time.sleep(0.05)
+    fail("health_during_drain", last)
+
+def read_final_and_close(sock, label, timeout=30):
+    final_seen = False
+    close_seen = None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        opcode, payload = read_frame(sock, max(0.1, deadline - time.time()))
+        if opcode == 1:
+            msg = json.loads(payload.decode("utf-8"))
+            if msg.get("type") == "transcript" and msg.get("is_final") is True and msg.get("text"):
+                final_seen = True
+        elif opcode == 8:
+            close_seen = close_code(payload)
+            break
+        elif opcode == 9:
+            sock.sendall(frame(10, payload))
+    if not final_seen or close_seen != 1000:
+        fail(label, f"final={final_seen} close={close_seen}")
+    ok(label, f"close={close_seen}")
+
+def wait_interim(sock, label, timeout=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        opcode, payload = read_frame(sock, max(0.1, deadline - time.time()))
+        if opcode == 1:
+            msg = json.loads(payload.decode("utf-8"))
+            if msg.get("type") == "transcript" and msg.get("is_final") is False and msg.get("text"):
+                ok(label, msg.get("text", "")[:48])
+                return
+        elif opcode == 9:
+            sock.sendall(frame(10, payload))
+        elif opcode == 8:
+            fail(label, f"closed_early={close_code(payload)}")
+    fail(label, "timeout")
+
+def clean_variant(pcm):
+    proc, port, captured = start_server()
+    sockets = []
+    try:
+        for i in range(2):
+            sock, status, _ = ws_connect(port, f"model=en&__selftest_drain_hold_ms=1000")
+            if " 101 " not in status:
+                fail("clean_handshake", status)
+            opcode, payload = read_frame(sock, 10)
+            if opcode != 1 or payload.decode("utf-8") != '{"type":"ready"}':
+                fail("clean_ready", f"opcode={opcode} payload={payload!r}")
+            sockets.append(sock)
+        ok("clean_ready", "connections=2")
+        for sock in sockets:
+            sock.sendall(frame(1, '{"type":"vad_start"}'))
+            for pos in range(0, len(pcm), 640):
+                sock.sendall(frame(2, pcm[pos:pos + 640]))
+        for i, sock in enumerate(sockets):
+            wait_interim(sock, f"clean_session_{i}_inflight")
+
+        proc.send_signal(signal.SIGTERM)
+        wait_health_503(port)
+
+        sock, status, body = ws_connect(port, "model=en")
+        sock.close()
+        if " 503 " not in status or body != b'{"error":"draining"}':
+            fail("new_ws_draining_503", f"status={status} body={body!r}")
+        ok("new_ws_draining_503")
+
+        status, body = http_get(port, "/stats")
+        if " 200 " not in status:
+            fail("stats_during_drain", status)
+        ok("stats_during_drain", body[:80].decode("utf-8", "replace"))
+
+        for i, sock in enumerate(sockets):
+            read_final_and_close(sock, f"clean_session_{i}_final_close")
+            sock.close()
+        rc, logs = collect_exit(proc, captured, 60)
+        if rc != 0:
+            fail("clean_exit_code", f"rc={rc}")
+        if "STATS_LIFETIME emitted=" not in logs:
+            fail("clean_stats_lifetime", logs[-1000:])
+        ok("clean_exit_code", "rc=0")
+        ok("clean_stats_lifetime")
+    finally:
+        for sock in sockets:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=20)
+
+def forced_variant(pcm):
+    proc, port, captured = start_server({"NEMOTRON_SHUTDOWN_DRAIN_SEC": "2"})
+    sock = None
+    try:
+        sock, status, _ = ws_connect(port, "model=en&__selftest_drain_hold_ms=8000")
+        if " 101 " not in status:
+            fail("forced_handshake", status)
+        opcode, payload = read_frame(sock, 10)
+        if opcode != 1 or payload.decode("utf-8") != '{"type":"ready"}':
+            fail("forced_ready", f"opcode={opcode} payload={payload!r}")
+        sock.sendall(frame(1, '{"type":"vad_start"}'))
+        sock.sendall(frame(2, pcm[: min(len(pcm), 64000)]))
+        proc.send_signal(signal.SIGTERM)
+        code = None
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            opcode, payload = read_frame(sock, max(0.1, deadline - time.time()))
+            if opcode == 8:
+                code = close_code(payload)
+                break
+            if opcode == 9:
+                sock.sendall(frame(10, payload))
+        if code != 1001:
+            fail("forced_close_1001", f"code={code}")
+        ok("forced_close_1001", "code=1001")
+        sock.close()
+        rc, logs = collect_exit(proc, captured, 30)
+        if rc != 1:
+            fail("forced_exit_code", f"rc={rc}")
+        if "WS_SHUTDOWN_FORCE_CLOSE session_id=" not in logs:
+            fail("forced_log", logs[-1000:])
+        ok("forced_exit_code", "rc=1")
+        ok("forced_log")
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=20)
+
+pcm = load_pcm()
+clean_variant(pcm)
+forced_variant(pcm)
+print("SHUTDOWN_SMOKE PASS", flush=True)
+)PY";
+
+  {
+    std::ofstream out(script_path, std::ios::out | std::ios::trunc);
+    if (!out) throw std::runtime_error("failed to write shutdown smoke script");
+    out << script;
+  }
+
+  std::string command = shell_quote(python) + " " +
+                        shell_quote(script_path.string()) + " " +
+                        shell_quote(server_bin) + " " +
+                        shell_quote(args.dir);
+  int rc = std::system(command.c_str());
+  std::error_code ec;
+  fs::remove(script_path, ec);
+  bool ok = rc == 0;
+  std::printf("SHUTDOWN_SMOKE %s rc=%d server=%s\n",
+              ok ? "PASS" : "FAIL",
+              rc,
+              server_bin.c_str());
+  return ok;
+}
+
+static bool run_backpressure_smoke(const DensityArgs& args) {
+  std::string server_bin = (fs::path(density_exe_dir()) / "ws_server").string();
+  std::string python = file_exists("./.venv/bin/python") ? "./.venv/bin/python" : "python3";
+  fs::path script_path = fs::temp_directory_path() /
+                         ("backpressure_smoke_" + std::to_string(::getpid()) + ".py");
+
+  const char* script = R"PY(
+import base64
+import os
+import select
+import socket
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+server_bin = sys.argv[1]
+artifact_dir = Path(sys.argv[2]).resolve()
+
+def fail(name, detail):
+    print(f"BACKPRESSURE_SMOKE_ASSERT {name}=FAIL {detail}", flush=True)
+    raise SystemExit(1)
+
+def ok(name, detail=""):
+    print(f"BACKPRESSURE_SMOKE_ASSERT {name}=PASS {detail}", flush=True)
+
+def frame(opcode, payload=b""):
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    mask = os.urandom(4)
+    head = bytearray([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        head.append(0x80 | n)
+    elif n <= 0xFFFF:
+        head.append(0x80 | 126)
+        head.extend(struct.pack("!H", n))
+    else:
+        head.append(0x80 | 127)
+        head.extend(struct.pack("!Q", n))
+    head.extend(mask)
+    head.extend(bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+    return bytes(head)
+
+def recv_exact(sock, n):
+    out = bytearray()
+    while len(out) < n:
+        chunk = sock.recv(n - len(out))
+        if not chunk:
+            raise EOFError("socket closed")
+        out.extend(chunk)
+    return bytes(out)
+
+def read_frame(sock, timeout=10.0):
+    ready, _, _ = select.select([sock], [], [], timeout)
+    if not ready:
+        raise TimeoutError("timed out waiting for frame")
+    h = recv_exact(sock, 2)
+    opcode = h[0] & 0x0F
+    n = h[1] & 0x7F
+    if n == 126:
+        n = struct.unpack("!H", recv_exact(sock, 2))[0]
+    elif n == 127:
+        n = struct.unpack("!Q", recv_exact(sock, 8))[0]
+    payload = recv_exact(sock, n)
+    return opcode, payload
+
+def read_http(sock):
+    data = bytearray()
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(1)
+        if not chunk:
+            raise EOFError("http closed")
+        data.extend(chunk)
+    head, body = bytes(data).split(b"\r\n\r\n", 1)
+    headers = {}
+    lines = head.decode("iso-8859-1").split("\r\n")
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.lower()] = v.strip()
+    length = int(headers.get("content-length", "0"))
+    while len(body) < length:
+        body += sock.recv(length - len(body))
+    return lines[0], body
+
+def ws_connect(port):
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    req = (
+        "GET /?model=en HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "\r\n"
+    ).encode("ascii")
+    sock.sendall(req)
+    status, _ = read_http(sock)
+    if " 101 " not in status:
+        fail("handshake", status)
+    opcode, payload = read_frame(sock, 10)
+    if opcode != 1 or payload.decode("utf-8") != '{"type":"ready"}':
+        fail("ready", f"opcode={opcode} payload={payload!r}")
+    return sock
+
+def close_code(payload):
+    if len(payload) < 2:
+        return 0
+    return struct.unpack("!H", payload[:2])[0]
+
+def close_reason(payload):
+    return payload[2:].decode("utf-8", "replace") if len(payload) > 2 else ""
+
+env = os.environ.copy()
+env["NEMOTRON_ARTIFACT_DIR"] = str(artifact_dir)
+env["NEMOTRON_FINALIZE_SILENCE_MS"] = "0"
+env["NEMOTRON_WS_PING_INTERVAL_SEC"] = "1"
+env["NEMOTRON_WS_PONG_TIMEOUT_SEC"] = "1"
+proc = subprocess.Popen(
+    [server_bin, "--port", "0", "--admission-active-cap", "2"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    env=env,
+    bufsize=1,
+)
+captured = []
+port = None
+try:
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                fail("server_start", "".join(captured[-20:]))
+            continue
+        captured.append(line)
+        print("WS_SERVER_LOG " + line.rstrip(), flush=True)
+        if "ws_server listening on 127.0.0.1:" in line:
+            port = int(line.rsplit(":", 1)[1])
+            break
+    if port is None:
+        fail("server_start", "timeout")
+
+    sock = ws_connect(port)
+    oversize = 16 * 1024 * 1024
+    header = bytearray([0x82, 0x80 | 127])
+    header.extend(struct.pack("!Q", oversize))
+    sock.sendall(bytes(header))
+    opcode, payload = read_frame(sock, 5)
+    if opcode != 8 or close_code(payload) != 1009:
+        fail("oversize_1009", f"opcode={opcode} code={close_code(payload)} reason={close_reason(payload)!r}")
+    ok("oversize_1009", close_reason(payload))
+    try:
+        sock.sendall(b"x" * 16)
+    except OSError:
+        pass
+    sock.close()
+
+    sock = ws_connect(port)
+    opcode, payload = read_frame(sock, 5)
+    if opcode != 9:
+        fail("ping_sent", f"opcode={opcode}")
+    ok("ping_sent")
+    opcode, payload = read_frame(sock, 5)
+    if opcode != 8 or close_code(payload) != 1011 or close_reason(payload) != "pong_timeout":
+        fail("pong_timeout_1011", f"opcode={opcode} code={close_code(payload)} reason={close_reason(payload)!r}")
+    ok("pong_timeout_1011")
+    sock.close()
+
+    print("BACKPRESSURE_SMOKE PASS", flush=True)
+finally:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=20)
+)PY";
+
+  {
+    std::ofstream out(script_path, std::ios::out | std::ios::trunc);
+    if (!out) throw std::runtime_error("failed to write backpressure smoke script");
+    out << script;
+  }
+
+  std::string command = shell_quote(python) + " " +
+                        shell_quote(script_path.string()) + " " +
+                        shell_quote(server_bin) + " " +
+                        shell_quote(args.dir);
+  int rc = std::system(command.c_str());
+  std::error_code ec;
+  fs::remove(script_path, ec);
+  bool ok = rc == 0;
+  std::printf("BACKPRESSURE_SMOKE %s rc=%d server=%s\n",
+              ok ? "PASS" : "FAIL",
+              rc,
+              server_bin.c_str());
+  return ok;
+}
+
 int main(int argc, char** argv) {
   try {
     DensityArgs args = parse_density_args(argc, argv);
@@ -7137,10 +7701,16 @@ int main(int argc, char** argv) {
     if (args.mode == "stats-smoke") {
       return run_stats_smoke() ? 0 : 1;
     }
-    if (args.mode == "ws-lifecycle-smoke") {
-      return run_ws_lifecycle_smoke(args) ? 0 : 1;
-    }
-    if (args.mode == "density-sweep") {
+	    if (args.mode == "ws-lifecycle-smoke") {
+	      return run_ws_lifecycle_smoke(args) ? 0 : 1;
+	    }
+	    if (args.mode == "shutdown-smoke") {
+	      return run_shutdown_smoke(args) ? 0 : 1;
+	    }
+	    if (args.mode == "backpressure-smoke") {
+	      return run_backpressure_smoke(args) ? 0 : 1;
+	    }
+	    if (args.mode == "density-sweep") {
       const char* previous_cuda_module_loading = std::getenv("CUDA_MODULE_LOADING");
       if (setenv("CUDA_MODULE_LOADING", "EAGER", 1) != 0) {
         throw std::runtime_error("failed to set CUDA_MODULE_LOADING=EAGER");

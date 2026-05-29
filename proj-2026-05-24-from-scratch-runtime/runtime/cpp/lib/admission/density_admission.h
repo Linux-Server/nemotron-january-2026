@@ -50,6 +50,9 @@ class DensityAdmission {
   void on_admit_complete(const std::string& stream_id = {});
   void on_close(const std::string& stream_id = {});
   AdmissionTelemetry telemetry_snapshot() const;
+  // Step 10 extension: process-level drain gate for SIGTERM shutdown.
+  void shutting_down(bool value);
+  bool is_shutting_down() const;
 
  private:
   enum class StreamSlot { ACTIVE, BACKLOG };
@@ -71,6 +74,7 @@ class DensityAdmission {
   std::atomic<uint64_t> active_cap_hits_{0};
   std::atomic<uint64_t> backlog_cap_hits_{0};
   std::atomic<uint64_t> shed_close_count_{0};
+  std::atomic<bool> shutting_down_{false};
 
   mutable std::mutex streams_mutex_;
   std::unordered_map<std::string, StreamSlot> streams_;
