@@ -7,6 +7,8 @@
 // The emitted cumulative tokens must exactly equal finalize_ref gold tokens.
 // The ordered interim/final/suppressed event stream is checked at the same
 // WORD/TEXT level as finalize_ref._continuous_append_only_delta.
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
 #include <torch/script.h>
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
 
@@ -78,6 +80,13 @@ struct Tokenizer {
   std::vector<std::string> pieces;
 
   std::string ids_to_text(const std::vector<int64_t>& ids) const;
+};
+
+struct ExecutionContext {
+  c10::cuda::CUDAStream stream;
+  torch::jit::Module& joint;
+  torch::jit::Module& predict;
+  torch::jit::Module& preproc;
 };
 
 struct SessionState {
@@ -1776,9 +1785,17 @@ static void apply_encoder_outputs(SessionState& state,
                margin_stats, margin_label, secondary_margin_stats);
 }
 
+static std::vector<at::Tensor> run_aoti_loader_on_stream(AOTIModelPackageLoader& loader,
+                                                         const std::vector<at::Tensor>& inputs,
+                                                         c10::cuda::CUDAStream stream) {
+  return loader.run(inputs, reinterpret_cast<void*>(stream.stream()));
+}
+
 std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
-                                                 const torch::Tensor& chunk,
-                                                 SessionState& state) {
+                                          const torch::Tensor& chunk,
+                                          SessionState& state,
+                                          c10::cuda::CUDAStream stream) {
+  c10::cuda::CUDAStreamGuard stream_guard(stream);
   auto device = chunk.device();
   auto L = torch::full({1}, chunk.size(2), torch::dtype(torch::kLong).device(device));
   auto tuple = enc_first.forward({chunk.contiguous(), L.contiguous(),
@@ -1788,6 +1805,22 @@ std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
   out.reserve(5);
   for (int i = 0; i < 5; ++i) out.push_back(tuple->elements()[i].toTensor());
   return out;
+}
+
+std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
+                                          const torch::Tensor& chunk,
+                                          SessionState& state,
+                                          const ExecutionContext& ctx) {
+  return run_first_encoder(enc_first, chunk, state, ctx.stream);
+}
+
+std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
+                                          const torch::Tensor& chunk,
+                                          SessionState& state) {
+  return run_first_encoder(enc_first,
+                           chunk,
+                           state,
+                           c10::cuda::getCurrentCUDAStream(chunk.get_device()));
 }
 
 static void observe_first_chunk_drift(torch::jit::Module& bundle,
@@ -1816,7 +1849,9 @@ static void observe_first_chunk_drift(torch::jit::Module& bundle,
 
 static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader,
                                                   const torch::Tensor& chunk,
-                                                  SessionState& state) {
+                                                  SessionState& state,
+                                                  c10::cuda::CUDAStream stream) {
+  c10::cuda::CUDAStreamGuard stream_guard(stream);
   auto device = chunk.device();
   auto L = torch::full({1}, chunk.size(2), torch::dtype(torch::kLong).device(device));
   std::vector<at::Tensor> inputs = {
@@ -1826,9 +1861,25 @@ static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader
       state.clt.contiguous(),
       state.clcl.contiguous(),
   };
-  auto out = loader.run(inputs);
+  auto out = run_aoti_loader_on_stream(loader, inputs, stream);
   if (out.size() < 5) throw std::runtime_error("steady AOTI encoder returned fewer than 5 outputs");
   return out;
+}
+
+static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader,
+                                                  const torch::Tensor& chunk,
+                                                  SessionState& state,
+                                                  const ExecutionContext& ctx) {
+  return run_steady_encoder(loader, chunk, state, ctx.stream);
+}
+
+static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader,
+                                                  const torch::Tensor& chunk,
+                                                  SessionState& state) {
+  return run_steady_encoder(loader,
+                            chunk,
+                            state,
+                            c10::cuda::getCurrentCUDAStream(chunk.get_device()));
 }
 
 static void warm_stream_encoder_artifacts(torch::jit::Module& bundle,
@@ -2015,6 +2066,11 @@ struct AudioFrontend {
   CacheCompareStats cache_stats;
   MarginStats margin_stats;
 
+  torch::jit::Module& require_preproc() const {
+    if (preproc == nullptr) throw std::runtime_error("audio frontend missing preproc module");
+    return *preproc;
+  }
+
   std::pair<torch::Tensor, int64_t> build_fixed_preprocess_audio(
       const std::vector<float>& raw_audio_ring,
       const std::vector<float>& new_audio) const {
@@ -2038,25 +2094,36 @@ struct AudioFrontend {
   }
 
   torch::Tensor preprocess_fixed_audio(const std::vector<float>& raw_audio_ring,
-                                       const std::vector<float>& new_audio) const {
+                                       const std::vector<float>& new_audio,
+                                       torch::jit::Module& preproc_module) const {
     auto built = build_fixed_preprocess_audio(raw_audio_ring, new_audio);
     auto audio = built.first.to(device).contiguous();
     auto audio_len = torch::full({1}, built.second, torch::dtype(torch::kLong).device(device));
-    auto tuple = preproc->forward({audio, audio_len}).toTuple();
+    auto tuple = preproc_module.forward({audio, audio_len}).toTuple();
     return tuple->elements()[0].toTensor();
   }
 
-  torch::Tensor steady_new_mel(const SessionState& state) const {
+  torch::Tensor preprocess_fixed_audio(const std::vector<float>& raw_audio_ring,
+                                       const std::vector<float>& new_audio) const {
+    return preprocess_fixed_audio(raw_audio_ring, new_audio, require_preproc());
+  }
+
+  torch::Tensor steady_new_mel(const SessionState& state,
+                               torch::jit::Module& preproc_module) const {
     if (state.pending_audio.size() < static_cast<size_t>(g.preprocess_new_audio_samples)) {
       throw std::runtime_error("steady_new_mel called before preprocess_new_audio_samples are pending");
     }
     std::vector<float> new_audio(
         state.pending_audio.begin(),
         state.pending_audio.begin() + static_cast<std::ptrdiff_t>(g.preprocess_new_audio_samples));
-    auto mel = preprocess_fixed_audio(state.raw_audio_ring, new_audio);
+    auto mel = preprocess_fixed_audio(state.raw_audio_ring, new_audio, preproc_module);
     return mel.slice(2,
                      g.first_preprocess_mel_frame,
                      g.first_preprocess_mel_frame + g.shift_frames).contiguous();
+  }
+
+  torch::Tensor steady_new_mel(const SessionState& state) const {
+    return steady_new_mel(state, require_preproc());
   }
 
   bool session_ready(const SessionState& state) const {
@@ -2085,6 +2152,18 @@ struct AudioFrontend {
 struct RuntimeAudioFrontend {
   AudioFrontend audio;
 };
+
+static ExecutionContext default_execution_context(AudioFrontend& audio,
+                                                  torch::jit::Module& joint,
+                                                  torch::jit::Module& predict,
+                                                  torch::Device device) {
+  return {
+      c10::cuda::getCurrentCUDAStream(device.index()),
+      joint,
+      predict,
+      audio.require_preproc(),
+  };
+}
 
 static PreprocDeterminismStats run_preproc_determinism_check(const AudioFrontend& audio) {
   std::vector<float> raw_ring(static_cast<size_t>(audio.g.raw_audio_ring_samples), 0.0f);
@@ -2277,14 +2356,15 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
                                             const torch::Tensor& new_mel_in,
                                             torch::jit::Module& enc_first,
                                             AOTIModelPackageLoader& enc_steady,
-                                            torch::jit::Module& joint,
-                                            torch::jit::Module& predict,
+                                            const ExecutionContext& ctx,
                                             torch::Device device,
                                             const Tokenizer& tokenizer,
                                             std::vector<EmittedEvent>& events,
                                             const std::string& label,
                                             MarginStats* margin_stats = nullptr,
                                             CacheOwnershipStats* cache_ownership = nullptr) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("runtime steady chunk outside STREAMING");
   auto new_mel = new_mel_in.to(device).contiguous();
   if (new_mel.size(2) != SHIFT) throw std::runtime_error(label + " runtime new_mel is not SHIFT frames");
@@ -2294,17 +2374,17 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
   std::vector<at::Tensor> out;
   if (expected_first) {
     chunk = new_mel;
-    out = run_first_encoder(enc_first, chunk, state);
+    out = run_first_encoder(enc_first, chunk, state, ctx);
   } else {
     if (!state.ring.defined()) throw std::runtime_error(label + " runtime continuation missing mel ring");
     chunk = torch::cat({state.ring, new_mel}, 2).contiguous();
-    out = run_steady_encoder(enc_steady, chunk, state);
+    out = run_steady_encoder(enc_steady, chunk, state, ctx);
   }
 
   apply_encoder_outputs(state,
                         out,
-                        joint,
-                        predict,
+                        ctx.joint,
+                        ctx.predict,
                         margin_stats,
                         label,
                         nullptr,
@@ -2331,8 +2411,7 @@ static int drain_audio_steady_runtime(SessionState& state,
                                       AudioFrontend& audio,
                                       torch::jit::Module& enc_first,
                                       AOTIModelPackageLoader& enc_steady,
-                                      torch::jit::Module& joint,
-                                      torch::jit::Module& predict,
+                                      const ExecutionContext& ctx,
                                       torch::Device device,
                                       const Tokenizer& tokenizer,
                                       std::vector<EmittedEvent>& events,
@@ -2341,13 +2420,12 @@ static int drain_audio_steady_runtime(SessionState& state,
                                       CacheOwnershipStats* cache_ownership = nullptr) {
   int chunks = 0;
   while (audio.session_ready(state)) {
-    auto new_mel = audio.steady_new_mel(state).to(device).contiguous();
+    auto new_mel = audio.steady_new_mel(state, ctx.preproc).to(device).contiguous();
     run_steady_chunk_tensor_runtime(state,
                                     new_mel,
                                     enc_first,
                                     enc_steady,
-                                    joint,
-                                    predict,
+                                    ctx,
                                     device,
                                     tokenizer,
                                     events,
@@ -2371,8 +2449,7 @@ static int append_pcm_and_drain_runtime(SessionState& state,
                                         AudioFrontend& audio,
                                         torch::jit::Module& enc_first,
                                         AOTIModelPackageLoader& enc_steady,
-                                        torch::jit::Module& joint,
-                                        torch::jit::Module& predict,
+                                        const ExecutionContext& ctx,
                                         torch::Device device,
                                         const Tokenizer& tokenizer,
                                         std::vector<EmittedEvent>& events,
@@ -2390,8 +2467,64 @@ static int append_pcm_and_drain_runtime(SessionState& state,
                                     audio,
                                     enc_first,
                                     enc_steady,
-                                    joint,
-                                    predict,
+                                    ctx,
+                                    device,
+                                    tokenizer,
+                                    events,
+                                    label,
+                                    margin_stats,
+                                    cache_ownership);
+}
+
+static int append_pcm_and_drain_runtime(SessionState& state,
+                                        const std::vector<float>& pcm,
+                                        AudioFrontend& audio,
+                                        torch::jit::Module& enc_first,
+                                        AOTIModelPackageLoader& enc_steady,
+                                        torch::jit::Module& joint,
+                                        torch::jit::Module& predict,
+                                        torch::Device device,
+                                        const Tokenizer& tokenizer,
+                                        std::vector<EmittedEvent>& events,
+                                        const std::string& label,
+                                        MarginStats* margin_stats = nullptr,
+                                        CacheOwnershipStats* cache_ownership = nullptr) {
+  auto ctx = default_execution_context(audio, joint, predict, device);
+  return append_pcm_and_drain_runtime(state,
+                                      pcm,
+                                      audio,
+                                      enc_first,
+                                      enc_steady,
+                                      ctx,
+                                      device,
+                                      tokenizer,
+                                      events,
+                                      label,
+                                      margin_stats,
+                                      cache_ownership);
+}
+
+static int flush_post_stop_audio_runtime(SessionState& state,
+                                         AudioFrontend& audio,
+                                         torch::jit::Module& enc_first,
+                                         AOTIModelPackageLoader& enc_steady,
+                                         const ExecutionContext& ctx,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         const std::string& label,
+                                         MarginStats* margin_stats = nullptr,
+                                         CacheOwnershipStats* cache_ownership = nullptr) {
+  if (state.post_stop_audio.empty()) return 0;
+  std::vector<float> held;
+  held.swap(state.post_stop_audio);
+  state.pending_audio.insert(state.pending_audio.end(), held.begin(), held.end());
+  state.total_audio_samples += static_cast<int64_t>(held.size());
+  return drain_audio_steady_runtime(state,
+                                    audio,
+                                    enc_first,
+                                    enc_steady,
+                                    ctx,
                                     device,
                                     tokenizer,
                                     events,
@@ -2412,28 +2545,64 @@ static int flush_post_stop_audio_runtime(SessionState& state,
                                          const std::string& label,
                                          MarginStats* margin_stats = nullptr,
                                          CacheOwnershipStats* cache_ownership = nullptr) {
-  if (state.post_stop_audio.empty()) return 0;
-  std::vector<float> held;
-  held.swap(state.post_stop_audio);
-  state.pending_audio.insert(state.pending_audio.end(), held.begin(), held.end());
-  state.total_audio_samples += static_cast<int64_t>(held.size());
-  return drain_audio_steady_runtime(state,
-                                    audio,
-                                    enc_first,
-                                    enc_steady,
-                                    joint,
-                                    predict,
-                                    device,
-                                    tokenizer,
-                                    events,
-                                    label,
-                                    margin_stats,
-                                    cache_ownership);
+  auto ctx = default_execution_context(audio, joint, predict, device);
+  return flush_post_stop_audio_runtime(state,
+                                       audio,
+                                       enc_first,
+                                       enc_steady,
+                                       ctx,
+                                       device,
+                                       tokenizer,
+                                       events,
+                                       label,
+                                       margin_stats,
+                                       cache_ownership);
 }
 
 void vad_stop(SessionState& state) {
   if (state.mode == SessionMode::FINALIZED) throw std::runtime_error("vad_stop called after FINALIZED");
   state.mode = SessionMode::PENDING_FINALIZE;
+}
+
+static int vad_start(SessionState& state,
+                     AudioFrontend& audio,
+                     torch::jit::Module& enc_first,
+                     AOTIModelPackageLoader& enc_steady,
+                     const ExecutionContext& ctx,
+                     torch::Device device,
+                     const Tokenizer& tokenizer,
+                     std::vector<EmittedEvent>& events,
+                     const std::string& label,
+                     MarginStats* margin_stats = nullptr,
+                     CacheOwnershipStats* cache_ownership = nullptr) {
+  if (state.mode == SessionMode::PENDING_FINALIZE) {
+    state.mode = SessionMode::STREAMING;
+    return flush_post_stop_audio_runtime(state,
+                                         audio,
+                                         enc_first,
+                                         enc_steady,
+                                         ctx,
+                                         device,
+                                         tokenizer,
+                                         events,
+                                         label,
+                                         margin_stats,
+                                         cache_ownership);
+  }
+  if (state.mode == SessionMode::STREAMING) {
+    return flush_post_stop_audio_runtime(state,
+                                         audio,
+                                         enc_first,
+                                         enc_steady,
+                                         ctx,
+                                         device,
+                                         tokenizer,
+                                         events,
+                                         label,
+                                         margin_stats,
+                                         cache_ownership);
+  }
+  throw std::runtime_error("vad_start called after FINALIZED");
 }
 
 static int vad_start(SessionState& state,
@@ -2448,36 +2617,18 @@ static int vad_start(SessionState& state,
                      const std::string& label,
                      MarginStats* margin_stats = nullptr,
                      CacheOwnershipStats* cache_ownership = nullptr) {
-  if (state.mode == SessionMode::PENDING_FINALIZE) {
-    state.mode = SessionMode::STREAMING;
-    return flush_post_stop_audio_runtime(state,
-                                         audio,
-                                         enc_first,
-                                         enc_steady,
-                                         joint,
-                                         predict,
-                                         device,
-                                         tokenizer,
-                                         events,
-                                         label,
-                                         margin_stats,
-                                         cache_ownership);
-  }
-  if (state.mode == SessionMode::STREAMING) {
-    return flush_post_stop_audio_runtime(state,
-                                         audio,
-                                         enc_first,
-                                         enc_steady,
-                                         joint,
-                                         predict,
-                                         device,
-                                         tokenizer,
-                                         events,
-                                         label,
-                                         margin_stats,
-                                         cache_ownership);
-  }
-  throw std::runtime_error("vad_start called after FINALIZED");
+  auto ctx = default_execution_context(audio, joint, predict, device);
+  return vad_start(state,
+                   audio,
+                   enc_first,
+                   enc_steady,
+                   ctx,
+                   device,
+                   tokenizer,
+                   events,
+                   label,
+                   margin_stats,
+                   cache_ownership);
 }
 
 AudioGeometry session_runtime_audio_geometry_from_bundle(torch::jit::Module& bundle) {
@@ -2521,23 +2672,69 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          RuntimeAudioFrontend& audio,
                                          torch::jit::Module& enc_first,
                                          AOTIModelPackageLoader& enc_steady,
+                                         const ExecutionContext& ctx,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         const std::string& label) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  return append_pcm_and_drain_runtime(state,
+                                      pcm,
+                                      audio.audio,
+                                      enc_first,
+                                      enc_steady,
+                                      ctx,
+                                      device,
+                                      tokenizer,
+                                      events,
+                                      label);
+}
+
+int session_runtime_append_pcm_and_drain(SessionState& state,
+                                         const std::vector<float>& pcm,
+                                         RuntimeAudioFrontend& audio,
+                                         torch::jit::Module& enc_first,
+                                         AOTIModelPackageLoader& enc_steady,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
                                          torch::Device device,
                                          const Tokenizer& tokenizer,
                                          std::vector<EmittedEvent>& events,
                                          const std::string& label) {
-  return append_pcm_and_drain_runtime(state,
-                                      pcm,
-                                      audio.audio,
-                                      enc_first,
-                                      enc_steady,
-                                      joint,
-                                      predict,
-                                      device,
-                                      tokenizer,
-                                      events,
-                                      label);
+  auto ctx = default_execution_context(audio.audio, joint, predict, device);
+  return session_runtime_append_pcm_and_drain(state,
+                                             pcm,
+                                             audio,
+                                             enc_first,
+                                             enc_steady,
+                                             ctx,
+                                             device,
+                                             tokenizer,
+                                             events,
+                                             label);
+}
+
+int session_runtime_vad_start(SessionState& state,
+                              RuntimeAudioFrontend& audio,
+                              torch::jit::Module& enc_first,
+                              AOTIModelPackageLoader& enc_steady,
+                              const ExecutionContext& ctx,
+                              torch::Device device,
+                              const Tokenizer& tokenizer,
+                              std::vector<EmittedEvent>& events,
+                              const std::string& label) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  return vad_start(state,
+                   audio.audio,
+                   enc_first,
+                   enc_steady,
+                   ctx,
+                   device,
+                   tokenizer,
+                   events,
+                   label);
 }
 
 int session_runtime_vad_start(SessionState& state,
@@ -2550,16 +2747,16 @@ int session_runtime_vad_start(SessionState& state,
                               const Tokenizer& tokenizer,
                               std::vector<EmittedEvent>& events,
                               const std::string& label) {
-  return vad_start(state,
-                   audio.audio,
-                   enc_first,
-                   enc_steady,
-                   joint,
-                   predict,
-                   device,
-                   tokenizer,
-                   events,
-                   label);
+  auto ctx = default_execution_context(audio.audio, joint, predict, device);
+  return session_runtime_vad_start(state,
+                                   audio,
+                                   enc_first,
+                                   enc_steady,
+                                   ctx,
+                                   device,
+                                   tokenizer,
+                                   events,
+                                   label);
 }
 
 static int append_audio_and_drain(SessionState& state,
@@ -2607,8 +2804,10 @@ struct FinalizeAudioInputs {
 
 static FinalizeAudioInputs prepare_finalize_inputs_from_audio(const SessionState& parent,
                                                               AudioFrontend& audio,
-                                                              torch::Device device) {
+                                                              torch::Device device,
+                                                              torch::jit::Module* preproc_override = nullptr) {
   FinalizeAudioInputs inputs;
+  torch::jit::Module& preproc_module = preproc_override != nullptr ? *preproc_override : audio.require_preproc();
   std::vector<float> pending = parent.pending_audio;
   if (parent.total_audio_samples > 0) {
     pending.insert(pending.end(),
@@ -2641,7 +2840,7 @@ static FinalizeAudioInputs prepare_finalize_inputs_from_audio(const SessionState
     std::vector<float> new_audio(
         pending.begin(),
         pending.begin() + static_cast<std::ptrdiff_t>(needed_new_samples));
-    auto mel = audio.preprocess_fixed_audio(raw_ring, new_audio);
+    auto mel = audio.preprocess_fixed_audio(raw_ring, new_audio, preproc_module);
     int64_t start = audio.g.first_preprocess_mel_frame;
     new_mels.push_back(mel.slice(2, start, start + frames_this_call).contiguous());
 
@@ -2747,6 +2946,9 @@ static FinalizeOutcome run_finalize(SessionState& parent,
       parent.mode != SessionMode::PENDING_FINALIZE) {
     throw std::runtime_error("true-boundary finalize outside live state");
   }
+  c10::cuda::CUDAGuard device_guard(device.index());
+  auto stream = c10::cuda::getCurrentCUDAStream(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(stream);
   auto snapshot = snapshot_asr(parent);
   parent.mode = SessionMode::FINALIZED;
   snapshot.mode = SessionMode::FINALIZED;
@@ -2782,7 +2984,7 @@ static FinalizeOutcome run_finalize(SessionState& parent,
         fork.clt.contiguous(),
         fork.clcl.contiguous(),
     };
-    auto out = loader_it->second->run(inputs);
+    auto out = run_aoti_loader_on_stream(*loader_it->second, inputs, stream);
     if (out.size() < 2) throw std::runtime_error("finalize AOTI bucket returned fewer than 2 outputs");
     int64_t enc_len = scalar_i64(out[1]);
     if (out.size() >= 5) {
@@ -2831,20 +3033,24 @@ static FinalizeOutcome run_finalize(SessionState& parent,
   return outcome;
 }
 
-static FinalizeOutcome run_finalize_runtime(SessionState& parent,
-                                            const std::string& label,
-                                            std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
-                                            torch::jit::Module& joint,
-                                            torch::jit::Module& predict,
-                                            torch::Device device,
-                                            const Tokenizer& tokenizer,
-                                            std::vector<EmittedEvent>& events,
-                                            FinalizeFinish finish,
-                                            const FinalizeAudioInputs& audio_inputs,
-                                            MarginStats* margin_stats = nullptr) {
+static FinalizeOutcome run_finalize_runtime_on_stream(
+    SessionState& parent,
+    const std::string& label,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    std::vector<EmittedEvent>& events,
+    FinalizeFinish finish,
+    const FinalizeAudioInputs& audio_inputs,
+    c10::cuda::CUDAStream stream,
+    MarginStats* margin_stats = nullptr) {
   if (finish == FinalizeFinish::SPECULATIVE_KEEP && parent.mode != SessionMode::PENDING_FINALIZE) {
     throw std::runtime_error("runtime speculative finalize outside PENDING_FINALIZE");
   }
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(stream);
   auto snapshot = snapshot_asr(parent);
   parent.mode = SessionMode::FINALIZED;
   snapshot.mode = SessionMode::FINALIZED;
@@ -2863,7 +3069,7 @@ static FinalizeOutcome run_finalize_runtime(SessionState& parent,
         fork.clt.contiguous(),
         fork.clcl.contiguous(),
     };
-    auto out = loader_it->second->run(inputs);
+    auto out = run_aoti_loader_on_stream(*loader_it->second, inputs, stream);
     if (out.size() < 2) throw std::runtime_error("runtime finalize AOTI bucket returned fewer than 2 outputs");
     int64_t enc_len = scalar_i64(out[1]);
     if (out.size() >= 5) {
@@ -2909,6 +3115,69 @@ static FinalizeOutcome run_finalize_runtime(SessionState& parent,
   return outcome;
 }
 
+static FinalizeOutcome run_finalize_runtime(
+    SessionState& parent,
+    const std::string& label,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    torch::jit::Module& joint,
+    torch::jit::Module& predict,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    std::vector<EmittedEvent>& events,
+    FinalizeFinish finish,
+    const FinalizeAudioInputs& audio_inputs,
+    MarginStats* margin_stats = nullptr) {
+  return run_finalize_runtime_on_stream(parent,
+                                        label,
+                                        finalize_loaders,
+                                        joint,
+                                        predict,
+                                        device,
+                                        tokenizer,
+                                        events,
+                                        finish,
+                                        audio_inputs,
+                                        c10::cuda::getCurrentCUDAStream(device.index()),
+                                        margin_stats);
+}
+
+FinalizeOutcome session_runtime_finalize(
+    SessionState& state,
+    torch::jit::Module& bundle,
+    RuntimeAudioFrontend& audio,
+    std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+    const ExecutionContext& ctx,
+    torch::Device device,
+    const Tokenizer& tokenizer,
+    std::vector<EmittedEvent>& events,
+    FinalizeFinish finish,
+    const std::string& label) {
+  c10::cuda::CUDAGuard device_guard(device.index());
+  c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET && !state.post_stop_audio.empty()) {
+    state.pending_audio.insert(state.pending_audio.end(), state.post_stop_audio.begin(), state.post_stop_audio.end());
+    state.total_audio_samples += static_cast<int64_t>(state.post_stop_audio.size());
+    state.post_stop_audio.clear();
+  }
+  FinalizeAudioInputs audio_inputs = prepare_finalize_inputs_from_audio(state, audio.audio, device, &ctx.preproc);
+  auto outcome = run_finalize_runtime_on_stream(state,
+                                                label,
+                                                finalize_loaders,
+                                                ctx.joint,
+                                                ctx.predict,
+                                                device,
+                                                tokenizer,
+                                                events,
+                                                finish,
+                                                audio_inputs,
+                                                ctx.stream,
+                                                &audio.audio.margin_stats);
+  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET) {
+    cold_reset_after_finalize(state, bundle, device, &audio.audio.g);
+  }
+  return outcome;
+}
+
 FinalizeOutcome session_runtime_finalize(
     SessionState& state,
     torch::jit::Module& bundle,
@@ -2921,27 +3190,17 @@ FinalizeOutcome session_runtime_finalize(
     std::vector<EmittedEvent>& events,
     FinalizeFinish finish,
     const std::string& label) {
-  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET && !state.post_stop_audio.empty()) {
-    state.pending_audio.insert(state.pending_audio.end(), state.post_stop_audio.begin(), state.post_stop_audio.end());
-    state.total_audio_samples += static_cast<int64_t>(state.post_stop_audio.size());
-    state.post_stop_audio.clear();
-  }
-  FinalizeAudioInputs audio_inputs = prepare_finalize_inputs_from_audio(state, audio.audio, device);
-  auto outcome = run_finalize_runtime(state,
-                                      label,
-                                      finalize_loaders,
-                                      joint,
-                                      predict,
-                                      device,
-                                      tokenizer,
-                                      events,
-                                      finish,
-                                      audio_inputs,
-                                      &audio.audio.margin_stats);
-  if (finish == FinalizeFinish::TRUE_BOUNDARY_COLD_RESET) {
-    cold_reset_after_finalize(state, bundle, device, &audio.audio.g);
-  }
-  return outcome;
+  auto ctx = default_execution_context(audio.audio, joint, predict, device);
+  return session_runtime_finalize(state,
+                                  bundle,
+                                  audio,
+                                  finalize_loaders,
+                                  ctx,
+                                  device,
+                                  tokenizer,
+                                  events,
+                                  finish,
+                                  label);
 }
 
 static bool equal_one_text_from_bundle(torch::jit::Module& bundle,

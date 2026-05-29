@@ -1,5 +1,6 @@
 #pragma once
 
+#include <c10/cuda/CUDAStream.h>
 #include <torch/script.h>
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
 
@@ -221,6 +222,13 @@ struct RuntimeAudioFrontend;
 using RuntimeAudioFrontendDeleter = void (*)(RuntimeAudioFrontend*);
 using RuntimeAudioFrontendPtr = std::unique_ptr<RuntimeAudioFrontend, RuntimeAudioFrontendDeleter>;
 
+struct ExecutionContext {
+  c10::cuda::CUDAStream stream;
+  torch::jit::Module& joint;
+  torch::jit::Module& predict;
+  torch::jit::Module& preproc;
+};
+
 int session_main_entrypoint(int argc, char** argv);
 
 bool file_exists(const std::string& path);
@@ -287,6 +295,14 @@ BucketConstants constants_for_bucket(const std::unordered_map<std::string, at::T
 std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
                                           const torch::Tensor& chunk,
                                           SessionState& state);
+std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
+                                          const torch::Tensor& chunk,
+                                          SessionState& state,
+                                          c10::cuda::CUDAStream stream);
+std::vector<at::Tensor> run_first_encoder(torch::jit::Module& enc_first,
+                                          const torch::Tensor& chunk,
+                                          SessionState& state,
+                                          const ExecutionContext& ctx);
 void vad_stop(SessionState& state);
 void verify_session_bundle_meta(torch::jit::Module& bundle, bool multiturn);
 AudioGeometry session_runtime_audio_geometry_from_bundle(torch::jit::Module& bundle);
@@ -308,6 +324,16 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const Tokenizer& tokenizer,
                                          std::vector<EmittedEvent>& events,
                                          const std::string& label);
+int session_runtime_append_pcm_and_drain(SessionState& state,
+                                         const std::vector<float>& pcm,
+                                         RuntimeAudioFrontend& audio,
+                                         torch::jit::Module& enc_first,
+                                         AOTIModelPackageLoader& enc_steady,
+                                         const ExecutionContext& ctx,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         const std::string& label);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
@@ -318,12 +344,31 @@ int session_runtime_vad_start(SessionState& state,
                               const Tokenizer& tokenizer,
                               std::vector<EmittedEvent>& events,
                               const std::string& label);
+int session_runtime_vad_start(SessionState& state,
+                              RuntimeAudioFrontend& audio,
+                              torch::jit::Module& enc_first,
+                              AOTIModelPackageLoader& enc_steady,
+                              const ExecutionContext& ctx,
+                              torch::Device device,
+                              const Tokenizer& tokenizer,
+                              std::vector<EmittedEvent>& events,
+                              const std::string& label);
 FinalizeOutcome session_runtime_finalize(SessionState& state,
                                          torch::jit::Module& bundle,
                                          RuntimeAudioFrontend& audio,
                                          std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         FinalizeFinish finish,
+                                         const std::string& label);
+FinalizeOutcome session_runtime_finalize(SessionState& state,
+                                         torch::jit::Module& bundle,
+                                         RuntimeAudioFrontend& audio,
+                                         std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
+                                         const ExecutionContext& ctx,
                                          torch::Device device,
                                          const Tokenizer& tokenizer,
                                          std::vector<EmittedEvent>& events,

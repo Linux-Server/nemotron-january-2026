@@ -4,6 +4,7 @@
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cuda_runtime_api.h>
 
 #include <algorithm>
 #include <chrono>
@@ -32,6 +33,16 @@ using FinalizeBucketKey = std::pair<int64_t, int64_t>;
 class InferenceExecutor;
 
 thread_local InferenceExecutor* current_inference_executor = nullptr;
+
+void runtime_cuda_check(cudaError_t err, const char* expr) {
+  if (err == cudaSuccess) return;
+  throw std::runtime_error(std::string(expr) + " failed: " + cudaGetErrorString(err));
+}
+
+void runtime_cuda_warn(cudaError_t err, const char* expr) noexcept {
+  if (err == cudaSuccess) return;
+  std::fprintf(stderr, "%s failed during cleanup: %s\n", expr, cudaGetErrorString(err));
+}
 
 class InferenceExecutor {
  public:
@@ -511,10 +522,53 @@ struct SessionRuntime::Impl {
         finalize_silence_ms(validate_finalize_silence_ms(cfg.finalize_silence_ms)),
         audio(nullptr, nullptr) {
     auto& s = *shared.impl_;
-    torch::NoGradGuard ng;
-    reset_session(state, s.bundle, s.device);
-    audio = make_session_runtime_audio_frontend(s.bundle, s.preproc, s.device);
-    reset_session_runtime_audio_front(state, *audio);
+    create_stream(s.device.index());
+    try {
+      torch::NoGradGuard ng;
+      c10::cuda::CUDAGuard device_guard(s.device.index());
+      c10::cuda::CUDAStreamGuard stream_guard(session_stream());
+      reset_session(state, s.bundle, s.device);
+      audio = make_session_runtime_audio_frontend(s.bundle, s.preproc, s.device);
+      reset_session_runtime_audio_front(state, *audio);
+    } catch (...) {
+      destroy_stream();
+      throw;
+    }
+  }
+
+  ~Impl() {
+    destroy_stream();
+  }
+
+  void create_stream(int device_index) {
+    stream_device_index = device_index;
+    c10::cuda::CUDAGuard device_guard(device_index);
+    runtime_cuda_check(cudaStreamCreateWithFlags(&raw_stream, cudaStreamNonBlocking),
+                       "cudaStreamCreateWithFlags(session)");
+    stream.emplace(c10::cuda::getStreamFromExternal(raw_stream, device_index));
+  }
+
+  c10::cuda::CUDAStream session_stream() const {
+    if (!stream.has_value()) throw std::runtime_error("session CUDA stream has not been initialized");
+    return *stream;
+  }
+
+  ExecutionContext execution_context() const {
+    auto& s = *shared.impl_;
+    return {session_stream(), s.joint, s.predict, s.preproc};
+  }
+
+  void synchronize_session_stream() const {
+    runtime_cuda_check(cudaStreamSynchronize(session_stream().stream()), "cudaStreamSynchronize(session)");
+  }
+
+  void destroy_stream() noexcept {
+    if (raw_stream == nullptr) return;
+    c10::cuda::CUDAGuard device_guard(stream_device_index);
+    runtime_cuda_warn(cudaStreamSynchronize(raw_stream), "cudaStreamSynchronize(session)");
+    runtime_cuda_warn(cudaStreamDestroy(raw_stream), "cudaStreamDestroy(session)");
+    raw_stream = nullptr;
+    stream.reset();
   }
 
   std::vector<WireEvent> append_pcm(const PCMFrame& frame) {
@@ -522,17 +576,18 @@ struct SessionRuntime::Impl {
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
     s.inference_executor.run([&]() {
+      auto ctx = execution_context();
       session_runtime_append_pcm_and_drain(state,
                                            pcm,
                                            *audio,
                                            s.enc_first,
                                            *s.enc_steady,
-                                           s.joint,
-                                           s.predict,
+                                           ctx,
                                            s.device,
                                            s.tokenizer_value,
                                            events,
                                            cfg.label + ".append");
+      synchronize_session_stream();
     });
     debug_events.insert(debug_events.end(), events.begin(), events.end());
     return project_events(events, std::nullopt);
@@ -545,16 +600,17 @@ struct SessionRuntime::Impl {
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
     s.inference_executor.run([&]() {
+      auto ctx = execution_context();
       session_runtime_vad_start(state,
                                 *audio,
                                 s.enc_first,
                                 *s.enc_steady,
-                                s.joint,
-                                s.predict,
+                                ctx,
                                 s.device,
                                 s.tokenizer_value,
                                 events,
                                 cfg.label + ".vad_start");
+      synchronize_session_stream();
     });
     debug_events.insert(debug_events.end(), events.begin(), events.end());
   }
@@ -612,17 +668,19 @@ struct SessionRuntime::Impl {
       timing.inference_lock_acquire_wait_ms =
           std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - executor_wait_start).count();
-      return session_runtime_finalize(state,
-                                      s.bundle,
-                                      *audio,
-                                      s.finalize_loaders,
-                                      s.joint,
-                                      s.predict,
-                                      s.device,
-                                      s.tokenizer_value,
-                                      events,
-                                      finish,
-                                      cfg.label + ".finalize");
+      auto ctx = execution_context();
+      auto result = session_runtime_finalize(state,
+                                             s.bundle,
+                                             *audio,
+                                             s.finalize_loaders,
+                                             ctx,
+                                             s.device,
+                                             s.tokenizer_value,
+                                             events,
+                                             finish,
+                                             cfg.label + ".finalize");
+      synchronize_session_stream();
+      return result;
     });
     timing.fork_flush_done_ts = unix_now_seconds();
     timing.final_sent_ts = unix_now_seconds();
@@ -651,6 +709,9 @@ struct SessionRuntime::Impl {
   const SharedRuntime& shared;
   SessionConfig cfg;
   int finalize_silence_ms = 0;
+  cudaStream_t raw_stream = nullptr;
+  int stream_device_index = 0;
+  std::optional<c10::cuda::CUDAStream> stream;
   SessionState state;
   RuntimeAudioFrontendPtr audio;
   VadState vad_state = VadState::IDLE;
