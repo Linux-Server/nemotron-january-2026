@@ -175,7 +175,7 @@ its failure is documented as an INTEGRATION regression to fix (most likely by am
 lifecycle wiring), NOT as un-marking prior steps.** Steps 8-10 stay `[x]` based on their per-step
 bars; Step 11 stays `[!]` until the integration passes.
 
-- [ ] **1. server.py protocol audit → `reviews/server-py-protocol-audit.md`** (PAIRED REVIEW)
+- [x] **1. server.py protocol audit → `reviews/server-py-protocol-audit.md`** (PAIRED REVIEW)
   Line-by-line read of `src/nemotron_speech/server.py`. Produce a canonical protocol-compatibility
   table covering: HTTP routes (`/health` exact JSON shape; `/stats` exact shape; query params),
   WS handshake header validation (`?model`, `?language` validation + invalid-value behavior — HTTP
@@ -458,7 +458,7 @@ bars; Step 11 stays `[!]` until the integration passes.
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 1 | server.py protocol audit | pending | — | PAIRED. Markdown-only; no code. Drives all subsequent contract decisions. |
+| 1 | server.py protocol audit | done | c422e7a | PAIRED. Codex draft (527 lines) + Opus parallel pass — no disagreements. 6 explicit v5-architecture deviations flagged: /health enum (2 vs 4 values), finalize_silence_ms default 150 vs 0, no NEMOTRON_VAD_WARMUP_MS, post-handshake 1013 vs pre-handshake 503, no Python emits 1003/1008/1011, **finalize_timing wire = 9 RAW timing keys NOT 5 derived SLO metrics**. Codex log: codex-jobs/step-01-server-py-audit-bkddcxjjd.log. |
 | 2 | Dockerfile libssl-dev + vendor nlohmann::json + picohttpparser | pending | — | Opus review. Small Dockerfile + 2 vendored single-headers. |
 | 3 | CMakeLists library carve + density_main migration | pending | — | PAIRED. Major refactor; smokes MUST stay green. Discard v1 ws_server.cpp; salvage only mechanical pieces. |
 | 4 | SessionRuntime + SharedRuntime + concrete public DTOs | pending | — | Opus review. Static-global ownership transfer per v4 §II 1.5. |
