@@ -1,0 +1,16 @@
+{
+  "instance_id": "i-0e2e61f9081de0e35",
+  "ip": "52.25.181.236",
+  "region": "us-west-2",
+  "key": "ec2-bench/nemotron-bench-key.pem",
+  "itype": "g6.4xlarge",
+  "user": "ubuntu",
+  "state": "terminated",
+  "name": "nemotron-bench-b3-fu5-l4",
+  "launch_time": "2026-05-28T21:51:12+00:00",
+  "guest_shutdown_requested_time_approx": "2026-05-29T00:14Z",
+  "aws_termination_confirmed": true,
+  "terminate_timestamp_utc": "2026-05-29T00:32:26Z",
+  "terminate_method": "user_sso_refresh_then_aws_cli",
+  "notes": "Final terminate landed 2026-05-29T00:32:26Z after user-supplied SSO refresh; instance had been in stopped state from guest shutdown 2026-05-29T00:14Z until then. EBS billed for ~18min of stopped state between guest shutdown and terminate."
+}
