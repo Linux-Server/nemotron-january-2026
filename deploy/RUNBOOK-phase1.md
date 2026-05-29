@@ -210,6 +210,8 @@ Provision each backend with both a unique `NEMOTRON_EC2_NAME` and a unique
 `NEMOTRON_EC2_STATE`. The name prevents `ec2_up.py` from reusing another box,
 and the state file keeps later commands unambiguous.
 
+**On-demand (the recommended default at any cluster size):**
+
 ```bash
 source .venv-deploy/bin/activate
 for n in $(seq 1 "$BOX_COUNT"); do
@@ -219,6 +221,34 @@ for n in $(seq 1 "$BOX_COUNT"); do
   python ec2-bench/ec2_up.py
 done
 ```
+
+**Spot (optional, ~35% cheaper but flaky):** set `NEMOTRON_EC2_SPOT=1`. The
+script falls back across AZs the same way as on-demand, but real-world spot
+availability for g6e.4xlarge is very capacity-constrained — multiple recent
+attempts (2026-05-29) hit `InsufficientInstanceCapacity` in every AZ even with
+default spot pricing. Spot quota for G & VT vCPUs also defaults to a small
+number (e.g. 64 vCPUs = 4 g6e.4xlarge boxes max), so check the quota first:
+
+```bash
+aws service-quotas get-service-quota --service-code ec2 \
+  --quota-code L-3819A6DF \
+  --query 'Quota.Value' --output text
+# Compare to BOX_COUNT × 16 vCPU.
+
+# Then try spot:
+for n in $(seq 1 "$BOX_COUNT"); do
+  NEMOTRON_EC2_ITYPE=g6e.4xlarge \
+  NEMOTRON_EC2_NAME="nemotron-asr-box$n" \
+  NEMOTRON_EC2_STATE=".instance_box$n.json" \
+  NEMOTRON_EC2_SPOT=1 \
+  python ec2-bench/ec2_up.py
+done
+```
+
+Recommended fallback pattern: try spot first; if any box returns "no
+g6e.4xlarge capacity in any AZ", re-run that box's command without
+`NEMOTRON_EC2_SPOT=1` to get on-demand. The on-demand G quota default is
+much larger (e.g. 768 vCPUs = 48 boxes).
 
 Expected output shape for each box:
 
@@ -675,8 +705,14 @@ Install LB prerequisites:
 
 ```bash
 ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@${LB_PUB_IP}" <<'REMOTE'
+# NB: apt-get update is intentionally NOT under `set -e`. On the DLAMI, the
+# bundled CUDA repos sometimes register duplicate Translations/Packages targets,
+# which makes apt-get update emit warnings and exit nonzero. With set -e
+# active, the whole heredoc aborts before haproxy/socat install — observed
+# twice during 2026-05-28/29 LB provisioning. Run update separately and
+# tolerate its rc, then proceed under set -e for the install steps.
+sudo apt-get update -qq || true
 set -euo pipefail
-sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y haproxy socat python3 jq unzip curl
 if ! command -v aws >/dev/null 2>&1 || ! aws --version 2>&1 | grep -q 'aws-cli/2'; then
   curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
@@ -816,6 +852,118 @@ ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@${LB_PUB_IP}" \
 
 Expected output: no output and existing WebSocket streams remain connected. Use
 `reload`, not `restart`.
+
+## (4b) Stable LB Endpoint via Elastic IP
+
+By default the LB instance's public IP is auto-assigned and is **released
+when the instance is stopped or terminated**. For any client that hardcodes
+the LB URL — including a DNS record at daily.co — this is the wrong default.
+Allocate an Elastic IP and associate it with the LB before publishing the
+endpoint. Once attached, the EIP follows the instance through stop/start
+(needed for the resize in section 4c), and survives a terminate-and-replace
+of the LB instance (re-associate with the new instance).
+
+EIPs are **free while associated** with a running instance and accrue
+roughly `$3.60/month` when sitting unassociated.
+
+```bash
+LB_ID=$(jq -r .instance_id ec2-bench/.instance_lb.json)
+
+# Allocate-or-reuse, by Name tag (idempotent across re-runs)
+ALLOC=$(aws ec2 describe-addresses \
+  --filters Name=tag:Name,Values=nemotron-asr-lb-eip \
+  --query 'Addresses[0].AllocationId' --output text 2>/dev/null)
+if [ -z "$ALLOC" ] || [ "$ALLOC" = None ]; then
+  ALLOC=$(aws ec2 allocate-address --domain vpc \
+    --tag-specifications 'ResourceType=elastic-ip,Tags=[{Key=Name,Value=nemotron-asr-lb-eip}]' \
+    --query AllocationId --output text)
+  echo "[eip] allocated $ALLOC"
+else
+  echo "[eip] reused $ALLOC"
+fi
+
+# Associate with the LB instance (the existing auto-assigned IP is released)
+aws ec2 associate-address --allocation-id "$ALLOC" --instance-id "$LB_ID" \
+  --query AssociationId --output text
+
+# Verify + persist the new IP into the local state file so subsequent
+# commands and clients use it.
+NEW_IP=$(aws ec2 describe-instances --instance-ids "$LB_ID" \
+  --query 'Reservations[].Instances[].PublicIpAddress' --output text)
+echo "[eip] LB public IP is now $NEW_IP"
+TMP=$(mktemp); jq --arg ip "$NEW_IP" '.ip = $ip' ec2-bench/.instance_lb.json > "$TMP" \
+  && mv "$TMP" ec2-bench/.instance_lb.json
+```
+
+Expected behaviour: a brief WebSocket disconnect window (single-digit
+seconds) while AWS releases the old IP and routes the new one. Existing
+streams drop and must reconnect; the LB SG ingress rules and backend SG are
+unaffected.
+
+After this section, smoke (section 5) uses `ws://$NEW_IP:8080`. If you also
+plan to publish a DNS name, add an `A` record at daily.co pointing to the
+EIP — see DEPLOYMENT.md for the broader DNS+TLS path.
+
+Rollback: `aws ec2 disassociate-address --association-id <assoc-id>` and the
+LB falls back to a fresh auto-assigned public IP. Release the EIP with
+`aws ec2 release-address --allocation-id "$ALLOC"` if you want to stop the
+idle-allocation charge.
+
+## (4c) Resizing the LB without losing the EIP
+
+At cluster sizes around 24+ backends, t3.medium's 2 vCPU and 4 GiB may feel
+tight under sustained load. With section 4b's EIP attached, you can bump
+the LB instance type without changing the URL — the EIP and private IP both
+follow the instance through stop/start.
+
+```bash
+LB_ID=$(jq -r .instance_id ec2-bench/.instance_lb.json)
+NEW_TYPE=t3.xlarge   # or t3.large; pick based on observed CPU under target conc
+
+aws ec2 stop-instances --instance-ids "$LB_ID" --query 'StoppingInstances[0].CurrentState.Name' --output text
+aws ec2 wait instance-stopped --instance-ids "$LB_ID"
+
+aws ec2 modify-instance-attribute --instance-id "$LB_ID" --instance-type "Value=$NEW_TYPE"
+
+aws ec2 start-instances --instance-ids "$LB_ID" --query 'StartingInstances[0].CurrentState.Name' --output text
+aws ec2 wait instance-running --instance-ids "$LB_ID"
+
+# Verify type + IPs + that HAProxy auto-recovered
+aws ec2 describe-instances --instance-ids "$LB_ID" \
+  --query 'Reservations[].Instances[].[InstanceType,PublicIpAddress,PrivateIpAddress,State.Name]' \
+  --output table
+
+# Update local state's itype field
+TMP=$(mktemp); jq --arg t "$NEW_TYPE" '.itype = $t' ec2-bench/.instance_lb.json > "$TMP" \
+  && mv "$TMP" ec2-bench/.instance_lb.json
+```
+
+Expected behaviour: ~60 seconds of LB downtime (stop ~30s + start ~20s +
+boot/HAProxy auto-start ~10s). HAProxy starts on boot because
+`systemctl enable --now haproxy` was set in section 4. Verify it came up
+and all backends rejoined:
+
+```bash
+LB_PUB_IP=$(jq -r .ip ec2-bench/.instance_lb.json)
+KEY=ec2-bench/nemotron-bench-key.pem
+ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@${LB_PUB_IP}" \
+  "echo 'show stat' | sudo socat /run/haproxy/admin.sock stdio | \
+   awk -F, '\$1==\"asr_pool\" && \$2!=\"BACKEND\" {printf \"  %-22s %s\n\", \$2, \$18}'"
+```
+
+Expected output: all N backends with status `UP` within ~5 seconds of
+HAProxy starting.
+
+Instance-type guidance from 2026-05-29 measurements at the 50-conc / 4-box
+scale:
+
+- `t3.medium` (2 vCPU, 4 GiB): fine up to ~50 conc through ~4-5 boxes.
+- `t3.large` (2 vCPU, 8 GiB): same vCPU but ~50% more baseline CPU credit
+  budget — better for sustained load, not more cores.
+- `t3.xlarge` (4 vCPU, 16 GiB): doubled cores — recommended floor for any
+  cluster going above 100-conc or 12+ backends. HAProxy at this scale
+  rarely saturates a single core, but ssh/socat-based ops tooling and
+  syslog have headroom.
 
 ## (5) End-to-End Smoke Through the LB
 
