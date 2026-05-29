@@ -85,23 +85,39 @@ else:
 
     ami, aminame = find_ami()
     print(f"[ami] {ami}  {aminame}")
+    # NEMOTRON_EC2_SPOT=1 requests a one-time spot instance with no max price
+    # (defaults to on-demand ceiling per AWS). For multi-box clusters where
+    # losing 1 box to spot interruption is acceptable, this saves ~35% on g6e.
+    USE_SPOT = os.environ.get("NEMOTRON_EC2_SPOT", "") == "1"
+    market_opts = ({"MarketType": "spot",
+                    "SpotOptions": {"SpotInstanceType": "one-time",
+                                    "InstanceInterruptionBehavior": "terminate"}}
+                   if USE_SPOT else None)
+    if USE_SPOT:
+        print(f"[launch] SPOT requested (NEMOTRON_EC2_SPOT=1)")
+
     inst = None
     last_err = None
     for s in cand_subnets:
         subnet = s["SubnetId"]; az = s.get("AvailabilityZone", "?")
         print(f"[launch] {ITYPE} {REGION} az={az} vpc={vpc} subnet={subnet} sg={sg} ...")
         try:
-            r = ec2.run_instances(
+            kwargs = dict(
                 ImageId=ami, InstanceType=ITYPE, KeyName=KEY, MinCount=1, MaxCount=1,
                 NetworkInterfaces=[{"DeviceIndex": 0, "AssociatePublicIpAddress": True,
                                     "Groups": [sg], "SubnetId": subnet}],
                 BlockDeviceMappings=[{"DeviceName": "/dev/sda1",
                                       "Ebs": {"VolumeSize": 200, "VolumeType": "gp3", "DeleteOnTermination": True}}],
                 TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": NAME}]}])
+            if market_opts is not None:
+                kwargs["InstanceMarketOptions"] = market_opts
+            r = ec2.run_instances(**kwargs)
             inst = r["Instances"][0]
             break
         except ClientError as e:
-            if "InsufficientInstanceCapacity" in str(e) or "Unsupported" in str(e):
+            msg = str(e)
+            if ("InsufficientInstanceCapacity" in msg or "Unsupported" in msg
+                or "SpotMaxPriceTooLow" in msg or "MaxSpotInstanceCountExceeded" in msg):
                 print(f"[launch] az={az} no capacity ({type(e).__name__}); trying next AZ ...")
                 last_err = e
                 continue
