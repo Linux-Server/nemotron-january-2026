@@ -205,6 +205,8 @@ struct BucketManifest {
   std::vector<ManifestBucket> buckets;
 };
 
+enum class ManifestShaVerifyMode { StartupCheap, Full };
+
 struct BucketConstants {
   std::unordered_map<std::string, at::Tensor> values;
   size_t direct_matches = 0;
@@ -320,10 +322,13 @@ void cold_reset_after_finalize(SessionState& state,
 std::string sha256_file(const std::string& path);
 std::map<std::pair<int64_t, int64_t>, std::string> discover_finalize_buckets(const std::string& buckets_dir);
 BucketManifest load_bucket_manifest(const std::string& manifest_path);
+ManifestShaVerifyMode manifest_sha_verify_mode_from_env();
+const char* manifest_sha_verify_mode_name(ManifestShaVerifyMode mode);
 void verify_bucket_manifest(const BucketManifest& manifest,
                             const std::map<std::pair<int64_t, int64_t>, std::string>& discovered,
                             const std::string& buckets_dir,
-                            const std::string& shared_weights_pt);
+                            const std::string& shared_weights_pt,
+                            ManifestShaVerifyMode sha_mode = manifest_sha_verify_mode_from_env());
 std::unordered_map<std::string, at::Tensor> load_shared_constants(const std::string& weights_path,
                                                                   torch::Device device);
 BucketConstants constants_for_bucket(const std::unordered_map<std::string, at::Tensor>& shared_constants,

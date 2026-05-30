@@ -369,6 +369,8 @@ struct BucketManifest {
   std::vector<ManifestBucket> buckets;
 };
 
+enum class ManifestShaVerifyMode { StartupCheap, Full };
+
 struct Sha256Ctx {
   std::array<uint8_t, 64> data{};
   uint32_t datalen = 0;
@@ -491,6 +493,36 @@ static const char* mode_name(SessionMode mode) {
     case SessionMode::FINALIZED: return "FINALIZED";
   }
   return "UNKNOWN";
+}
+
+ManifestShaVerifyMode manifest_sha_verify_mode_from_env() {
+  const char* raw = std::getenv("NEMOTRON_WS_VERIFY_MANIFEST_SHA");
+  if (raw == nullptr || raw[0] == '\0') return ManifestShaVerifyMode::StartupCheap;
+  std::string value(raw);
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  if (value == "full" || value == "exhaustive" || value == "1" || value == "true" || value == "yes") {
+    return ManifestShaVerifyMode::Full;
+  }
+  if (value == "cheap" || value == "startup-cheap" || value == "off" || value == "0" ||
+      value == "false" || value == "no") {
+    return ManifestShaVerifyMode::StartupCheap;
+  }
+  throw std::runtime_error("NEMOTRON_WS_VERIFY_MANIFEST_SHA must be unset, cheap/off, or full: " +
+                           std::string(raw));
+}
+
+const char* manifest_sha_verify_mode_name(ManifestShaVerifyMode mode) {
+  switch (mode) {
+    case ManifestShaVerifyMode::StartupCheap: return "startup-cheap";
+    case ManifestShaVerifyMode::Full: return "full";
+  }
+  return "unknown";
+}
+
+static bool manifest_sha_verify_full(ManifestShaVerifyMode mode) {
+  return mode == ManifestShaVerifyMode::Full;
 }
 
 static bool tensor_storage_alias(const torch::Tensor& lhs, const torch::Tensor& rhs) {
@@ -1527,7 +1559,8 @@ static void require_contract_eq(const char* name, int64_t actual, int64_t expect
 void verify_bucket_manifest(const BucketManifest& manifest,
                                    const std::map<std::pair<int64_t, int64_t>, std::string>& discovered,
                                    const std::string& buckets_dir,
-                                   const std::string& shared_weights_pt) {
+                                   const std::string& shared_weights_pt,
+                                   ManifestShaVerifyMode sha_mode) {
   const auto& c = manifest.contract;
   if (c.model_id != MODEL_ID) {
     throw std::runtime_error("manifest CONTRACT model_id mismatch: " + c.model_id);
@@ -1546,13 +1579,19 @@ void verify_bucket_manifest(const BucketManifest& manifest,
   if (!file_exists(shared_weights_pt)) {
     throw std::runtime_error("manifest requires shared weights .pt but file is missing: " + shared_weights_pt);
   }
-  std::string weights_sha = sha256_file(shared_weights_pt);
-  if (weights_sha != c.weights_sha256) {
-    throw std::runtime_error("shared weights sha256 mismatch: manifest=" + c.weights_sha256 + " actual=" + weights_sha);
+  const bool full_sha_verify = manifest_sha_verify_full(sha_mode);
+  std::string weights_sha = "skipped";
+  if (full_sha_verify) {
+    weights_sha = sha256_file(shared_weights_pt);
+    if (weights_sha != c.weights_sha256) {
+      throw std::runtime_error("shared weights sha256 mismatch: manifest=" + c.weights_sha256 +
+                               " actual=" + weights_sha);
+    }
   }
 
   std::set<std::pair<int64_t, int64_t>> manifest_keys;
   std::set<std::string> manifest_pkgs;
+  size_t package_verified = 0;
   for (const auto& b : manifest.buckets) {
     if (!manifest_keys.emplace(b.drop, b.T).second) {
       throw std::runtime_error("duplicate manifest bucket key drop=" + std::to_string(b.drop) +
@@ -1579,6 +1618,7 @@ void verify_bucket_manifest(const BucketManifest& manifest,
       throw std::runtime_error("bucket sha256 mismatch for " + b.pkg +
                                ": manifest=" + b.pkg_sha256 + " actual=" + actual_sha);
     }
+    ++package_verified;
   }
 
   for (const auto& kv : discovered) {
@@ -1586,6 +1626,12 @@ void verify_bucket_manifest(const BucketManifest& manifest,
       throw std::runtime_error("bucket file is not listed in manifest: " + kv.second);
     }
   }
+  std::printf("finalize bucket manifest SHA mode: env=NEMOTRON_WS_VERIFY_MANIFEST_SHA mode=%s "
+              "shared_weights_sha256=%s package_verified=%zu buckets=%zu\n",
+              manifest_sha_verify_mode_name(sha_mode),
+              weights_sha.c_str(),
+              package_verified,
+              manifest.buckets.size());
 }
 
 std::unordered_map<std::string, at::Tensor> load_shared_constants(const std::string& weights_path,
@@ -1672,7 +1718,8 @@ load_finalize_bucket_loaders(const std::string& dir, torch::Device device) {
     throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
   }
   auto manifest = load_bucket_manifest(manifest_path);
-  verify_bucket_manifest(manifest, bucket_paths, buckets_dir, shared_weights_pt);
+  const ManifestShaVerifyMode sha_mode = manifest_sha_verify_mode_from_env();
+  verify_bucket_manifest(manifest, bucket_paths, buckets_dir, shared_weights_pt, sha_mode);
   std::printf("finalize manifest verified: %zu buckets, weights_sha256=%s\n",
               manifest.buckets.size(), manifest.contract.weights_sha256.c_str());
 

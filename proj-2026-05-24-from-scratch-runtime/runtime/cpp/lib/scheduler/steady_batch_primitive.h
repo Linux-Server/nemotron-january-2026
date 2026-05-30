@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
@@ -51,6 +53,32 @@ using runtime_io::json_value_for_key;
 using runtime_io::read_text_file;
 using runtime_io::sha256_file;
 using runtime_io::skip_ws;
+
+static inline std::string lowercase_ascii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+static inline bool manifest_sha_full_verify_enabled() {
+  const char* raw = std::getenv("NEMOTRON_WS_VERIFY_MANIFEST_SHA");
+  if (raw == nullptr || raw[0] == '\0') return false;
+  std::string value = lowercase_ascii(raw);
+  if (value == "full" || value == "exhaustive" || value == "1" || value == "true" || value == "yes") {
+    return true;
+  }
+  if (value == "cheap" || value == "startup-cheap" || value == "off" || value == "0" ||
+      value == "false" || value == "no") {
+    return false;
+  }
+  throw std::runtime_error("NEMOTRON_WS_VERIFY_MANIFEST_SHA must be unset, cheap/off, or full: " +
+                           std::string(raw));
+}
+
+static inline const char* manifest_sha_mode_name(bool full_sha_verify) {
+  return full_sha_verify ? "full" : "startup-cheap";
+}
 
 static inline std::vector<ManifestBucket> load_manifest_buckets(const std::string& manifest_path) {
   std::string text = read_text_file(manifest_path);
@@ -189,7 +217,7 @@ class BatchedSteadyLoaderSet {
     if (!bsteady_detail::file_exists(shared_weights_ts_)) {
       throw std::runtime_error("batched steady shared weights missing: " + shared_weights_ts_);
     }
-    verify_manifest(manifest_verify_buckets);
+    verify_manifest(manifest_verify_buckets, borrowed_shared_constants != nullptr);
     if (cold_phase) cold_phase("scheduler_manifest_verify");
     if (borrowed_shared_constants != nullptr) {
       if (borrowed_shared_constants->empty()) {
@@ -314,7 +342,7 @@ class BatchedSteadyLoaderSet {
     return *shared_constants_;
   }
 
-  void verify_manifest(const std::vector<int>& verify_buckets) const {
+  void verify_manifest(const std::vector<int>& verify_buckets, bool borrowing_shared_constants) const {
     const std::string manifest_path = (bsteady_detail::fs::path(package_dir_) / "MANIFEST.json").string();
     if (!bsteady_detail::file_exists(manifest_path)) {
       throw std::runtime_error("batched steady MANIFEST.json is required: " + manifest_path);
@@ -333,8 +361,15 @@ class BatchedSteadyLoaderSet {
     }
     auto buckets = bsteady_detail::load_manifest_buckets(manifest_path);
     std::set<int> seen;
-    std::string shared_sha = bsteady_detail::sha256_file(shared_weights_ts_);
+    const bool full_sha_verify = bsteady_detail::manifest_sha_full_verify_enabled();
+    const bool verify_shared_sha = full_sha_verify;
+    std::string manifest_shared_sha;
+    std::string shared_sha = "skipped";
+    if (verify_shared_sha) {
+      shared_sha = bsteady_detail::sha256_file(shared_weights_ts_);
+    }
     size_t ep_verified = 0;
+    size_t ep_skipped = 0;
     size_t package_verified = 0;
     for (const auto& entry : buckets) {
       if (!seen.emplace(entry.B).second) {
@@ -345,6 +380,12 @@ class BatchedSteadyLoaderSet {
         throw std::runtime_error("batched steady manifest package mismatch for B=" + std::to_string(entry.B) +
                                  ": got " + entry.package + " expected " + expected);
       }
+      if (manifest_shared_sha.empty()) {
+        manifest_shared_sha = entry.shared_weight_sha256;
+      } else if (entry.shared_weight_sha256 != manifest_shared_sha) {
+        throw std::runtime_error("batched steady manifest inconsistent shared_weight_sha256 for B=" +
+                                 std::to_string(entry.B));
+      }
       if (buckets_to_verify.find(entry.B) == buckets_to_verify.end()) continue;
       std::string expected_ep = "enc_steady_t2a_b" + std::to_string(entry.B) + ".pt2";
       std::string path = (bsteady_detail::fs::path(package_dir_) / entry.package).string();
@@ -354,17 +395,20 @@ class BatchedSteadyLoaderSet {
         throw std::runtime_error("batched steady package sha256 mismatch for " + entry.package +
                                  ": manifest=" + entry.package_sha256 + " actual=" + actual);
       }
-      if (entry.shared_weight_sha256 != shared_sha) {
+      if (verify_shared_sha && entry.shared_weight_sha256 != shared_sha) {
         throw std::runtime_error("batched steady shared weight sha256 mismatch for B=" +
                                  std::to_string(entry.B) + ": manifest=" + entry.shared_weight_sha256 +
                                  " actual=" + shared_sha);
       }
       ++package_verified;
       std::string ep_path = (bsteady_detail::fs::path(package_dir_) / expected_ep).string();
-      if (!bsteady_detail::file_exists(ep_path)) {
+      if (!full_sha_verify) {
+        ++ep_skipped;
+      } else if (!bsteady_detail::file_exists(ep_path)) {
         std::printf("density batched steady EP sha skipped: B=%d path=%s reason=missing\n",
                     entry.B,
                     ep_path.c_str());
+        ++ep_skipped;
       } else {
         if (entry.ep_sha256.empty()) {
           throw std::runtime_error("batched steady manifest missing ep_sha256 for B=" + std::to_string(entry.B));
@@ -388,11 +432,15 @@ class BatchedSteadyLoaderSet {
       }
     }
     std::printf("density batched steady manifest verified: buckets=%zu package_verified=%zu "
-                "ep_verified=%zu shared_weight_sha256=%s\n",
+                "ep_verified=%zu ep_skipped=%zu shared_weight_sha256=%s sha_mode=%s "
+                "env=NEMOTRON_WS_VERIFY_MANIFEST_SHA borrowed_shared_constants=%s\n",
                 buckets.size(),
                 package_verified,
                 ep_verified,
-                shared_sha.c_str());
+                ep_skipped,
+                shared_sha.c_str(),
+                bsteady_detail::manifest_sha_mode_name(full_sha_verify),
+                borrowing_shared_constants ? "true" : "false");
   }
 
   AOTIModelPackageLoader& load_bucket(int bucket) {

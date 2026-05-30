@@ -382,10 +382,13 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
       throw std::runtime_error("finalize bucket manifest is required when buckets are present: " + manifest_path);
     }
     manifest_ = load_bucket_manifest(manifest_path);
-    verify_bucket_manifest(manifest_, bucket_paths_, buckets_dir_, shared_weights_pt);
-    std::printf("runtime finalize manifest verified: buckets=%zu weights_sha256=%s num_runners=%d policy=%s\n",
+    const ManifestShaVerifyMode sha_mode = manifest_sha_verify_mode_from_env();
+    verify_bucket_manifest(manifest_, bucket_paths_, buckets_dir_, shared_weights_pt, sha_mode);
+    std::printf("runtime finalize manifest verified: buckets=%zu weights_sha256=%s sha_mode=%s "
+                "env=NEMOTRON_WS_VERIFY_MANIFEST_SHA num_runners=%d policy=%s\n",
                 manifest_.buckets.size(),
                 manifest_.contract.weights_sha256.c_str(),
+                manifest_sha_verify_mode_name(sha_mode),
                 num_runners_,
                 policy_.c_str());
     if (cold_phase) cold_phase("finalize_manifest_verify");
