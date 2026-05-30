@@ -121,13 +121,26 @@ class InferenceLane {
   }
 
   template <class F>
-  auto run(F&& f) -> std::invoke_result_t<std::decay_t<F>&> {
+  auto run(F&& f, double* queue_wait_ms = nullptr) -> std::invoke_result_t<std::decay_t<F>&> {
     if (current_inference_lane == this) {
       throw std::runtime_error("nested inference lane run is not allowed");
     }
     using Fn = std::decay_t<F>;
     using R = std::invoke_result_t<Fn&>;
-    auto task = std::make_shared<std::packaged_task<R()>>(Fn(std::forward<F>(f)));
+    auto enqueued_at = std::chrono::steady_clock::now();
+    auto task = std::make_shared<std::packaged_task<R()>>(
+        [fn = Fn(std::forward<F>(f)), queue_wait_ms, enqueued_at]() mutable -> R {
+          if (queue_wait_ms != nullptr) {
+            *queue_wait_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - enqueued_at).count();
+          }
+          if constexpr (std::is_void_v<R>) {
+            fn();
+          } else {
+            return fn();
+          }
+        });
     auto future = task->get_future();
     {
       std::lock_guard<std::mutex> lock(mu_);
@@ -952,6 +965,39 @@ struct SessionRuntime::Impl {
     }
   };
 
+  struct SteadyTimingAccumulator {
+    RuntimeSteadyTiming phases;
+    double lane_queue_wait_ms = 0.0;
+    uint64_t lane_queue_wait_count = 0;
+
+    void add(const RuntimeSteadyTiming& sample, std::optional<double> lane_wait_ms) {
+      if (!sample.has_any()) return;
+      phases.merge(sample);
+      if (lane_wait_ms.has_value()) {
+        lane_queue_wait_ms += *lane_wait_ms;
+        ++lane_queue_wait_count;
+      }
+    }
+
+    void apply_to(SessionTiming& timing) const {
+      if (lane_queue_wait_count > 0) timing.lane_queue_wait_ms = lane_queue_wait_ms;
+      if (phases.preproc_count > 0) timing.preproc_ms = phases.preproc_ms;
+      if (phases.scheduler_enqueue_wait_count > 0) {
+        timing.scheduler_enqueue_wait_ms = phases.scheduler_enqueue_wait_ms;
+      }
+      if (phases.scheduler_future_wait_count > 0) {
+        timing.scheduler_future_wait_ms = phases.scheduler_future_wait_ms;
+      }
+      if (phases.decode_count > 0) timing.decode_ms = phases.decode_ms;
+    }
+
+    void reset() {
+      phases = RuntimeSteadyTiming{};
+      lane_queue_wait_ms = 0.0;
+      lane_queue_wait_count = 0;
+    }
+  };
+
   Impl(const SharedRuntime& shared_in, SessionConfig config)
       : shared(shared_in),
         cfg(std::move(config)),
@@ -1002,6 +1048,10 @@ struct SessionRuntime::Impl {
     std::vector<float> pcm = pcm_to_float(frame);
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
+    RuntimeSteadyTiming local_steady_timing;
+    RuntimeSteadyTiming* steady_timing_sink =
+        s.cfg.steady_shadow_enabled ? nullptr : &local_steady_timing;
+    double lane_queue_wait_ms = 0.0;
     lane().run([&]() {
       auto ctx = execution_context();
       BatchedSteadyScheduler* steady_scheduler = s.cfg.scheduler_enabled ? s.scheduler.get() : nullptr;
@@ -1022,7 +1072,8 @@ struct SessionRuntime::Impl {
                                              events,
                                              cfg.label + ".append",
                                              steady_scheduler,
-                                             s.cfg.steady_shadow_enabled);
+                                             s.cfg.steady_shadow_enabled,
+                                             steady_timing_sink);
       } else {
         session_runtime_append_pcm_and_drain(state,
                                              pcm,
@@ -1035,10 +1086,12 @@ struct SessionRuntime::Impl {
                                              events,
                                              cfg.label + ".append",
                                              steady_scheduler,
-                                             s.cfg.steady_shadow_enabled);
+                                             s.cfg.steady_shadow_enabled,
+                                             steady_timing_sink);
       }
       synchronize_lane_stream();
-    });
+    }, &lane_queue_wait_ms);
+    steady_timing.add(local_steady_timing, lane_queue_wait_ms);
     debug_events.insert(debug_events.end(), events.begin(), events.end());
     return project_events(events, std::nullopt);
   }
@@ -1049,6 +1102,10 @@ struct SessionRuntime::Impl {
     pending_timing.reset();
     std::vector<EmittedEvent> events;
     auto& s = *shared.impl_;
+    RuntimeSteadyTiming local_steady_timing;
+    RuntimeSteadyTiming* steady_timing_sink =
+        s.cfg.steady_shadow_enabled ? nullptr : &local_steady_timing;
+    double lane_queue_wait_ms = 0.0;
     lane().run([&]() {
       auto ctx = execution_context();
       BatchedSteadyScheduler* steady_scheduler = s.cfg.scheduler_enabled ? s.scheduler.get() : nullptr;
@@ -1068,7 +1125,8 @@ struct SessionRuntime::Impl {
                                   events,
                                   cfg.label + ".vad_start",
                                   steady_scheduler,
-                                  s.cfg.steady_shadow_enabled);
+                                  s.cfg.steady_shadow_enabled,
+                                  steady_timing_sink);
       } else {
         session_runtime_vad_start(state,
                                   *audio,
@@ -1080,10 +1138,12 @@ struct SessionRuntime::Impl {
                                   events,
                                   cfg.label + ".vad_start",
                                   steady_scheduler,
-                                  s.cfg.steady_shadow_enabled);
+                                  s.cfg.steady_shadow_enabled,
+                                  steady_timing_sink);
       }
       synchronize_lane_stream();
-    });
+    }, &lane_queue_wait_ms);
+    steady_timing.add(local_steady_timing, lane_queue_wait_ms);
     debug_events.insert(debug_events.end(), events.begin(), events.end());
   }
 
@@ -1127,6 +1187,7 @@ struct SessionRuntime::Impl {
     timing.active_sessions_at_emit = cfg.active_sessions_at_emit;
     timing.gil_attrib_enabled = cfg.gil_attrib_enabled || s.cfg.gil_attrib_enabled;
     timing.enc_first_lock_wait_ms = enc_first_lock_wait_since_finalize_ms;
+    steady_timing.apply_to(timing);
 
     if (finish == FinalizeFinish::SPECULATIVE_KEEP && state.mode == SessionMode::STREAMING) {
       vad_stop(state);
@@ -1162,6 +1223,7 @@ struct SessionRuntime::Impl {
     last_timing_value = timing;
     pending_timing.reset();
     enc_first_lock_wait_since_finalize_ms = 0.0;
+    steady_timing.reset();
     debug_events.insert(debug_events.end(), events.begin(), events.end());
 
     // SessionRuntime leaves stats emission to the WS worker, which owns the stale-generation
@@ -1192,6 +1254,7 @@ struct SessionRuntime::Impl {
   std::optional<SessionTiming> last_timing_value;
   uint64_t finalize_seq = 0;
   double enc_first_lock_wait_since_finalize_ms = 0.0;
+  SteadyTimingAccumulator steady_timing;
   std::vector<EmittedEvent> debug_events;
   std::vector<int64_t> last_finalize_tokens;
 };
@@ -1232,6 +1295,7 @@ std::vector<WireEvent> SessionRuntime::reset(bool finalize) {
   if (!finalize) {
     impl_->clear_vad_state();
     impl_->enc_first_lock_wait_since_finalize_ms = 0.0;
+    impl_->steady_timing.reset();
     return impl_->soft_final(false);
   }
   return impl_->finalize_and_idle("reset", FinalizeFinish::SPECULATIVE_KEEP);
@@ -1242,6 +1306,7 @@ std::vector<WireEvent> SessionRuntime::end(bool finalize) {
   if (!finalize) {
     impl_->clear_vad_state();
     impl_->enc_first_lock_wait_since_finalize_ms = 0.0;
+    impl_->steady_timing.reset();
     return impl_->soft_final(false);
   }
   return impl_->finalize_and_idle("end", FinalizeFinish::TRUE_BOUNDARY_COLD_RESET);

@@ -137,6 +137,11 @@ void StatsCollector::record(SessionTiming timing, bool emitted) {
   sample.vad_stop_recv_to_process_ms = delta_ms(timing.vad_stop_ts, timing.vad_stop_recv_ts);
   sample.lock_wait_ms = timing.inference_lock_acquire_wait_ms;
   sample.enc_first_lock_wait_ms = timing.enc_first_lock_wait_ms;
+  sample.lane_queue_wait_ms = timing.lane_queue_wait_ms;
+  sample.preproc_ms = timing.preproc_ms;
+  sample.scheduler_enqueue_wait_ms = timing.scheduler_enqueue_wait_ms;
+  sample.scheduler_future_wait_ms = timing.scheduler_future_wait_ms;
+  sample.decode_ms = timing.decode_ms;
   sample.vad_stop_to_finalize_start_ms = delta_ms(timing.fork_flush_start_ts, timing.vad_stop_ts);
   sample.active_sessions_at_emit = timing.active_sessions_at_emit;
   sample.emitted = emitted;
@@ -185,6 +190,11 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
   std::vector<double> vad_stop_recv_to_process;
   std::vector<double> lock_wait;
   std::vector<double> enc_first_lock_wait;
+  std::vector<double> lane_queue_wait;
+  std::vector<double> preproc;
+  std::vector<double> scheduler_enqueue_wait;
+  std::vector<double> scheduler_future_wait;
+  std::vector<double> decode;
   std::vector<double> vad_stop_to_finalize_start;
   std::vector<double> active_sessions;
   vad_stop_to_sent.reserve(samples.size());
@@ -192,6 +202,11 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
   vad_stop_recv_to_process.reserve(samples.size());
   lock_wait.reserve(samples.size());
   enc_first_lock_wait.reserve(samples.size());
+  lane_queue_wait.reserve(samples.size());
+  preproc.reserve(samples.size());
+  scheduler_enqueue_wait.reserve(samples.size());
+  scheduler_future_wait.reserve(samples.size());
+  decode.reserve(samples.size());
   vad_stop_to_finalize_start.reserve(samples.size());
   active_sessions.reserve(samples.size());
 
@@ -203,6 +218,11 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
     }
     if (sample.lock_wait_ms) lock_wait.push_back(*sample.lock_wait_ms);
     if (sample.enc_first_lock_wait_ms) enc_first_lock_wait.push_back(*sample.enc_first_lock_wait_ms);
+    if (sample.lane_queue_wait_ms) lane_queue_wait.push_back(*sample.lane_queue_wait_ms);
+    if (sample.preproc_ms) preproc.push_back(*sample.preproc_ms);
+    if (sample.scheduler_enqueue_wait_ms) scheduler_enqueue_wait.push_back(*sample.scheduler_enqueue_wait_ms);
+    if (sample.scheduler_future_wait_ms) scheduler_future_wait.push_back(*sample.scheduler_future_wait_ms);
+    if (sample.decode_ms) decode.push_back(*sample.decode_ms);
     if (sample.vad_stop_to_finalize_start_ms) {
       vad_stop_to_finalize_start.push_back(*sample.vad_stop_to_finalize_start_ms);
     }
@@ -240,6 +260,11 @@ std::string StatsCollector::snapshot_json(std::optional<size_t> last_n) const {
       << ",\"vad_stop_recv_to_process_ms\":" << quantile_summary_json(std::move(vad_stop_recv_to_process))
       << ",\"lock_wait_ms\":" << quantile_summary_json(std::move(lock_wait))
       << ",\"enc_first_lock_wait_ms\":" << quantile_summary_json(std::move(enc_first_lock_wait))
+      << ",\"lane_queue_wait_ms\":" << quantile_summary_json(std::move(lane_queue_wait))
+      << ",\"preproc_ms\":" << quantile_summary_json(std::move(preproc))
+      << ",\"scheduler_enqueue_wait_ms\":" << quantile_summary_json(std::move(scheduler_enqueue_wait))
+      << ",\"scheduler_future_wait_ms\":" << quantile_summary_json(std::move(scheduler_future_wait))
+      << ",\"decode_ms\":" << quantile_summary_json(std::move(decode))
       << ",\"vad_stop_to_finalize_start_ms\":" << quantile_summary_json(std::move(vad_stop_to_finalize_start))
       << "},\"active_sessions_at_emit\":" << quantile_summary_json(std::move(active_sessions))
       << ",\"admission\":";

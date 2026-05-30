@@ -16,6 +16,11 @@ struct SessionTiming {
   std::optional<double> final_sent_ts;
   std::optional<double> inference_lock_acquire_wait_ms;
   std::optional<double> enc_first_lock_wait_ms;
+  std::optional<double> lane_queue_wait_ms;
+  std::optional<double> preproc_ms;
+  std::optional<double> scheduler_enqueue_wait_ms;
+  std::optional<double> scheduler_future_wait_ms;
+  std::optional<double> decode_ms;
   bool gil_attrib_enabled = false;
 
   uint64_t finalize_seq = 0;
@@ -38,6 +43,21 @@ struct SessionTiming {
     out["enc_first_lock_wait_ms"] = enc_first_lock_wait_ms.has_value()
                                         ? nlohmann::json(*enc_first_lock_wait_ms)
                                         : nlohmann::json(nullptr);
+    out["lane_queue_wait_ms"] = lane_queue_wait_ms.has_value()
+                                    ? nlohmann::json(*lane_queue_wait_ms)
+                                    : nlohmann::json(nullptr);
+    out["preproc_ms"] = preproc_ms.has_value()
+                            ? nlohmann::json(*preproc_ms)
+                            : nlohmann::json(nullptr);
+    out["scheduler_enqueue_wait_ms"] = scheduler_enqueue_wait_ms.has_value()
+                                           ? nlohmann::json(*scheduler_enqueue_wait_ms)
+                                           : nlohmann::json(nullptr);
+    out["scheduler_future_wait_ms"] = scheduler_future_wait_ms.has_value()
+                                          ? nlohmann::json(*scheduler_future_wait_ms)
+                                          : nlohmann::json(nullptr);
+    out["decode_ms"] = decode_ms.has_value()
+                           ? nlohmann::json(*decode_ms)
+                           : nlohmann::json(nullptr);
     out["gil_attrib_enabled"] = gil_attrib_enabled;
     return out;
   }

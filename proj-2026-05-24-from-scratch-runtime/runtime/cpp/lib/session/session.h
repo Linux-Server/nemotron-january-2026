@@ -231,6 +231,35 @@ struct ExecutionContext {
   torch::jit::Module& preproc;
 };
 
+struct RuntimeSteadyTiming {
+  double preproc_ms = 0.0;
+  uint64_t preproc_count = 0;
+  double scheduler_enqueue_wait_ms = 0.0;
+  uint64_t scheduler_enqueue_wait_count = 0;
+  double scheduler_future_wait_ms = 0.0;
+  uint64_t scheduler_future_wait_count = 0;
+  double decode_ms = 0.0;
+  uint64_t decode_count = 0;
+
+  bool has_any() const {
+    return preproc_count > 0 ||
+           scheduler_enqueue_wait_count > 0 ||
+           scheduler_future_wait_count > 0 ||
+           decode_count > 0;
+  }
+
+  void merge(const RuntimeSteadyTiming& other) {
+    preproc_ms += other.preproc_ms;
+    preproc_count += other.preproc_count;
+    scheduler_enqueue_wait_ms += other.scheduler_enqueue_wait_ms;
+    scheduler_enqueue_wait_count += other.scheduler_enqueue_wait_count;
+    scheduler_future_wait_ms += other.scheduler_future_wait_ms;
+    scheduler_future_wait_count += other.scheduler_future_wait_count;
+    decode_ms += other.decode_ms;
+    decode_count += other.decode_count;
+  }
+};
+
 class FinalizeBucketLoaderProvider {
  public:
   virtual ~FinalizeBucketLoaderProvider() = default;
@@ -353,7 +382,8 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          std::vector<EmittedEvent>& events,
                                          const std::string& label,
                                          BatchedSteadyScheduler* steady_scheduler,
-                                         bool steady_shadow_enabled);
+                                         bool steady_shadow_enabled,
+                                         RuntimeSteadyTiming* steady_timing = nullptr);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
@@ -383,7 +413,8 @@ int session_runtime_vad_start(SessionState& state,
                               std::vector<EmittedEvent>& events,
                               const std::string& label,
                               BatchedSteadyScheduler* steady_scheduler,
-                              bool steady_shadow_enabled);
+                              bool steady_shadow_enabled,
+                              RuntimeSteadyTiming* steady_timing = nullptr);
 void session_runtime_print_steady_shadow_report();
 FinalizeOutcome session_runtime_finalize(SessionState& state,
                                          torch::jit::Module& bundle,

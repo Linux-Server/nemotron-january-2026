@@ -2241,6 +2241,11 @@ bool has_raw_finalize_timing_keys(const nlohmann::json& event) {
       "final_sent",
       "inference_lock_acquire_wait_ms",
       "enc_first_lock_wait_ms",
+      "lane_queue_wait_ms",
+      "preproc_ms",
+      "scheduler_enqueue_wait_ms",
+      "scheduler_future_wait_ms",
+      "decode_ms",
       "gil_attrib_enabled",
   };
   if (timing.size() != keys.size()) return false;

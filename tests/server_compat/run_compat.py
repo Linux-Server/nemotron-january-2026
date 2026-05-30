@@ -68,9 +68,21 @@ FINALIZE_TIMING_KEYS = (
     "final_sent",
     "inference_lock_acquire_wait_ms",
     "enc_first_lock_wait_ms",
+    "lane_queue_wait_ms",
+    "preproc_ms",
+    "scheduler_enqueue_wait_ms",
+    "scheduler_future_wait_ms",
+    "decode_ms",
     "gil_attrib_enabled",
 )
-OPTIONAL_FINALIZE_TIMING_KEYS = {"enc_first_lock_wait_ms"}
+OPTIONAL_FINALIZE_TIMING_KEYS = {
+    "enc_first_lock_wait_ms",
+    "lane_queue_wait_ms",
+    "preproc_ms",
+    "scheduler_enqueue_wait_ms",
+    "scheduler_future_wait_ms",
+    "decode_ms",
+}
 TIMING_NUMERIC_REQUIRED = {
     "vad_stop",
     "debounce_expiry",
@@ -79,7 +91,15 @@ TIMING_NUMERIC_REQUIRED = {
     "final_sent",
     "inference_lock_acquire_wait_ms",
 }
-TIMING_NUMERIC_NULLABLE = {"vad_stop_recv", "enc_first_lock_wait_ms"}
+TIMING_NUMERIC_NULLABLE = {
+    "vad_stop_recv",
+    "enc_first_lock_wait_ms",
+    "lane_queue_wait_ms",
+    "preproc_ms",
+    "scheduler_enqueue_wait_ms",
+    "scheduler_future_wait_ms",
+    "decode_ms",
+}
 VOLATILE_TOP_LEVEL_KEYS = {
     "finalize_seq",
     "pid",
@@ -417,7 +437,7 @@ def canonical_timing_value(key: str, value: Any) -> str:
         return "<string>" if isinstance(value, str) else f"<{type(value).__name__}>"
     if key == "gil_attrib_enabled":
         return "<bool>" if isinstance(value, bool) else f"<{type(value).__name__}>"
-    if key == "enc_first_lock_wait_ms" and (value is None or is_number(value)):
+    if key in OPTIONAL_FINALIZE_TIMING_KEYS and (value is None or is_number(value)):
         return "<number-or-null>"
     if value is None:
         return "<null>"
@@ -1191,7 +1211,11 @@ async def _run(args: argparse.Namespace) -> int:
             ws_p95 = percentile_p95(ws_ttfs)
             perf["ws_ttfs_ms"] = ws_ttfs
             perf["ws_p95_ms"] = ws_p95
-            print(f"WS perf C++ N={args.perf_n} ttfs_p95_ms={ws_p95:.3f}", flush=True)
+            print(
+                f"WS perf C++ N={args.perf_n} ttfs_ms="
+                f"{[round(v, 3) for v in ws_ttfs]} ttfs_p95_ms={ws_p95:.3f}",
+                flush=True,
+            )
 
             terminate_all()
             density_p95, density_row = run_density_scheduler(args, run_dir / "density_main.log")
