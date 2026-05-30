@@ -867,11 +867,27 @@ struct SharedRuntime::Impl {
 
   void warm_inference_lanes() {
     constexpr int kWarmupItersPerInput = 5;
-    auto inputs = make_bucket_warmup_inputs(audio_geometry, finalize_loaders->bucket_keys());
+    const auto finalize_bucket_keys = finalize_loaders->bucket_keys();
+    std::vector<WarmupInput> inputs;
+    inputs.reserve(finalize_bucket_keys.size());
+    std::vector<std::optional<FinalizeBucketKey>> input_bucket_keys;
+    input_bucket_keys.reserve(finalize_bucket_keys.size());
+    std::vector<size_t> steady_input_indices;
+    steady_input_indices.reserve(finalize_bucket_keys.size());
+    for (const auto& key : finalize_bucket_keys) {
+      auto input = make_bucket_warmup_input(audio_geometry, key.first, key.second);
+      if (!input.has_value()) continue;
+      if (key.first == DROP) steady_input_indices.push_back(inputs.size());
+      inputs.push_back(std::move(*input));
+      input_bucket_keys.push_back(key);
+    }
     const size_t bucket_warmup_inputs = inputs.size();
     if (inputs.empty()) {
       auto fixture = make_fixture_warmup_input(bundle);
-      if (fixture.has_value()) inputs.push_back(std::move(*fixture));
+      if (fixture.has_value()) {
+        inputs.push_back(std::move(*fixture));
+        input_bucket_keys.push_back(std::nullopt);
+      }
     }
     if (inputs.empty()) {
       throw std::runtime_error("unable to build inference lane warmup input");
@@ -880,23 +896,79 @@ struct SharedRuntime::Impl {
     const int full_warm_lanes =
         std::min(lane_count, parse_positive_env_int("NEMOTRON_WS_WARM_FULL_LANES", 1));
     const int tail_warmup_iters = parse_positive_env_int("NEMOTRON_WS_WARM_TAIL_ITERS", 1);
-    const auto warmup_inputs = std::make_shared<const std::vector<WarmupInput>>(std::move(inputs));
-    const size_t warmup_input_count = warmup_inputs->size();
+    const int tail_warmup_input_env = parse_positive_env_int("NEMOTRON_WS_WARM_TAIL_INPUTS", 1);
+    const size_t full_warmup_input_count = inputs.size();
+    const size_t tail_warmup_input_count =
+        std::min(full_warmup_input_count, static_cast<size_t>(tail_warmup_input_env));
+    std::vector<WarmupInput> tail_inputs;
+    tail_inputs.reserve(tail_warmup_input_count);
+    std::vector<FinalizeBucketKey> tail_input_bucket_keys;
+    tail_input_bucket_keys.reserve(tail_warmup_input_count);
+    std::vector<bool> selected_tail_input(full_warmup_input_count, false);
+    auto select_tail_input = [&](size_t input_index) {
+      tail_inputs.push_back(inputs.at(input_index));
+      if (input_bucket_keys.at(input_index).has_value()) {
+        tail_input_bucket_keys.push_back(*input_bucket_keys.at(input_index));
+      }
+      selected_tail_input.at(input_index) = true;
+    };
+    if (tail_warmup_input_count > 0 && !steady_input_indices.empty()) {
+      select_tail_input(steady_input_indices.front());
+    }
+    for (size_t input_index = 0;
+         input_index < inputs.size() && tail_inputs.size() < tail_warmup_input_count;
+         ++input_index) {
+      if (selected_tail_input[input_index]) continue;
+      select_tail_input(input_index);
+    }
+    std::vector<FinalizeBucketKey> tail_direct_finalize_keys;
+    tail_direct_finalize_keys.reserve(finalize_bucket_keys.size());
+    for (const auto& key : finalize_bucket_keys) {
+      bool represented_drop = false;
+      for (const auto& tail_key : tail_input_bucket_keys) {
+        if (tail_key.first == key.first) {
+          represented_drop = true;
+          break;
+        }
+      }
+      if (!represented_drop) continue;
+
+      bool warmed_by_tail_input = false;
+      for (const auto& tail_key : tail_input_bucket_keys) {
+        if (tail_key == key) {
+          warmed_by_tail_input = true;
+          break;
+        }
+      }
+      if (!warmed_by_tail_input) tail_direct_finalize_keys.push_back(key);
+    }
+    const auto full_warmup_inputs =
+        std::make_shared<const std::vector<WarmupInput>>(std::move(inputs));
+    const auto tail_warmup_inputs =
+        std::make_shared<const std::vector<WarmupInput>>(std::move(tail_inputs));
+    const auto tail_direct_finalize_warmup_keys =
+        std::make_shared<const std::vector<FinalizeBucketKey>>(std::move(tail_direct_finalize_keys));
 
     struct LaneWarmupResult {
       int lane_id = 0;
       int completed = 0;
       int iters_per_input = 0;
+      size_t input_count = 0;
+      size_t direct_finalize_count = 0;
       bool full = false;
     };
 
     std::printf("inference lane warmup dispatch: lanes=%d full_lanes=%d full_iters_per_input=%d "
-                "tail_iters_per_input=%d warmup_inputs=%zu finalize_buckets=%zu\n",
+                "tail_iters_per_input=%d full_warmup_inputs=%zu tail_warmup_inputs=%zu "
+                "tail_requested_inputs=%d tail_direct_finalize_buckets=%zu finalize_buckets=%zu\n",
                 lane_count,
                 full_warm_lanes,
                 kWarmupItersPerInput,
                 tail_warmup_iters,
-                warmup_input_count,
+                full_warmup_inputs->size(),
+                tail_warmup_inputs->size(),
+                tail_warmup_input_env,
+                tail_direct_finalize_warmup_keys->size(),
                 finalize_loaders->total_bucket_count());
     std::fflush(stdout);
 
@@ -906,9 +978,11 @@ struct SharedRuntime::Impl {
       InferenceLane& lane = *lanes[lane_index];
       const bool full = static_cast<int>(lane_index) < full_warm_lanes;
       const int lane_warmup_iters = full ? kWarmupItersPerInput : tail_warmup_iters;
+      const auto lane_warmup_inputs = full ? full_warmup_inputs : tail_warmup_inputs;
       futures.push_back(lane.submit([this,
                                      &lane,
-                                     warmup_inputs,
+                                     warmup_inputs = lane_warmup_inputs,
+                                     tail_direct_finalize_warmup_keys,
                                      warmup_iters = lane_warmup_iters,
                                      full]() {
         int completed = 0;
@@ -951,8 +1025,32 @@ struct SharedRuntime::Impl {
             ++completed;
           }
         }
+        size_t direct_finalize_count = 0;
+        if (!full && !tail_direct_finalize_warmup_keys->empty()) {
+          c10::cuda::CUDAGuard device_guard(device.index());
+          c10::cuda::CUDAStreamGuard stream_guard(lane.stream());
+          SessionState direct_state;
+          reset_session(direct_state, bundle, device);
+          auto options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+          for (const auto& key : *tail_direct_finalize_warmup_keys) {
+            auto final_chunk = torch::zeros({1, 128, key.second}, options);
+            std::vector<at::Tensor> loader_inputs = {
+                final_chunk.contiguous(),
+                direct_state.clc.contiguous(),
+                direct_state.clt.contiguous(),
+                direct_state.clcl.contiguous(),
+            };
+            AOTIModelPackageLoader& loader = finalize_loaders->get(key.first, key.second);
+            auto out = loader.run(loader_inputs, reinterpret_cast<void*>(lane.stream().stream()));
+            if (out.size() < 2) {
+              throw std::runtime_error("tail finalize warmup bucket returned fewer than 2 outputs");
+            }
+            ++direct_finalize_count;
+          }
+        }
         lane.synchronize();
-        return LaneWarmupResult{lane.id(), completed, warmup_iters, full};
+        return LaneWarmupResult{
+            lane.id(), completed, warmup_iters, warmup_inputs->size(), direct_finalize_count, full};
       }));
     }
 
@@ -963,12 +1061,13 @@ struct SharedRuntime::Impl {
         LaneWarmupResult result = future.get();
         total_warmed += result.completed;
         std::printf("inference lane warmed: lane=%d mode=%s iters=%d iters_per_input=%d "
-                    "warmup_inputs=%zu finalize_buckets=%zu\n",
+                    "warmup_inputs=%zu direct_finalize_buckets=%zu finalize_buckets=%zu\n",
                     result.lane_id,
                     result.full ? "full" : "tail",
                     result.completed,
                     result.iters_per_input,
-                    warmup_input_count,
+                    result.input_count,
+                    result.direct_finalize_count,
                     finalize_loaders->total_bucket_count());
         std::fflush(stdout);
       } catch (...) {
@@ -977,12 +1076,17 @@ struct SharedRuntime::Impl {
     }
     if (first_exception) std::rethrow_exception(first_exception);
 
-    std::printf("inference lane pool warmed: lanes=%d total_iters=%d warmup_inputs=%zu "
+    std::printf("inference lane pool warmed: lanes=%d total_iters=%d full_warmup_inputs=%zu "
+                "tail_warmup_inputs=%zu tail_requested_inputs=%d "
+                "tail_direct_finalize_buckets=%zu "
                 "finalize_bucket_coverage=%zu/%zu full_lanes=%d full_iters_per_input=%d "
                 "tail_iters_per_input=%d per_lane_mib=%.3f\n",
                 lane_count,
                 total_warmed,
-                warmup_input_count,
+                full_warmup_inputs->size(),
+                tail_warmup_inputs->size(),
+                tail_warmup_input_env,
+                tail_direct_finalize_warmup_keys->size(),
                 bucket_warmup_inputs,
                 finalize_loaders->total_bucket_count(),
                 full_warm_lanes,
