@@ -1792,6 +1792,10 @@ class WsServer {
     return state_->cfg.port;
   }
 
+  const std::string& bind_host() const {
+    return bind_host_;
+  }
+
  private:
   void construct_runtime() {
     auto stats = std::make_unique<StatsCollector>(state_->cfg.stats_window, state_->cfg.stats_enabled);
@@ -1839,7 +1843,19 @@ class WsServer {
     }
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    // Bind host is configurable via NEMOTRON_WS_HOST (default 127.0.0.1 to preserve the
+    // same-box compat-oracle behavior). Set "0.0.0.0" to serve remote clients (production
+    // deploy, or an off-box load driver). Any other value is parsed as a dotted-quad.
+    const char* host_env = std::getenv("NEMOTRON_WS_HOST");
+    std::string bind_host = (host_env != nullptr && host_env[0] != '\0') ? host_env : "127.0.0.1";
+    if (bind_host == "127.0.0.1" || bind_host == "localhost") {
+      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    } else if (bind_host == "0.0.0.0" || bind_host == "*") {
+      addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (::inet_pton(AF_INET, bind_host.c_str(), &addr.sin_addr) != 1) {
+      throw std::runtime_error("NEMOTRON_WS_HOST must be 0.0.0.0, 127.0.0.1, or a dotted-quad IPv4: " + bind_host);
+    }
+    bind_host_ = bind_host;
     addr.sin_port = htons(static_cast<uint16_t>(port));
     if (::bind(fd.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
       throw std::runtime_error(std::string("bind failed: ") + std::strerror(errno));
@@ -1979,6 +1995,7 @@ class WsServer {
 
   std::shared_ptr<ServerState> state_;
   std::atomic<bool> running_{false};
+  std::string bind_host_ = "127.0.0.1";
   UniqueFd listen_fd_;
   std::unique_ptr<AdminHandlerPool> admin_pool_;
   std::thread accept_thread_;
@@ -2602,7 +2619,7 @@ int main(int argc, char** argv) {
 
 	    WsServer server(cfg);
 	    server.start();
-	    std::cout << "ws_server listening on 127.0.0.1:" << server.port() << "\n";
+	    std::cout << "ws_server listening on " << server.bind_host() << ":" << server.port() << "\n";
 	    std::cout.flush();
 
 	    while (!g_sigterm_requested.load(std::memory_order_acquire)) {
