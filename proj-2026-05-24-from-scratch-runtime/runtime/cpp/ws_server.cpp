@@ -616,7 +616,7 @@ struct ServerConfig {
 };
 
 void populate_env_config(ServerConfig* cfg) {
-  cfg->scheduler_enabled = read_env_int("NEMOTRON_DENSITY_BATCH_STEADY", 0) != 0;
+  cfg->scheduler_enabled = read_env_enabled("NEMOTRON_WS_SCHEDULER", true);
   cfg->batch_b_max = read_env_int("NEMOTRON_DENSITY_BATCH_MAX", kDefaultBatchMax);
   cfg->batch_window_ms = read_env_int("NEMOTRON_DENSITY_BATCH_WINDOW_MS", kDefaultBatchWindowMs);
   cfg->batch_lone_timeout_ms =
@@ -674,11 +674,12 @@ void populate_env_config(ServerConfig* cfg) {
 void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
   populate_env_config(cfg);
   cfg->artifact_dir = resolve_artifact_dir(cfg->argv0);
+  bool scheduler_artifacts_required = cfg->scheduler_enabled && !cfg->selftest_lightweight_runtime;
   cfg->effective_steady_batch_dir = resolve_steady_batch_dir(cfg->steady_batch_dir,
                                                              cfg->steady_batch_dir_explicit,
                                                              cfg->artifact_dir,
                                                              cfg->argv0,
-                                                             cfg->scheduler_enabled);
+                                                             scheduler_artifacts_required);
   if (require_port_and_admission && !cfg->port_set) {
     throw std::runtime_error("warning: --port is required; no compiled default is provided");
   }
@@ -713,6 +714,8 @@ void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
 std::string config_table(const ServerConfig& cfg) {
   std::ostringstream oss;
   oss << "[runtime]\n"
+      << "  scheduler_env = NEMOTRON_WS_SCHEDULER\n"
+      << "  scheduler_owner = SharedRuntime\n"
       << "  scheduler_enabled = " << json_bool(cfg.scheduler_enabled) << "\n"
       << "  lanes = " << cfg.ws_lanes << "\n"
       << "  steady_runners = " << cfg.steady_num_runners << "\n"
@@ -869,8 +872,6 @@ struct ServerState {
   std::unique_ptr<SharedRuntime> shared_runtime;
   std::unique_ptr<DensityAdmission> admission;
   std::unique_ptr<StatsCollector> stats;
-  std::unique_ptr<BatchedSteadyLoaderSet> scheduler_loader;
-  std::unique_ptr<BatchedSteadyScheduler> scheduler;
   std::atomic<bool> model_loaded{false};
   std::atomic<uint64_t> next_stream_id{1};
   std::atomic<bool> shutting_down{false};
@@ -1029,11 +1030,11 @@ class AdminHandlerPool {
           break;
         }
         case ws_routes::RouteKind::SCHEDULER_TELEMETRY:
-          if (!state_->scheduler) {
+          if (!state_->shared_runtime || !state_->shared_runtime->has_scheduler()) {
             status = 404;
             body = "{\"error\":\"no scheduler\"}";
           } else {
-            body = scheduler_telemetry_json(state_->scheduler->telemetry_snapshot());
+            body = scheduler_telemetry_json(state_->shared_runtime->scheduler_telemetry_snapshot());
           }
           break;
         default:
@@ -1720,7 +1721,6 @@ class WsServer {
     stop_accepting();
     stop_admin_pool();
     join_ws_threads();
-    close_scheduler_after_workers();
     state_.reset();
   }
 
@@ -1754,7 +1754,6 @@ class WsServer {
     stop_accepting();
     stop_admin_pool();
     join_ws_threads();
-    close_scheduler_after_workers();
     emit_stats_lifetime();
     state_.reset();
     return forced;
@@ -1785,9 +1784,7 @@ class WsServer {
     shared_cfg.device_index = state_->cfg.device_index;
     shared_cfg.steady_num_runners = state_->cfg.steady_num_runners;
     shared_cfg.finalize_num_runners = state_->cfg.finalize_num_runners;
-    // Step 7 owns only the server skeleton and telemetry route. SessionRuntime scheduler
-    // lifecycle integration is Step 9, so ws_server keeps a telemetry-visible scheduler here.
-    shared_cfg.scheduler_enabled = false;
+    shared_cfg.scheduler_enabled = state_->cfg.scheduler_enabled;
 
     state_->admission = std::make_unique<DensityAdmission>(state_->cfg.admission_active_cap,
                                                            state_->cfg.admission_backlog_cap);
@@ -1795,28 +1792,9 @@ class WsServer {
     state_->stats = std::move(stats);
     if (!state_->cfg.selftest_lightweight_runtime) {
       state_->shared_runtime = std::make_unique<SharedRuntime>(shared_cfg);
-    }
-
-    if (state_->cfg.scheduler_enabled) {
-      if (state_->cfg.selftest_lightweight_runtime) {
-        throw std::runtime_error("selftest lightweight runtime cannot construct scheduler telemetry");
-      }
-      torch::Device device(torch::kCUDA, state_->cfg.device_index);
-      state_->scheduler_loader = std::make_unique<BatchedSteadyLoaderSet>(
-          state_->cfg.effective_steady_batch_dir,
-          (fs::path(state_->cfg.artifact_dir) / "finalize_shared_weights.ts").string(),
-          device,
-          state_->cfg.steady_num_runners,
-          "ws_server");
-      BatchedSteadySchedulerPolicy policy;
-      policy.B_max = state_->cfg.batch_b_max;
-      policy.window_ms = state_->cfg.batch_window_ms;
-      policy.lone_timeout_ms = state_->cfg.batch_lone_timeout_ms;
-      policy.queue_capacity = state_->cfg.batch_queue_capacity;
-      state_->scheduler =
-          std::make_unique<BatchedSteadyScheduler>(*state_->scheduler_loader, device, policy);
-      state_->scheduler->warmup_buckets();
-      state_->scheduler->start();
+    } else if (state_->cfg.scheduler_enabled) {
+      std::printf("shared runtime scheduler skipped: selftest_lightweight_runtime=true\n");
+      std::fflush(stdout);
     }
 
     state_->model_loaded.store(true, std::memory_order_release);
@@ -1888,10 +1866,6 @@ class WsServer {
       if (worker.joinable()) worker.join();
     }
     ws_threads_.clear();
-  }
-
-  void close_scheduler_after_workers() {
-    if (state_ && state_->scheduler) state_->scheduler->close();
   }
 
   void emit_stats_lifetime() const {
@@ -2024,6 +1998,7 @@ void clear_selftest_env(ScopedEnv* env) {
   for (const char* name : {
            "NEMOTRON_STATS_ENABLED",
            "NEMOTRON_STATS_WINDOW",
+           "NEMOTRON_WS_SCHEDULER",
            "NEMOTRON_DENSITY_BATCH_STEADY",
            "NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP",
            "NEMOTRON_DENSITY_ADMISSION_BACKLOG_CAP",
@@ -2342,7 +2317,7 @@ int run_selftest(const ServerConfig& parsed) {
   results.push_back(run_case(4, "Scheduler ON missing MANIFEST startup failure", [&](SelftestResult* r) {
     ScopedEnv env;
     clear_selftest_env(&env);
-    env.set("NEMOTRON_DENSITY_BATCH_STEADY", "1");
+    env.set("NEMOTRON_WS_SCHEDULER", "1");
     fs::path tmp = fs::temp_directory_path() /
                    ("ws-server-missing-manifest-" + std::to_string(::getpid()));
     fs::create_directories(tmp);
@@ -2370,7 +2345,7 @@ int run_selftest(const ServerConfig& parsed) {
   results.push_back(run_case(5, "Scheduler ON valid artifacts", [&](SelftestResult* r) {
     ScopedEnv env;
     clear_selftest_env(&env);
-    env.set("NEMOTRON_DENSITY_BATCH_STEADY", "1");
+    env.set("NEMOTRON_WS_SCHEDULER", "1");
     ServerConfig cfg = selftest_config(base, false);
     WsServer server(cfg);
     server.start();

@@ -7,6 +7,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -36,6 +37,8 @@ using FinalizeBucketKey = std::pair<int64_t, int64_t>;
 class InferenceLane;
 
 thread_local InferenceLane* current_inference_lane = nullptr;
+std::atomic<int> g_active_shared_scheduler_owners{0};
+std::atomic<int> g_active_shared_steady_loader_sets{0};
 
 void runtime_cuda_check(cudaError_t err, const char* expr) {
   if (err == cudaSuccess) return;
@@ -189,6 +192,60 @@ class InferenceLane {
   std::deque<std::function<void()>> tasks_;
   bool closed_ = false;
   std::thread worker_;
+};
+
+class SharedSchedulerOwnership {
+ public:
+  SharedSchedulerOwnership() = default;
+  SharedSchedulerOwnership(const SharedSchedulerOwnership&) = delete;
+  SharedSchedulerOwnership& operator=(const SharedSchedulerOwnership&) = delete;
+
+  ~SharedSchedulerOwnership() {
+    reset();
+  }
+
+  void register_loader_set() {
+    int count = g_active_shared_steady_loader_sets.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (count != 1) {
+      g_active_shared_steady_loader_sets.fetch_sub(1, std::memory_order_acq_rel);
+      throw std::runtime_error("duplicate BatchedSteadyLoaderSet owner detected: active_loader_sets=" +
+                               std::to_string(count));
+    }
+    loader_set_registered_ = true;
+  }
+
+  void register_scheduler() {
+    int count = g_active_shared_scheduler_owners.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (count != 1) {
+      g_active_shared_scheduler_owners.fetch_sub(1, std::memory_order_acq_rel);
+      throw std::runtime_error("duplicate BatchedSteadyScheduler owner detected: active_schedulers=" +
+                               std::to_string(count));
+    }
+    scheduler_registered_ = true;
+  }
+
+  int active_loader_sets() const {
+    return g_active_shared_steady_loader_sets.load(std::memory_order_acquire);
+  }
+
+  int active_schedulers() const {
+    return g_active_shared_scheduler_owners.load(std::memory_order_acquire);
+  }
+
+ private:
+  void reset() noexcept {
+    if (scheduler_registered_) {
+      g_active_shared_scheduler_owners.fetch_sub(1, std::memory_order_acq_rel);
+      scheduler_registered_ = false;
+    }
+    if (loader_set_registered_) {
+      g_active_shared_steady_loader_sets.fetch_sub(1, std::memory_order_acq_rel);
+      loader_set_registered_ = false;
+    }
+  }
+
+  bool loader_set_registered_ = false;
+  bool scheduler_registered_ = false;
 };
 
 struct WarmupInput {
@@ -631,6 +688,7 @@ struct SharedRuntime::Impl {
 
     if (cfg.scheduler_enabled) {
       std::string batch_dir = resolve_steady_batch_dir(artifact_dir, cfg.steady_artifacts_dir);
+      scheduler_ownership.register_loader_set();
       BatchedSteadySchedulerPolicy policy;
       policy.B_max = cfg.b_max;
       policy.window_ms = cfg.batch_window_ms;
@@ -643,9 +701,19 @@ struct SharedRuntime::Impl {
           cfg.steady_num_runners,
           "shared_runtime_scheduler");
       batched_steady->preload_all();
+      scheduler_ownership.register_scheduler();
       scheduler = std::make_unique<BatchedSteadyScheduler>(*batched_steady, device, policy);
       scheduler->warmup_buckets();
       scheduler->start();
+      std::printf("shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=%d "
+                  "steady_loader_sets=%d warmup_complete=true dispatcher_started=true\n",
+                  scheduler_ownership.active_schedulers(),
+                  scheduler_ownership.active_loader_sets());
+      std::fflush(stdout);
+    } else {
+      std::printf("shared runtime scheduler disabled: owner=SharedRuntime scheduler_instances=0 "
+                  "steady_loader_sets=0\n");
+      std::fflush(stdout);
     }
   }
 
@@ -812,6 +880,7 @@ struct SharedRuntime::Impl {
   std::condition_variable lanes_cv;
   std::deque<int> free_lanes;
   bool lanes_closing = false;
+  SharedSchedulerOwnership scheduler_ownership;
   std::unique_ptr<BatchedSteadyLoaderSet> batched_steady;
   std::unique_ptr<BatchedSteadyScheduler> scheduler;
 };
@@ -826,6 +895,17 @@ const Tokenizer& SharedRuntime::tokenizer() const {
 
 const SharedRuntimeConfig& SharedRuntime::config() const {
   return impl_->cfg;
+}
+
+bool SharedRuntime::has_scheduler() const noexcept {
+  return impl_ && impl_->scheduler != nullptr;
+}
+
+BatchedSteadySchedulerTelemetry SharedRuntime::scheduler_telemetry_snapshot() const {
+  if (!impl_ || !impl_->scheduler) {
+    throw std::runtime_error("SharedRuntime scheduler telemetry requested without scheduler");
+  }
+  return impl_->scheduler->telemetry_snapshot();
 }
 
 struct SessionRuntime::Impl {

@@ -674,6 +674,7 @@ def base_env(args: argparse.Namespace) -> dict[str, str]:
     env["NEMOTRON_FINALIZE_SILENCE_MS"] = str(args.finalize_silence_ms)
     env["NEMOTRON_ARTIFACT_DIR"] = str(args.artifact_dir)
     env["NEMOTRON_DENSITY_BATCH_STEADY"] = "1"
+    env["NEMOTRON_WS_SCHEDULER"] = "1"
     env["NEMOTRON_DENSITY_BATCH_MAX"] = str(args.batch_b_max)
     env["NEMOTRON_DENSITY_BATCH_WINDOW_MS"] = str(args.batch_window_ms)
     env["NEMOTRON_DENSITY_BATCH_LONE_TIMEOUT_MS"] = str(args.batch_lone_timeout_ms)
@@ -1256,8 +1257,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-b-max", type=int, default=4)
     parser.add_argument("--batch-window-ms", type=int, default=10)
     parser.add_argument("--batch-lone-timeout-ms", type=int, default=0)
-    # C++ ws_server cold-loads the SharedRuntime AOTI packages (enc_steady 2.48GB
-    # x2 + enc_first x2 + ~27 finalize buckets) single-threaded; measured ~330s
+    # C++ ws_server cold-loads the SharedRuntime AOTI packages (enc_first,
+    # enc_steady, one scheduler loader set, and ~27 finalize buckets); measured ~330s
     # cold on sm_120. The Python server loads the same artifacts in ~10s. 600s
     # leaves margin so the slow side is not killed mid-load.
     parser.add_argument("--server-start-timeout-s", type=float, default=600.0)

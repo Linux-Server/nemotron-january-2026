@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+struct BatchedSteadySchedulerTelemetry;
+
 namespace nemotron_runtime_detail {
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 constexpr bool kNativeLittleEndian = true;
@@ -73,6 +75,8 @@ class SharedRuntime {
 
   const Tokenizer& tokenizer() const;
   const SharedRuntimeConfig& config() const;
+  bool has_scheduler() const noexcept;
+  BatchedSteadySchedulerTelemetry scheduler_telemetry_snapshot() const;
 
  private:
   friend class SessionRuntime;
