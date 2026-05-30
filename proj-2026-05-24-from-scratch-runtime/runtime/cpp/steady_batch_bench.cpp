@@ -10,6 +10,8 @@
 #include <c10/cuda/CUDAStream.h>
 #include <cuda_runtime_api.h>
 
+#include "lib/scheduler/steady_batch_primitive.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -53,6 +55,7 @@ static void cuda_check(cudaError_t err, const char* expr, const char* file, int 
 
 struct Args {
   std::string dir = "../artifacts";
+  std::string shared_weights;
   int warmup = 10;
   int iters = 100;
   double atol = 5.0e-2;
@@ -88,6 +91,8 @@ static Args parse_args(int argc, char** argv) {
     if (arg == "--dir") {
       args.dir = need_value("--dir");
       dir_set = true;
+    } else if (arg == "--shared-weights") {
+      args.shared_weights = need_value("--shared-weights");
     } else if (arg == "--warmup") {
       args.warmup = std::stoi(need_value("--warmup"));
     } else if (arg == "--iters") {
@@ -109,6 +114,26 @@ static Args parse_args(int argc, char** argv) {
   if (args.iters <= 0) throw std::runtime_error("--iters must be positive");
   if (args.atol < 0.0 || args.rtol < 0.0) throw std::runtime_error("--atol/--rtol must be non-negative");
   return args;
+}
+
+static std::string resolve_shared_weights_path(const std::string& package_dir,
+                                               const std::string& configured) {
+  if (!configured.empty()) return configured;
+
+  std::vector<fs::path> candidates;
+  fs::path dir_path(package_dir);
+  if (dir_path.has_parent_path()) {
+    candidates.push_back(dir_path.parent_path() / "artifacts" / "finalize_shared_weights.ts");
+  }
+  candidates.push_back(dir_path / "finalize_shared_weights.ts");
+  candidates.push_back("artifacts/finalize_shared_weights.ts");
+  candidates.push_back("../artifacts/finalize_shared_weights.ts");
+  candidates.push_back("runtime/artifacts/finalize_shared_weights.ts");
+
+  for (const auto& candidate : candidates) {
+    if (fs::exists(candidate)) return candidate.string();
+  }
+  throw std::runtime_error("could not resolve finalize_shared_weights.ts; pass --shared-weights");
 }
 
 static Summary summarize(std::vector<double> values) {
@@ -285,9 +310,11 @@ int main(int argc, char** argv) {
     c10::cuda::CUDAGuard device_guard(device.index());
     auto stream = c10::cuda::getStreamFromPool(/*isHighPriority=*/false, /*device=*/device.index());
     c10::cuda::CUDAStreamGuard stream_guard(stream);
+    const std::string shared_weights_path = resolve_shared_weights_path(args.dir, args.shared_weights);
+    auto shared_constants = bsteady_detail::load_shared_constants(shared_weights_path, device);
 
     std::printf("=== STEADY_BATCH_BENCH START dir=%s warmup=%d iters=%d geometry=B x %d x %d "
-                "cache_ch=%d x B x %d x %d cache_t=%d x B x %d x %d ===\n",
+                "cache_ch=%d x B x %d x %d cache_t=%d x B x %d x %d shared_weights=%s ===\n",
                 args.dir.c_str(),
                 args.warmup,
                 args.iters,
@@ -298,7 +325,8 @@ int main(int argc, char** argv) {
                 D_MODEL,
                 LAYERS,
                 D_MODEL,
-                TIME_CACHE);
+                TIME_CACHE,
+                shared_weights_path.c_str());
 
     std::vector<BenchCase> cases;
     for (int batch : {1, 2, 4}) {
@@ -309,9 +337,16 @@ int main(int argc, char** argv) {
       c.package_path = pkg.string();
       c.loader = std::make_unique<AOTIModelPackageLoader>(
           c.package_path, "model", /*run_single_threaded=*/false, /*num_runners=*/1, /*device_index=*/device.index());
+      auto bucket_constants = bsteady_detail::constants_for_bucket(shared_constants, *c.loader, c.package_path);
+      c.loader->load_constants(bucket_constants.values, false, false, /*user_managed=*/true);
       c.inputs = make_inputs(batch, device);
       cases.push_back(std::move(c));
-      std::printf("loaded B=%d package=%s\n", batch, pkg.c_str());
+      std::printf("loaded B=%d package=%s constants=%zu direct=%zu alias=%zu\n",
+                  batch,
+                  pkg.c_str(),
+                  bucket_constants.values.size(),
+                  bucket_constants.direct_matches,
+                  bucket_constants.alias_fallbacks);
     }
 
     CUDA_CHECK(cudaStreamSynchronize(stream.stream()));

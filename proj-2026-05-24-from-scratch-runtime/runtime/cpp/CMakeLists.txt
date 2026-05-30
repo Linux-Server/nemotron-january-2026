@@ -104,7 +104,7 @@ set_target_properties(ws_server PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA
 
 # STEADY-BATCH-0: fixed-B steady encoder AOTI per-row GPU-time microbench.
 add_executable(steady_batch_bench steady_batch_bench.cpp)
-target_include_directories(steady_batch_bench PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
+target_include_directories(steady_batch_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
 target_compile_definitions(steady_batch_bench PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(steady_batch_bench PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(steady_batch_bench torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)

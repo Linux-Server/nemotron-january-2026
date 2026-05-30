@@ -108,6 +108,8 @@ def set_inductor_autotune_off() -> dict[str, object]:
 def compile_configs() -> dict[str, object]:
     return {
         "aot_inductor.package": True,
+        "aot_inductor.package_constants_in_so": False,
+        "aot_inductor.package_constants_on_disk": True,
         "max_autotune": False,
         "max_autotune_gemm": False,
         "max_autotune_pointwise": False,
