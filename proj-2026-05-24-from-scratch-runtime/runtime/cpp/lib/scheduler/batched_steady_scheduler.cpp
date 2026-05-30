@@ -199,14 +199,22 @@ void BatchedSteadyScheduler::warmup_buckets() {
 }
 
 std::vector<int> BatchedSteadyScheduler::required_buckets() const {
+  return required_buckets_for_policy(policy_);
+}
+
+std::vector<int> BatchedSteadyScheduler::required_buckets_for_policy(
+    const BatchedSteadySchedulerPolicy& policy) {
   std::vector<int> buckets{1};
   auto add = [&](int bucket) {
     if (std::find(buckets.begin(), buckets.end(), bucket) == buckets.end()) {
       buckets.push_back(bucket);
     }
   };
-  if (policy_.B_max >= 2) add(policy_.use_b2_bucket ? 2 : 4);
-  if (policy_.B_max >= 4) add(4);
+  if (policy.B_max != 1 && policy.B_max != 2 && policy.B_max != 4) {
+    throw std::runtime_error("batch steady B_max must be one of {1,2,4}");
+  }
+  if (policy.B_max >= 2) add(policy.use_b2_bucket ? 2 : 4);
+  if (policy.B_max >= 4) add(4);
   return buckets;
 }
 

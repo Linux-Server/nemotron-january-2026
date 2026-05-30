@@ -121,7 +121,8 @@ class InferenceLane {
   }
 
   template <class F>
-  auto run(F&& f, double* queue_wait_ms = nullptr) -> std::invoke_result_t<std::decay_t<F>&> {
+  auto submit(F&& f, double* queue_wait_ms = nullptr)
+      -> std::future<std::invoke_result_t<std::decay_t<F>&>> {
     if (current_inference_lane == this) {
       throw std::runtime_error("nested inference lane run is not allowed");
     }
@@ -148,6 +149,14 @@ class InferenceLane {
       tasks_.emplace_back([task]() { (*task)(); });
     }
     cv_.notify_one();
+    return future;
+  }
+
+  template <class F>
+  auto run(F&& f, double* queue_wait_ms = nullptr) -> std::invoke_result_t<std::decay_t<F>&> {
+    using Fn = std::decay_t<F>;
+    using R = std::invoke_result_t<Fn&>;
+    auto future = submit(std::forward<F>(f), queue_wait_ms);
     if constexpr (std::is_void_v<R>) {
       future.get();
     } else {
@@ -729,13 +738,15 @@ struct SharedRuntime::Impl {
       policy.window_ms = cfg.batch_window_ms;
       policy.lone_timeout_ms = cfg.batch_lone_timeout_ms;
       policy.queue_capacity = cfg.batch_queue_capacity;
+      const auto required_scheduler_buckets = BatchedSteadyScheduler::required_buckets_for_policy(policy);
       batched_steady = std::make_unique<BatchedSteadyLoaderSet>(
           batch_dir,
           (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
           device,
           cfg.steady_num_runners,
-          "shared_runtime_scheduler");
-      batched_steady->preload_all();
+          "shared_runtime_scheduler",
+          required_scheduler_buckets);
+      batched_steady->preload_buckets(required_scheduler_buckets);
       cold_phase("scheduler_preload");
       scheduler_ownership.register_scheduler();
       scheduler = std::make_unique<BatchedSteadyScheduler>(*batched_steady, device, policy);
@@ -835,15 +846,42 @@ struct SharedRuntime::Impl {
       throw std::runtime_error("unable to build inference lane warmup input");
     }
 
-    int total_warmed = 0;
-    for (auto& lane_ptr : lanes) {
-      InferenceLane& lane = *lane_ptr;
-      int warmed = lane.run([this,
-                             &lane,
-                             warmup_inputs = inputs,
-                             warmup_iters = kWarmupItersPerInput]() {
+    const int full_warm_lanes =
+        std::min(lane_count, parse_positive_env_int("NEMOTRON_WS_WARM_FULL_LANES", 1));
+    const int tail_warmup_iters = parse_positive_env_int("NEMOTRON_WS_WARM_TAIL_ITERS", 1);
+    const auto warmup_inputs = std::make_shared<const std::vector<WarmupInput>>(std::move(inputs));
+    const size_t warmup_input_count = warmup_inputs->size();
+
+    struct LaneWarmupResult {
+      int lane_id = 0;
+      int completed = 0;
+      int iters_per_input = 0;
+      bool full = false;
+    };
+
+    std::printf("inference lane warmup dispatch: lanes=%d full_lanes=%d full_iters_per_input=%d "
+                "tail_iters_per_input=%d warmup_inputs=%zu finalize_buckets=%zu\n",
+                lane_count,
+                full_warm_lanes,
+                kWarmupItersPerInput,
+                tail_warmup_iters,
+                warmup_input_count,
+                finalize_loaders->total_bucket_count());
+    std::fflush(stdout);
+
+    std::vector<std::future<LaneWarmupResult>> futures;
+    futures.reserve(lanes.size());
+    for (size_t lane_index = 0; lane_index < lanes.size(); ++lane_index) {
+      InferenceLane& lane = *lanes[lane_index];
+      const bool full = static_cast<int>(lane_index) < full_warm_lanes;
+      const int lane_warmup_iters = full ? kWarmupItersPerInput : tail_warmup_iters;
+      futures.push_back(lane.submit([this,
+                                     &lane,
+                                     warmup_inputs,
+                                     warmup_iters = lane_warmup_iters,
+                                     full]() {
         int completed = 0;
-        for (const auto& warmup_input : warmup_inputs) {
+        for (const auto& warmup_input : *warmup_inputs) {
           for (int iter = 0; iter < warmup_iters; ++iter) {
             SessionState warm_state;
             reset_session(warm_state, bundle, device);
@@ -883,23 +921,42 @@ struct SharedRuntime::Impl {
           }
         }
         lane.synchronize();
-        return completed;
-      });
-      total_warmed += warmed;
-      std::printf("inference lane warmed: lane=%d iters=%d warmup_inputs=%zu finalize_buckets=%zu\n",
-                  lane.id(),
-                  warmed,
-                  inputs.size(),
-                  finalize_loaders->total_bucket_count());
-      std::fflush(stdout);
+        return LaneWarmupResult{lane.id(), completed, warmup_iters, full};
+      }));
     }
+
+    int total_warmed = 0;
+    std::exception_ptr first_exception;
+    for (auto& future : futures) {
+      try {
+        LaneWarmupResult result = future.get();
+        total_warmed += result.completed;
+        std::printf("inference lane warmed: lane=%d mode=%s iters=%d iters_per_input=%d "
+                    "warmup_inputs=%zu finalize_buckets=%zu\n",
+                    result.lane_id,
+                    result.full ? "full" : "tail",
+                    result.completed,
+                    result.iters_per_input,
+                    warmup_input_count,
+                    finalize_loaders->total_bucket_count());
+        std::fflush(stdout);
+      } catch (...) {
+        if (!first_exception) first_exception = std::current_exception();
+      }
+    }
+    if (first_exception) std::rethrow_exception(first_exception);
+
     std::printf("inference lane pool warmed: lanes=%d total_iters=%d warmup_inputs=%zu "
-                "finalize_bucket_coverage=%zu/%zu per_lane_mib=%.3f\n",
+                "finalize_bucket_coverage=%zu/%zu full_lanes=%d full_iters_per_input=%d "
+                "tail_iters_per_input=%d per_lane_mib=%.3f\n",
                 lane_count,
                 total_warmed,
-                inputs.size(),
+                warmup_input_count,
                 bucket_warmup_inputs,
                 finalize_loaders->total_bucket_count(),
+                full_warm_lanes,
+                kWarmupItersPerInput,
+                tail_warmup_iters,
                 bytes_to_mib(lane_delta_per_lane_bytes));
     std::fflush(stdout);
   }

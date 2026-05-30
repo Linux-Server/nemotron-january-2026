@@ -172,7 +172,8 @@ class BatchedSteadyLoaderSet {
                          std::string shared_weights_ts,
                          torch::Device device,
                          int num_runners,
-                         std::string policy)
+                         std::string policy,
+                         std::vector<int> manifest_verify_buckets = {})
       : package_dir_(std::move(package_dir)),
         shared_weights_ts_(std::move(shared_weights_ts)),
         device_(device),
@@ -185,7 +186,7 @@ class BatchedSteadyLoaderSet {
     if (!bsteady_detail::file_exists(shared_weights_ts_)) {
       throw std::runtime_error("batched steady shared weights missing: " + shared_weights_ts_);
     }
-    verify_manifest();
+    verify_manifest(manifest_verify_buckets);
     shared_constants_ = bsteady_detail::load_shared_constants(shared_weights_ts_, device_);
     std::printf("density loaded batched steady shared constants: %zu entries policy=%s\n",
                 shared_constants_.size(),
@@ -287,15 +288,28 @@ class BatchedSteadyLoaderSet {
             ("enc_steady_aoti_b" + std::to_string(bucket) + ".pt2")).string();
   }
 
-  void verify_manifest() const {
+  void verify_manifest(const std::vector<int>& verify_buckets) const {
     const std::string manifest_path = (bsteady_detail::fs::path(package_dir_) / "MANIFEST.json").string();
     if (!bsteady_detail::file_exists(manifest_path)) {
       throw std::runtime_error("batched steady MANIFEST.json is required: " + manifest_path);
+    }
+    std::set<int> buckets_to_verify;
+    if (verify_buckets.empty()) {
+      buckets_to_verify.insert(kBuckets.begin(), kBuckets.end());
+    } else {
+      for (int bucket : verify_buckets) {
+        if (std::find(kBuckets.begin(), kBuckets.end(), bucket) == kBuckets.end()) {
+          throw std::runtime_error("batched steady invalid manifest verify bucket B=" +
+                                   std::to_string(bucket));
+        }
+        buckets_to_verify.insert(bucket);
+      }
     }
     auto buckets = bsteady_detail::load_manifest_buckets(manifest_path);
     std::set<int> seen;
     std::string shared_sha = bsteady_detail::sha256_file(shared_weights_ts_);
     size_t ep_verified = 0;
+    size_t package_verified = 0;
     for (const auto& entry : buckets) {
       if (!seen.emplace(entry.B).second) {
         throw std::runtime_error("batched steady manifest duplicate B=" + std::to_string(entry.B));
@@ -305,6 +319,7 @@ class BatchedSteadyLoaderSet {
         throw std::runtime_error("batched steady manifest package mismatch for B=" + std::to_string(entry.B) +
                                  ": got " + entry.package + " expected " + expected);
       }
+      if (buckets_to_verify.find(entry.B) == buckets_to_verify.end()) continue;
       std::string expected_ep = "enc_steady_t2a_b" + std::to_string(entry.B) + ".pt2";
       std::string path = (bsteady_detail::fs::path(package_dir_) / entry.package).string();
       if (!bsteady_detail::file_exists(path)) throw std::runtime_error("batched steady package missing: " + path);
@@ -318,6 +333,7 @@ class BatchedSteadyLoaderSet {
                                  std::to_string(entry.B) + ": manifest=" + entry.shared_weight_sha256 +
                                  " actual=" + shared_sha);
       }
+      ++package_verified;
       std::string ep_path = (bsteady_detail::fs::path(package_dir_) / expected_ep).string();
       if (!bsteady_detail::file_exists(ep_path)) {
         std::printf("density batched steady EP sha skipped: B=%d path=%s reason=missing\n",
@@ -340,8 +356,15 @@ class BatchedSteadyLoaderSet {
         throw std::runtime_error("batched steady manifest missing B=" + std::to_string(bucket));
       }
     }
-    std::printf("density batched steady manifest verified: buckets=%zu ep_verified=%zu shared_weight_sha256=%s\n",
+    for (int bucket : buckets_to_verify) {
+      if (seen.find(bucket) == seen.end()) {
+        throw std::runtime_error("batched steady manifest missing requested B=" + std::to_string(bucket));
+      }
+    }
+    std::printf("density batched steady manifest verified: buckets=%zu package_verified=%zu "
+                "ep_verified=%zu shared_weight_sha256=%s\n",
                 buckets.size(),
+                package_verified,
                 ep_verified,
                 shared_sha.c_str());
   }

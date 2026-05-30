@@ -130,6 +130,7 @@ class BatchedSteadyScheduler {
   BatchedSteadySchedulerTelemetry telemetry_snapshot() const;
   const BatchedSteadySchedulerPolicy& policy() const { return policy_; }
   int future_timeout_ms() const;
+  static std::vector<int> required_buckets_for_policy(const BatchedSteadySchedulerPolicy& policy);
 
  private:
   using Clock = std::chrono::steady_clock;
