@@ -1896,35 +1896,35 @@ static std::vector<at::Tensor> run_steady_encoder(AOTIModelPackageLoader& loader
 
 static constexpr double kSteadyShadowTolerance = 5.0e-2;
 
-static void steady_shadow_cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
+static void steady_scheduler_cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
   if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("steady shadow CUDA error at ") + file + ":" +
+    throw std::runtime_error(std::string("steady scheduler CUDA error at ") + file + ":" +
                              std::to_string(line) + " expr=" + expr + " error=" +
                              cudaGetErrorString(err));
   }
 }
 
-#define STEADY_SHADOW_CUDA_CHECK(expr) steady_shadow_cuda_check((expr), #expr, __FILE__, __LINE__)
+#define STEADY_SCHEDULER_CUDA_CHECK(expr) steady_scheduler_cuda_check((expr), #expr, __FILE__, __LINE__)
 
-struct SteadyShadowCudaEvent {
+struct SteadySchedulerCudaEvent {
   cudaEvent_t event = nullptr;
 
-  SteadyShadowCudaEvent() = default;
-  SteadyShadowCudaEvent(const SteadyShadowCudaEvent&) = delete;
-  SteadyShadowCudaEvent& operator=(const SteadyShadowCudaEvent&) = delete;
+  SteadySchedulerCudaEvent() = default;
+  SteadySchedulerCudaEvent(const SteadySchedulerCudaEvent&) = delete;
+  SteadySchedulerCudaEvent& operator=(const SteadySchedulerCudaEvent&) = delete;
 
-  ~SteadyShadowCudaEvent() {
+  ~SteadySchedulerCudaEvent() {
     reset();
   }
 
   void create(unsigned int flags) {
     reset();
-    STEADY_SHADOW_CUDA_CHECK(cudaEventCreateWithFlags(&event, flags));
+    STEADY_SCHEDULER_CUDA_CHECK(cudaEventCreateWithFlags(&event, flags));
   }
 
   void record(c10::cuda::CUDAStream stream) {
-    if (event == nullptr) throw std::runtime_error("steady shadow attempted to record a null CUDA event");
-    STEADY_SHADOW_CUDA_CHECK(cudaEventRecord(event, stream.stream()));
+    if (event == nullptr) throw std::runtime_error("steady scheduler attempted to record a null CUDA event");
+    STEADY_SCHEDULER_CUDA_CHECK(cudaEventRecord(event, stream.stream()));
   }
 
   cudaEvent_t get() const {
@@ -2230,7 +2230,7 @@ static void apply_runtime_steady_outputs(SessionState& state,
   }
 }
 
-struct SteadyShadowSchedulerResult {
+struct SteadySchedulerResult {
   std::vector<at::Tensor> tensors;
   int bucket = 0;
   int k = 0;
@@ -2238,11 +2238,11 @@ struct SteadyShadowSchedulerResult {
   int64_t cycle_id = 0;
 };
 
-static std::future<DispatchResult> enqueue_steady_encoder_scheduler_shadow(BatchedSteadyScheduler& scheduler,
-                                                                           const torch::Tensor& chunk,
-                                                                           SessionState& state,
-                                                                           const ExecutionContext& ctx,
-                                                                           const std::string& label) {
+static std::future<DispatchResult> enqueue_steady_encoder_scheduler(BatchedSteadyScheduler& scheduler,
+                                                                    const torch::Tensor& chunk,
+                                                                    SessionState& state,
+                                                                    const ExecutionContext& ctx,
+                                                                    const std::string& label) {
   BatchedSteadyInput scheduler_input{
       chunk.contiguous(),
       state.clc.contiguous(),
@@ -2251,39 +2251,41 @@ static std::future<DispatchResult> enqueue_steady_encoder_scheduler_shadow(Batch
       label,
   };
 
-  SteadyShadowCudaEvent producer_event;
+  SteadySchedulerCudaEvent producer_event;
   producer_event.create(cudaEventDisableTiming);
   producer_event.record(ctx.stream);
 
-  std::future<DispatchResult> future;
-  try {
-    future = scheduler.enqueue({std::move(scheduler_input), ctx.stream, producer_event.get()});
-    (void)producer_event.release();
-  } catch (...) {
-    throw;
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(scheduler.future_timeout_ms());
+  auto future = scheduler.try_enqueue_until(
+      {std::move(scheduler_input), ctx.stream, producer_event.get()},
+      deadline);
+  if (!future.has_value()) {
+    throw std::runtime_error("steady scheduler admission timeout for " + label);
   }
+  (void)producer_event.release();
 
-  return future;
+  return std::move(*future);
 }
 
-static SteadyShadowSchedulerResult wait_steady_encoder_scheduler_shadow(BatchedSteadyScheduler& scheduler,
-                                                                        std::future<DispatchResult>&& future,
-                                                                        const ExecutionContext& ctx,
-                                                                        const std::string& label) {
+static SteadySchedulerResult wait_steady_encoder_scheduler(BatchedSteadyScheduler& scheduler,
+                                                          std::future<DispatchResult>&& future,
+                                                          const ExecutionContext& ctx,
+                                                          const std::string& label) {
   auto wait_status = future.wait_for(std::chrono::milliseconds(scheduler.future_timeout_ms()));
   if (wait_status != std::future_status::ready) {
-    throw std::runtime_error("steady shadow scheduler future timeout for " + label);
+    throw std::runtime_error("steady scheduler future timeout for " + label);
   }
   auto result = future.get();
   if (result.completion.get() == nullptr) {
-    throw std::runtime_error("steady shadow scheduler returned a null completion event for " + label);
+    throw std::runtime_error("steady scheduler returned a null completion event for " + label);
   }
-  STEADY_SHADOW_CUDA_CHECK(cudaStreamWaitEvent(ctx.stream.stream(), result.completion.get(), 0));
+  STEADY_SCHEDULER_CUDA_CHECK(cudaStreamWaitEvent(ctx.stream.stream(), result.completion.get(), 0));
   if (result.row_tensors.size() < 5) {
-    throw std::runtime_error("steady shadow scheduler returned fewer than 5 row tensors for " + label);
+    throw std::runtime_error("steady scheduler returned fewer than 5 row tensors for " + label);
   }
 
-  SteadyShadowSchedulerResult out;
+  SteadySchedulerResult out;
   out.tensors = std::move(result.row_tensors);
   out.bucket = result.bucket;
   out.k = result.k;
@@ -2310,16 +2312,16 @@ static void run_steady_shadow_compare_and_commit(SessionState& state,
   std::vector<EmittedEvent> inline_events;
   std::vector<EmittedEvent> scheduler_events;
 
-  auto scheduler_future = enqueue_steady_encoder_scheduler_shadow(scheduler,
-                                                                 chunk,
-                                                                 scheduler_state,
-                                                                 ctx,
-                                                                 label + ".scheduler_shadow");
+  auto scheduler_future = enqueue_steady_encoder_scheduler(scheduler,
+                                                           chunk,
+                                                           scheduler_state,
+                                                           ctx,
+                                                           label + ".scheduler_shadow");
   auto inline_out = run_steady_encoder(enc_steady, chunk, inline_state, ctx);
-  auto scheduler_result = wait_steady_encoder_scheduler_shadow(scheduler,
-                                                              std::move(scheduler_future),
-                                                              ctx,
-                                                              label + ".scheduler_shadow");
+  auto scheduler_result = wait_steady_encoder_scheduler(scheduler,
+                                                       std::move(scheduler_future),
+                                                       ctx,
+                                                       label + ".scheduler_shadow");
 
   apply_runtime_steady_outputs(inline_state,
                                inline_out,
@@ -2859,7 +2861,8 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
                                             const std::string& label,
                                             MarginStats* margin_stats = nullptr,
                                             CacheOwnershipStats* cache_ownership = nullptr,
-                                            BatchedSteadyScheduler* steady_shadow_scheduler = nullptr) {
+                                            BatchedSteadyScheduler* steady_scheduler = nullptr,
+                                            bool steady_shadow_enabled = false) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("runtime steady chunk outside STREAMING");
@@ -2875,12 +2878,15 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
   } else {
     if (!state.ring.defined()) throw std::runtime_error(label + " runtime continuation missing mel ring");
     chunk = torch::cat({state.ring, new_mel}, 2).contiguous();
-    if (steady_shadow_scheduler != nullptr) {
+    if (steady_shadow_enabled && steady_scheduler == nullptr) {
+      throw std::runtime_error("steady shadow requested without a steady scheduler for " + label);
+    }
+    if (steady_shadow_enabled) {
       run_steady_shadow_compare_and_commit(state,
                                            chunk,
                                            new_mel,
                                            enc_steady,
-                                           *steady_shadow_scheduler,
+                                           *steady_scheduler,
                                            ctx,
                                            tokenizer,
                                            events,
@@ -2889,7 +2895,20 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
                                            cache_ownership);
       return;
     }
-    out = run_steady_encoder(enc_steady, chunk, state, ctx);
+    if (steady_scheduler != nullptr) {
+      auto scheduler_future = enqueue_steady_encoder_scheduler(*steady_scheduler,
+                                                               chunk,
+                                                               state,
+                                                               ctx,
+                                                               label + ".scheduler");
+      auto scheduler_result = wait_steady_encoder_scheduler(*steady_scheduler,
+                                                            std::move(scheduler_future),
+                                                            ctx,
+                                                            label + ".scheduler");
+      out = std::move(scheduler_result.tensors);
+    } else {
+      out = run_steady_encoder(enc_steady, chunk, state, ctx);
+    }
   }
 
   apply_runtime_steady_outputs(state,
@@ -2915,7 +2934,8 @@ static int drain_audio_steady_runtime(SessionState& state,
                                       const std::string& label,
                                       MarginStats* margin_stats = nullptr,
                                       CacheOwnershipStats* cache_ownership = nullptr,
-                                      BatchedSteadyScheduler* steady_shadow_scheduler = nullptr) {
+                                      BatchedSteadyScheduler* steady_scheduler = nullptr,
+                                      bool steady_shadow_enabled = false) {
   int chunks = 0;
   while (audio.session_ready(state)) {
     auto new_mel = audio.steady_new_mel(state, ctx.preproc).to(device).contiguous();
@@ -2930,7 +2950,8 @@ static int drain_audio_steady_runtime(SessionState& state,
                                     label + ".chunk" + std::to_string(chunks),
                                     margin_stats,
                                     cache_ownership,
-                                    steady_shadow_scheduler);
+                                    steady_scheduler,
+                                    steady_shadow_enabled);
     size_t consume = std::min(static_cast<size_t>(audio.g.shift_frames * audio.g.hop_samples),
                               state.pending_audio.size());
     std::vector<float> consumed(state.pending_audio.begin(),
@@ -2955,7 +2976,8 @@ static int append_pcm_and_drain_runtime(SessionState& state,
                                         const std::string& label,
                                         MarginStats* margin_stats = nullptr,
                                         CacheOwnershipStats* cache_ownership = nullptr,
-                                        BatchedSteadyScheduler* steady_shadow_scheduler = nullptr) {
+                                        BatchedSteadyScheduler* steady_scheduler = nullptr,
+                                        bool steady_shadow_enabled = false) {
   if (state.mode == SessionMode::PENDING_FINALIZE) {
     state.post_stop_audio.insert(state.post_stop_audio.end(), pcm.begin(), pcm.end());
     return 0;
@@ -2974,7 +2996,8 @@ static int append_pcm_and_drain_runtime(SessionState& state,
                                     label,
                                     margin_stats,
                                     cache_ownership,
-                                    steady_shadow_scheduler);
+                                    steady_scheduler,
+                                    steady_shadow_enabled);
 }
 
 static int append_pcm_and_drain_runtime(SessionState& state,
@@ -3016,7 +3039,8 @@ static int flush_post_stop_audio_runtime(SessionState& state,
                                          const std::string& label,
                                          MarginStats* margin_stats = nullptr,
                                          CacheOwnershipStats* cache_ownership = nullptr,
-                                         BatchedSteadyScheduler* steady_shadow_scheduler = nullptr) {
+                                         BatchedSteadyScheduler* steady_scheduler = nullptr,
+                                         bool steady_shadow_enabled = false) {
   if (state.post_stop_audio.empty()) return 0;
   std::vector<float> held;
   held.swap(state.post_stop_audio);
@@ -3033,7 +3057,8 @@ static int flush_post_stop_audio_runtime(SessionState& state,
                                     label,
                                     margin_stats,
                                     cache_ownership,
-                                    steady_shadow_scheduler);
+                                    steady_scheduler,
+                                    steady_shadow_enabled);
 }
 
 static int flush_post_stop_audio_runtime(SessionState& state,
@@ -3078,7 +3103,8 @@ static int vad_start(SessionState& state,
                      const std::string& label,
                      MarginStats* margin_stats = nullptr,
                      CacheOwnershipStats* cache_ownership = nullptr,
-                     BatchedSteadyScheduler* steady_shadow_scheduler = nullptr) {
+                     BatchedSteadyScheduler* steady_scheduler = nullptr,
+                     bool steady_shadow_enabled = false) {
   if (state.mode == SessionMode::PENDING_FINALIZE) {
     state.mode = SessionMode::STREAMING;
     return flush_post_stop_audio_runtime(state,
@@ -3092,7 +3118,8 @@ static int vad_start(SessionState& state,
                                          label,
                                          margin_stats,
                                          cache_ownership,
-                                         steady_shadow_scheduler);
+                                         steady_scheduler,
+                                         steady_shadow_enabled);
   }
   if (state.mode == SessionMode::STREAMING) {
     return flush_post_stop_audio_runtime(state,
@@ -3106,7 +3133,8 @@ static int vad_start(SessionState& state,
                                          label,
                                          margin_stats,
                                          cache_ownership,
-                                         steady_shadow_scheduler);
+                                         steady_scheduler,
+                                         steady_shadow_enabled);
   }
   throw std::runtime_error("vad_start called after FINALIZED");
 }
@@ -3197,7 +3225,8 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                       label,
                                       nullptr,
                                       nullptr,
-                                      nullptr);
+                                      nullptr,
+                                      false);
 }
 
 int session_runtime_append_pcm_and_drain(SessionState& state,
@@ -3210,7 +3239,8 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const Tokenizer& tokenizer,
                                          std::vector<EmittedEvent>& events,
                                          const std::string& label,
-                                         BatchedSteadyScheduler* steady_shadow_scheduler) {
+                                         BatchedSteadyScheduler* steady_scheduler,
+                                         bool steady_shadow_enabled) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
   return append_pcm_and_drain_runtime(state,
@@ -3225,7 +3255,8 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                       label,
                                       nullptr,
                                       nullptr,
-                                      steady_shadow_scheduler);
+                                      steady_scheduler,
+                                      steady_shadow_enabled);
 }
 
 int session_runtime_append_pcm_and_drain(SessionState& state,
@@ -3274,7 +3305,8 @@ int session_runtime_vad_start(SessionState& state,
                    label,
                    nullptr,
                    nullptr,
-                   nullptr);
+                   nullptr,
+                   false);
 }
 
 int session_runtime_vad_start(SessionState& state,
@@ -3286,7 +3318,8 @@ int session_runtime_vad_start(SessionState& state,
                               const Tokenizer& tokenizer,
                               std::vector<EmittedEvent>& events,
                               const std::string& label,
-                              BatchedSteadyScheduler* steady_shadow_scheduler) {
+                              BatchedSteadyScheduler* steady_scheduler,
+                              bool steady_shadow_enabled) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(ctx.stream);
   return vad_start(state,
@@ -3300,7 +3333,8 @@ int session_runtime_vad_start(SessionState& state,
                    label,
                    nullptr,
                    nullptr,
-                   steady_shadow_scheduler);
+                   steady_scheduler,
+                   steady_shadow_enabled);
 }
 
 int session_runtime_vad_start(SessionState& state,

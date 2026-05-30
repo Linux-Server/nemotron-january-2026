@@ -1004,7 +1004,7 @@ struct SessionRuntime::Impl {
     auto& s = *shared.impl_;
     lane().run([&]() {
       auto ctx = execution_context();
-      BatchedSteadyScheduler* shadow_scheduler = s.cfg.steady_shadow_enabled ? s.scheduler.get() : nullptr;
+      BatchedSteadyScheduler* steady_scheduler = s.cfg.scheduler_enabled ? s.scheduler.get() : nullptr;
       if (state.emitted == 0) {
         auto enc_first_wait_start = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> enc_first_lock(s.enc_first_mutex);
@@ -1021,7 +1021,8 @@ struct SessionRuntime::Impl {
                                              s.tokenizer_value,
                                              events,
                                              cfg.label + ".append",
-                                             shadow_scheduler);
+                                             steady_scheduler,
+                                             s.cfg.steady_shadow_enabled);
       } else {
         session_runtime_append_pcm_and_drain(state,
                                              pcm,
@@ -1033,7 +1034,8 @@ struct SessionRuntime::Impl {
                                              s.tokenizer_value,
                                              events,
                                              cfg.label + ".append",
-                                             shadow_scheduler);
+                                             steady_scheduler,
+                                             s.cfg.steady_shadow_enabled);
       }
       synchronize_lane_stream();
     });
@@ -1049,7 +1051,7 @@ struct SessionRuntime::Impl {
     auto& s = *shared.impl_;
     lane().run([&]() {
       auto ctx = execution_context();
-      BatchedSteadyScheduler* shadow_scheduler = s.cfg.steady_shadow_enabled ? s.scheduler.get() : nullptr;
+      BatchedSteadyScheduler* steady_scheduler = s.cfg.scheduler_enabled ? s.scheduler.get() : nullptr;
       if (state.emitted == 0) {
         auto enc_first_wait_start = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> enc_first_lock(s.enc_first_mutex);
@@ -1065,7 +1067,8 @@ struct SessionRuntime::Impl {
                                   s.tokenizer_value,
                                   events,
                                   cfg.label + ".vad_start",
-                                  shadow_scheduler);
+                                  steady_scheduler,
+                                  s.cfg.steady_shadow_enabled);
       } else {
         session_runtime_vad_start(state,
                                   *audio,
@@ -1076,7 +1079,8 @@ struct SessionRuntime::Impl {
                                   s.tokenizer_value,
                                   events,
                                   cfg.label + ".vad_start",
-                                  shadow_scheduler);
+                                  steady_scheduler,
+                                  s.cfg.steady_shadow_enabled);
       }
       synchronize_lane_stream();
     });

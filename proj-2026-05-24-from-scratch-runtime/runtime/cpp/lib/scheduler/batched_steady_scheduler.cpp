@@ -106,6 +106,33 @@ std::future<DispatchResult> BatchedSteadyScheduler::enqueue(EnqueueRequest&& req
   return future;
 }
 
+std::optional<std::future<DispatchResult>> BatchedSteadyScheduler::try_enqueue_until(
+    EnqueueRequest&& request,
+    std::chrono::steady_clock::time_point deadline) {
+  if (request.producer_event == nullptr) {
+    throw std::runtime_error("batch steady enqueue requires a producer-ready CUDA event");
+  }
+  auto item = std::make_shared<QueueItem>(std::move(request));
+  item->enqueue_time = Clock::now();
+  auto future = item->promise.get_future();
+
+  std::unique_lock<std::mutex> lock(mutex_);
+  bool admitted = cv_capacity_.wait_until(lock, deadline, [&] {
+    return closing_ || fault_ || static_cast<int>(queue_.size()) < policy_.queue_capacity;
+  });
+  if (!admitted) return std::nullopt;
+  if (fault_) std::rethrow_exception(fault_);
+  if (closing_) throw std::runtime_error("batch steady enqueue after scheduler close");
+  item->sequence = next_sequence_++;
+  queue_.push_back(item);
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    ++telemetry_.enqueued;
+  }
+  cv_.notify_one();
+  return std::optional<std::future<DispatchResult>>(std::move(future));
+}
+
 void BatchedSteadyScheduler::start() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (closed_) throw std::runtime_error("batch steady start after close");
@@ -254,7 +281,9 @@ void BatchedSteadyScheduler::dispatcher_loop() {
       std::printf("B2_SCHEDULER_DISPATCHER_FATAL error=unknown\n");
     }
     std::fflush(stdout);
-    std::exit(1);
+    cv_.notify_all();
+    cv_capacity_.notify_all();
+    return;
   }
 }
 

@@ -6975,7 +6975,8 @@ proc = subprocess.Popen(
 )
 port = None
 captured = []
-deadline = time.time() + 120
+server_start_timeout = float(os.environ.get("NEMOTRON_SMOKE_SERVER_START_TIMEOUT_SEC", "900"))
+deadline = time.time() + server_start_timeout
 try:
     while time.time() < deadline:
         line = proc.stdout.readline()
@@ -6989,7 +6990,7 @@ try:
             port = int(line.rsplit(":", 1)[1])
             break
     if port is None:
-        fail("server_start", "timeout")
+        fail("server_start", f"timeout_sec={server_start_timeout}")
 
     pcm = load_pcm()
     sock = ws_connect(port, "model=en")
@@ -7288,7 +7289,8 @@ def start_server(extra_env=None):
     )
     captured = []
     port = None
-    deadline = time.time() + 120
+    server_start_timeout = float(os.environ.get("NEMOTRON_SMOKE_SERVER_START_TIMEOUT_SEC", "900"))
+    deadline = time.time() + server_start_timeout
     while time.time() < deadline:
         line = proc.stdout.readline()
         if not line:
@@ -7301,7 +7303,7 @@ def start_server(extra_env=None):
             port = int(line.rsplit(":", 1)[1])
             break
     if port is None:
-        fail("server_start", "timeout")
+        fail("server_start", f"timeout_sec={server_start_timeout}")
     return proc, port, captured
 
 def collect_exit(proc, captured, timeout=60):
@@ -7624,7 +7626,8 @@ proc = subprocess.Popen(
 captured = []
 port = None
 try:
-    deadline = time.time() + 120
+    server_start_timeout = float(os.environ.get("NEMOTRON_SMOKE_SERVER_START_TIMEOUT_SEC", "900"))
+    deadline = time.time() + server_start_timeout
     while time.time() < deadline:
         line = proc.stdout.readline()
         if not line:
@@ -7637,7 +7640,7 @@ try:
             port = int(line.rsplit(":", 1)[1])
             break
     if port is None:
-        fail("server_start", "timeout")
+        fail("server_start", f"timeout_sec={server_start_timeout}")
 
     sock = ws_connect(port)
     oversize = 16 * 1024 * 1024

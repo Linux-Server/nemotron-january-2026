@@ -352,7 +352,8 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const Tokenizer& tokenizer,
                                          std::vector<EmittedEvent>& events,
                                          const std::string& label,
-                                         BatchedSteadyScheduler* steady_shadow_scheduler);
+                                         BatchedSteadyScheduler* steady_scheduler,
+                                         bool steady_shadow_enabled);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
@@ -381,7 +382,8 @@ int session_runtime_vad_start(SessionState& state,
                               const Tokenizer& tokenizer,
                               std::vector<EmittedEvent>& events,
                               const std::string& label,
-                              BatchedSteadyScheduler* steady_shadow_scheduler);
+                              BatchedSteadyScheduler* steady_scheduler,
+                              bool steady_shadow_enabled);
 void session_runtime_print_steady_shadow_report();
 FinalizeOutcome session_runtime_finalize(SessionState& state,
                                          torch::jit::Module& bundle,

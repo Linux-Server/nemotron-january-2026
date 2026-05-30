@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -118,6 +119,9 @@ class BatchedSteadyScheduler {
   ~BatchedSteadyScheduler();
 
   std::future<DispatchResult> enqueue(EnqueueRequest&& request);
+  std::optional<std::future<DispatchResult>> try_enqueue_until(
+      EnqueueRequest&& request,
+      std::chrono::steady_clock::time_point deadline);
   void start();
   void close();
   void warmup_buckets();

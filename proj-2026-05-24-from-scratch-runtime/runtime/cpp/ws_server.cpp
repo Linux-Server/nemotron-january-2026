@@ -1470,10 +1470,12 @@ bool enqueue_shutdown_finalize(SessionRuntime& session,
 
 void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route route) {
   UniqueFd conn(fd);
+  std::shared_ptr<ActiveWsSession> active;
+  bool protocol_close_sent = false;
+  try {
   if (!configure_send_timeout(conn.get(), state->cfg.ws_send_timeout_sec)) {
     return;
   }
-  bool protocol_close_sent = false;
   std::string stream_id = "ws-" + std::to_string(::getpid()) + "-" +
                           std::to_string(state->next_stream_id.fetch_add(1));
 
@@ -1510,7 +1512,7 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
       static_cast<int>(state->admission->telemetry_snapshot().active_count);
   session_cfg.label = stream_id;
   SessionRuntime session(*state->shared_runtime, session_cfg);
-  std::shared_ptr<ActiveWsSession> active = register_session(state, stream_id, conn.get());
+  active = register_session(state, stream_id, conn.get());
 
   if (!send_ws_text(conn.get(), "{\"type\":\"ready\"}", active, &protocol_close_sent)) {
     unregister_session(state, active);
@@ -1701,6 +1703,25 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
     drain_peer_after_clean_close(conn.get(), 1000);
   }
   unregister_session(state, active);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "WS_SESSION_ERROR error=%s\n", e.what());
+    if (conn.get() >= 0 && !protocol_close_sent) {
+      (void)send_ws_text(conn.get(), error_event_json(e.what()), active, &protocol_close_sent);
+    }
+    if (conn.get() >= 0 && !protocol_close_sent) {
+      (void)send_ws_close(conn.get(), 1011, "session_error", active, &protocol_close_sent);
+    }
+    unregister_session(state, active);
+  } catch (...) {
+    std::fprintf(stderr, "WS_SESSION_ERROR error=unknown\n");
+    if (conn.get() >= 0 && !protocol_close_sent) {
+      (void)send_ws_text(conn.get(), error_event_json("unknown session error"), active, &protocol_close_sent);
+    }
+    if (conn.get() >= 0 && !protocol_close_sent) {
+      (void)send_ws_close(conn.get(), 1011, "session_error", active, &protocol_close_sent);
+    }
+    unregister_session(state, active);
+  }
 }
 
 class WsServer {
