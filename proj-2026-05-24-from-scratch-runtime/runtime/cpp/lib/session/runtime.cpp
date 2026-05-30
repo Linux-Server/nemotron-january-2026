@@ -683,6 +683,10 @@ struct SharedRuntime::Impl {
                 finalize_loaders->memory_json().c_str());
     std::fflush(stdout);
 
+    if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
+      throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
+    }
+
     build_inference_lanes();
     warm_inference_lanes();
 
@@ -710,6 +714,12 @@ struct SharedRuntime::Impl {
                   scheduler_ownership.active_schedulers(),
                   scheduler_ownership.active_loader_sets());
       std::fflush(stdout);
+      if (cfg.steady_shadow_enabled) {
+        std::printf("steady shadow parity enabled: env=NEMOTRON_WS_STEADY_SHADOW commit=inline "
+                    "compare=scheduler_vs_inline tolerance_name=B2_A1_PARITY tolerance=5.000000e-02 "
+                    "timing=INVALID\n");
+        std::fflush(stdout);
+      }
     } else {
       std::printf("shared runtime scheduler disabled: owner=SharedRuntime scheduler_instances=0 "
                   "steady_loader_sets=0\n");
@@ -718,6 +728,7 @@ struct SharedRuntime::Impl {
   }
 
   ~Impl() {
+    session_runtime_print_steady_shadow_report();
     if (scheduler) scheduler->close();
     {
       std::lock_guard<std::mutex> lock(lanes_mu);
@@ -993,6 +1004,7 @@ struct SessionRuntime::Impl {
     auto& s = *shared.impl_;
     lane().run([&]() {
       auto ctx = execution_context();
+      BatchedSteadyScheduler* shadow_scheduler = s.cfg.steady_shadow_enabled ? s.scheduler.get() : nullptr;
       if (state.emitted == 0) {
         auto enc_first_wait_start = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> enc_first_lock(s.enc_first_mutex);
@@ -1008,7 +1020,8 @@ struct SessionRuntime::Impl {
                                              s.device,
                                              s.tokenizer_value,
                                              events,
-                                             cfg.label + ".append");
+                                             cfg.label + ".append",
+                                             shadow_scheduler);
       } else {
         session_runtime_append_pcm_and_drain(state,
                                              pcm,
@@ -1019,7 +1032,8 @@ struct SessionRuntime::Impl {
                                              s.device,
                                              s.tokenizer_value,
                                              events,
-                                             cfg.label + ".append");
+                                             cfg.label + ".append",
+                                             shadow_scheduler);
       }
       synchronize_lane_stream();
     });
@@ -1035,6 +1049,7 @@ struct SessionRuntime::Impl {
     auto& s = *shared.impl_;
     lane().run([&]() {
       auto ctx = execution_context();
+      BatchedSteadyScheduler* shadow_scheduler = s.cfg.steady_shadow_enabled ? s.scheduler.get() : nullptr;
       if (state.emitted == 0) {
         auto enc_first_wait_start = std::chrono::steady_clock::now();
         std::unique_lock<std::mutex> enc_first_lock(s.enc_first_mutex);
@@ -1049,7 +1064,8 @@ struct SessionRuntime::Impl {
                                   s.device,
                                   s.tokenizer_value,
                                   events,
-                                  cfg.label + ".vad_start");
+                                  cfg.label + ".vad_start",
+                                  shadow_scheduler);
       } else {
         session_runtime_vad_start(state,
                                   *audio,
@@ -1059,7 +1075,8 @@ struct SessionRuntime::Impl {
                                   s.device,
                                   s.tokenizer_value,
                                   events,
-                                  cfg.label + ".vad_start");
+                                  cfg.label + ".vad_start",
+                                  shadow_scheduler);
       }
       synchronize_lane_stream();
     });

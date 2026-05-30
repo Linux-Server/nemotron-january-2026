@@ -19,6 +19,8 @@
 using torch::inductor::AOTIModelPackageLoader;
 namespace fs = std::filesystem;
 
+class BatchedSteadyScheduler;
+
 static constexpr int BLANK = 1024;
 static constexpr int MAX_SYMBOLS = 10;
 static constexpr int SHIFT = 16;
@@ -340,6 +342,17 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const Tokenizer& tokenizer,
                                          std::vector<EmittedEvent>& events,
                                          const std::string& label);
+int session_runtime_append_pcm_and_drain(SessionState& state,
+                                         const std::vector<float>& pcm,
+                                         RuntimeAudioFrontend& audio,
+                                         torch::jit::Module& enc_first,
+                                         AOTIModelPackageLoader& enc_steady,
+                                         const ExecutionContext& ctx,
+                                         torch::Device device,
+                                         const Tokenizer& tokenizer,
+                                         std::vector<EmittedEvent>& events,
+                                         const std::string& label,
+                                         BatchedSteadyScheduler* steady_shadow_scheduler);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
@@ -359,6 +372,17 @@ int session_runtime_vad_start(SessionState& state,
                               const Tokenizer& tokenizer,
                               std::vector<EmittedEvent>& events,
                               const std::string& label);
+int session_runtime_vad_start(SessionState& state,
+                              RuntimeAudioFrontend& audio,
+                              torch::jit::Module& enc_first,
+                              AOTIModelPackageLoader& enc_steady,
+                              const ExecutionContext& ctx,
+                              torch::Device device,
+                              const Tokenizer& tokenizer,
+                              std::vector<EmittedEvent>& events,
+                              const std::string& label,
+                              BatchedSteadyScheduler* steady_shadow_scheduler);
+void session_runtime_print_steady_shadow_report();
 FinalizeOutcome session_runtime_finalize(SessionState& state,
                                          torch::jit::Module& bundle,
                                          RuntimeAudioFrontend& audio,

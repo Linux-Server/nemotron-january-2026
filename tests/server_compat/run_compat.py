@@ -716,18 +716,23 @@ def python_env(args: argparse.Namespace) -> dict[str, str]:
         "NEMOTRON_BATCH_FINALIZE",
         "NEMOTRON_BATCH_FINALIZE_PREPROC",
         "NEMOTRON_FINALIZE_PRIORITY",
+        "NEMOTRON_WS_STEADY_SHADOW",
     ):
         env.pop(name, None)
     return env
 
 
 def cpp_env(args: argparse.Namespace) -> dict[str, str]:
-    return base_env(args)
+    env = base_env(args)
+    if args.ws_steady_shadow:
+        env["NEMOTRON_WS_STEADY_SHADOW"] = "1"
+    return env
 
 
 def density_env(args: argparse.Namespace) -> dict[str, str]:
     env = base_env(args)
     env["NEMOTRON_DENSITY_BATCH_STEADY"] = "1"
+    env.pop("NEMOTRON_WS_STEADY_SHADOW", None)
     return env
 
 
@@ -1257,6 +1262,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-b-max", type=int, default=4)
     parser.add_argument("--batch-window-ms", type=int, default=10)
     parser.add_argument("--batch-lone-timeout-ms", type=int, default=0)
+    parser.add_argument("--ws-steady-shadow", action="store_true")
     # C++ ws_server cold-loads the SharedRuntime AOTI packages (enc_first,
     # enc_steady, one scheduler loader set, and ~27 finalize buckets); measured ~330s
     # cold on sm_120. The Python server loads the same artifacts in ~10s. 600s

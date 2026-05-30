@@ -593,6 +593,7 @@ struct ServerConfig {
   std::string argv0;
 
   bool scheduler_enabled = false;
+  bool steady_shadow_enabled = false;
   int batch_b_max = kDefaultBatchMax;
   int batch_window_ms = kDefaultBatchWindowMs;
   int batch_lone_timeout_ms = kDefaultBatchLoneTimeoutMs;
@@ -617,6 +618,7 @@ struct ServerConfig {
 
 void populate_env_config(ServerConfig* cfg) {
   cfg->scheduler_enabled = read_env_enabled("NEMOTRON_WS_SCHEDULER", true);
+  cfg->steady_shadow_enabled = read_env_enabled("NEMOTRON_WS_STEADY_SHADOW", false);
   cfg->batch_b_max = read_env_int("NEMOTRON_DENSITY_BATCH_MAX", kDefaultBatchMax);
   cfg->batch_window_ms = read_env_int("NEMOTRON_DENSITY_BATCH_WINDOW_MS", kDefaultBatchWindowMs);
   cfg->batch_lone_timeout_ms =
@@ -689,6 +691,9 @@ void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
   if (require_port_and_admission && !cfg->admission_active_cap_set) {
     throw std::runtime_error("--admission-active-cap or NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP is required");
   }
+  if (cfg->steady_shadow_enabled && !cfg->scheduler_enabled) {
+    throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
+  }
   if (cfg->admission_active_cap_set && cfg->admission_active_cap == 0) {
     throw std::runtime_error("--admission-active-cap must be positive");
   }
@@ -717,6 +722,9 @@ std::string config_table(const ServerConfig& cfg) {
       << "  scheduler_env = NEMOTRON_WS_SCHEDULER\n"
       << "  scheduler_owner = SharedRuntime\n"
       << "  scheduler_enabled = " << json_bool(cfg.scheduler_enabled) << "\n"
+      << "  steady_shadow_env = NEMOTRON_WS_STEADY_SHADOW\n"
+      << "  steady_shadow_enabled = " << json_bool(cfg.steady_shadow_enabled) << "\n"
+      << "  steady_shadow_timing = INVALID_WHEN_ENABLED\n"
       << "  lanes = " << cfg.ws_lanes << "\n"
       << "  steady_runners = " << cfg.steady_num_runners << "\n"
       << "  finalize_runners = " << cfg.finalize_num_runners << "\n"
@@ -1785,6 +1793,7 @@ class WsServer {
     shared_cfg.steady_num_runners = state_->cfg.steady_num_runners;
     shared_cfg.finalize_num_runners = state_->cfg.finalize_num_runners;
     shared_cfg.scheduler_enabled = state_->cfg.scheduler_enabled;
+    shared_cfg.steady_shadow_enabled = state_->cfg.steady_shadow_enabled;
 
     state_->admission = std::make_unique<DensityAdmission>(state_->cfg.admission_active_cap,
                                                            state_->cfg.admission_backlog_cap);
@@ -1999,6 +2008,7 @@ void clear_selftest_env(ScopedEnv* env) {
            "NEMOTRON_STATS_ENABLED",
            "NEMOTRON_STATS_WINDOW",
            "NEMOTRON_WS_SCHEDULER",
+           "NEMOTRON_WS_STEADY_SHADOW",
            "NEMOTRON_DENSITY_BATCH_STEADY",
            "NEMOTRON_DENSITY_ADMISSION_ACTIVE_CAP",
            "NEMOTRON_DENSITY_ADMISSION_BACKLOG_CAP",
