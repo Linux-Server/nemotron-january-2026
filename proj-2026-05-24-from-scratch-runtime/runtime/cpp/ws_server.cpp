@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -202,6 +203,11 @@ bool configure_send_timeout(int fd, int timeout_sec) {
   timeout.tv_sec = timeout_sec;
   timeout.tv_usec = 0;
   return ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0;
+}
+
+bool configure_tcp_nodelay(int fd) {
+  int yes = 1;
+  return ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) == 0;
 }
 
 void close_fd(int* fd) {
@@ -1359,12 +1365,12 @@ std::optional<bool> control_finalize_flag(const nlohmann::json& parsed) {
   return it->get<bool>();
 }
 
-bool process_text_control(const ws_framing::Frame& frame,
+bool process_text_control(const ws_framing::Message& message,
                           SessionRuntime& session,
                           std::deque<PendingOutput>* pending,
                           uint64_t* last_enqueued_finalize_seq,
                           bool* should_close) {
-  std::string text(frame.payload.begin(), frame.payload.end());
+  std::string text(message.payload.begin(), message.payload.end());
   nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
   if (parsed.is_discarded() || !parsed.is_object()) return true;
   auto type_it = parsed.find("type");
@@ -1423,21 +1429,21 @@ bool process_text_control(const ws_framing::Frame& frame,
   return true;
 }
 
-bool process_binary_pcm(const ws_framing::Frame& frame,
+bool process_binary_pcm(const ws_framing::Message& message,
                         SessionRuntime& session,
                         std::deque<PendingOutput>* pending,
                         bool* protocol_close_sent,
                         int fd,
                         const std::shared_ptr<ActiveWsSession>& active) {
-  if ((frame.payload.size() % 2) != 0) {
+  if ((message.payload.size() % 2) != 0) {
     (void)send_ws_close(fd, 1003, "unsupported_data", active, protocol_close_sent);
     return false;
   }
 
   uint64_t interim_gen = session.generation();
   PCMFrame pcm;
-  pcm.samples = reinterpret_cast<const int16_t*>(frame.payload.data());
-  pcm.count = frame.payload.size() / sizeof(int16_t);
+  pcm.samples = reinterpret_cast<const int16_t*>(message.payload.data());
+  pcm.count = message.payload.size() / sizeof(int16_t);
   auto events = session.append_pcm_and_drain(pcm);
   enqueue_event_outputs(pending, std::move(events), interim_gen);
   return true;
@@ -1521,6 +1527,7 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
 
   std::string recv_buffer;
   recv_buffer.reserve(4096);
+  ws_framing::MessageAssembler message_assembler(state->cfg.ws_max_message_size);
   std::deque<PendingOutput> pending_outputs;
   uint64_t last_enqueued_finalize_seq = 0;
   bool should_close = false;
@@ -1530,6 +1537,83 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
   uint64_t ping_sequence = 0;
   auto last_recv_activity = Clock::now();
   auto ping_sent_at = Clock::time_point{};
+
+  auto drain_recv_buffer = [&]() -> bool {
+    for (;;) {
+      ws_framing::Frame frame;
+      size_t consumed = 0;
+      ws_framing::ReadResult read =
+          ws_framing::read_frame(recv_buffer, frame, consumed, state->cfg.ws_max_message_size);
+      if (read == ws_framing::ReadResult::NEED_MORE) return true;
+      if (read == ws_framing::ReadResult::FRAME_TOO_LARGE) {
+        (void)send_ws_close(conn.get(), 1009, "message_too_big", active, &protocol_close_sent);
+        should_close = true;
+        return false;
+      }
+      if (read == ws_framing::ReadResult::MALFORMED) {
+        (void)send_ws_close(conn.get(), 1003, "unsupported_data", active, &protocol_close_sent);
+        should_close = true;
+        return false;
+      }
+      recv_buffer.erase(0, consumed);
+
+      ws_framing::Message message;
+      ws_framing::ReadResult assembled = message_assembler.push_frame(frame, message);
+      if (assembled == ws_framing::ReadResult::NEED_MORE) continue;
+      if (assembled == ws_framing::ReadResult::FRAME_TOO_LARGE) {
+        (void)send_ws_close(conn.get(), 1009, "message_too_big", active, &protocol_close_sent);
+        should_close = true;
+        return false;
+      }
+      if (assembled == ws_framing::ReadResult::MALFORMED) {
+        (void)send_ws_close(conn.get(), 1003, "unsupported_data", active, &protocol_close_sent);
+        should_close = true;
+        return false;
+      }
+
+      if (message.opcode == ws_framing::Opcode::BINARY) {
+        if (!process_binary_pcm(message,
+                                session,
+                                &pending_outputs,
+                                &protocol_close_sent,
+                                conn.get(),
+                                active)) {
+          should_close = true;
+          return false;
+        }
+      } else if (message.opcode == ws_framing::Opcode::TEXT) {
+        if (!process_text_control(message,
+                                  session,
+                                  &pending_outputs,
+                                  &last_enqueued_finalize_seq,
+                                  &should_close)) {
+          should_close = true;
+          return false;
+        }
+      } else if (message.opcode == ws_framing::Opcode::PING) {
+        std::string payload(message.payload.begin(), message.payload.end());
+        if (!send_ws_control(conn.get(), ws_framing::Opcode::PONG, payload, active, &protocol_close_sent)) {
+          should_close = true;
+          return false;
+        }
+      } else if (message.opcode == ws_framing::Opcode::PONG) {
+        ping_waiting_for_pong = false;
+      } else if (message.opcode == ws_framing::Opcode::CLOSE) {
+        should_close = true;
+      }
+
+      if (!flush_pending_outputs(conn.get(),
+                                 session,
+                                 *state->stats,
+                                 &pending_outputs,
+                                 active,
+                                 &protocol_close_sent)) {
+        should_close = true;
+        return false;
+      }
+      if (should_close) return false;
+    }
+  };
 
   while (!should_close) {
     if (active->forced.load(std::memory_order_acquire)) {
@@ -1563,6 +1647,11 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
       break;
     }
     if (should_close) break;
+
+    if (!recv_buffer.empty()) {
+      if (!drain_recv_buffer()) break;
+      if (should_close) break;
+    }
 
     auto now = Clock::now();
     if (ping_waiting_for_pong &&
@@ -1619,56 +1708,7 @@ void ws_worker(int fd, std::shared_ptr<ServerState> state, ws_routes::Route rout
         should_close = true;
       }
 
-      for (;;) {
-        ws_framing::Frame frame;
-        size_t consumed = 0;
-        ws_framing::ReadResult read =
-            ws_framing::read_frame(recv_buffer, frame, consumed, state->cfg.ws_max_message_size);
-        if (read == ws_framing::ReadResult::NEED_MORE) break;
-        if (read == ws_framing::ReadResult::FRAME_TOO_LARGE) {
-          (void)send_ws_close(conn.get(), 1009, "message_too_big", active, &protocol_close_sent);
-          should_close = true;
-          break;
-        }
-        if (read == ws_framing::ReadResult::MALFORMED) {
-          (void)send_ws_close(conn.get(), 1003, "unsupported_data", active, &protocol_close_sent);
-          should_close = true;
-          break;
-        }
-        recv_buffer.erase(0, consumed);
-
-        if (frame.opcode == ws_framing::Opcode::BINARY) {
-          if (!process_binary_pcm(frame,
-                                  session,
-                                  &pending_outputs,
-                                  &protocol_close_sent,
-                                  conn.get(),
-                                  active)) {
-            should_close = true;
-            break;
-          }
-        } else if (frame.opcode == ws_framing::Opcode::TEXT) {
-          if (!process_text_control(frame,
-                                    session,
-                                    &pending_outputs,
-                                    &last_enqueued_finalize_seq,
-                                    &should_close)) {
-            should_close = true;
-            break;
-          }
-        } else if (frame.opcode == ws_framing::Opcode::PING) {
-          std::string payload(frame.payload.begin(), frame.payload.end());
-          if (!send_ws_control(conn.get(), ws_framing::Opcode::PONG, payload, active, &protocol_close_sent)) {
-            should_close = true;
-            break;
-          }
-        } else if (frame.opcode == ws_framing::Opcode::PONG) {
-          ping_waiting_for_pong = false;
-        } else if (frame.opcode == ws_framing::Opcode::CLOSE) {
-          should_close = true;
-          break;
-        }
-      }
+      if (!drain_recv_buffer()) break;
     }
 
     if (!flush_pending_outputs(conn.get(),
@@ -1940,6 +1980,7 @@ class WsServer {
 
   void handle_accepted(int fd) {
     UniqueFd conn(fd);
+    (void)configure_tcp_nodelay(conn.get());
     ReadHttpOutcome read = read_http_request_from_socket(conn.get());
     if (read.result == ws_handshake::ParseResult::MALFORMED) {
       (void)send_all(conn.get(), build_json_response(400, "{\"error\":\"bad_request\"}"));

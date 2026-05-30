@@ -13,8 +13,11 @@ target_link_libraries(ws_tail_microbench Threads::Threads OpenSSL::Crypto)
 add_executable(ws_tail_microbench_client ws_tail_microbench_client.cpp)
 target_link_libraries(ws_tail_microbench_client Threads::Threads OpenSSL::Crypto)
 
+add_executable(ws_framing_selftest ws_framing_selftest.cpp lib/ws/framing.cpp)
+target_include_directories(ws_framing_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 if(NOT DEFINED TORCH_ROOT)
-  message(STATUS "TORCH_ROOT not set; configured standalone ws_tail targets only")
+  message(STATUS "TORCH_ROOT not set; configured standalone ws_tail/ws_framing targets only")
   return()
 endif()
 if(NOT DEFINED CUDA_ROOT)

@@ -24,6 +24,11 @@ struct Frame {
   bool fin = true;
 };
 
+struct Message {
+  Opcode opcode;
+  std::vector<uint8_t> payload;
+};
+
 enum class ReadResult {
   OK,
   NEED_MORE,
@@ -36,9 +41,25 @@ ReadResult read_frame(const std::string& buffer,
                       size_t& consumed,
                       size_t max_payload_size = kMaxMessageSize);
 
+class MessageAssembler {
+ public:
+  explicit MessageAssembler(size_t max_message_size = kMaxMessageSize);
+
+  ReadResult push_frame(const Frame& frame, Message& out);
+  bool has_partial_message() const noexcept;
+  void reset();
+
+ private:
+  size_t max_message_size_;
+  bool fragmented_ = false;
+  Opcode fragmented_opcode_ = Opcode::CONT;
+  std::vector<uint8_t> fragmented_payload_;
+};
+
 std::vector<uint8_t> write_frame(Opcode opcode,
                                  std::string_view payload,
-                                 bool mask = false);
+                                 bool mask = false,
+                                 bool fin = true);
 
 std::vector<uint8_t> write_close_frame(uint16_t code, std::string_view reason);
 

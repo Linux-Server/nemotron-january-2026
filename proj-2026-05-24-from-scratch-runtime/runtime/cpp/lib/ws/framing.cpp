@@ -27,6 +27,10 @@ bool is_control_opcode(uint8_t opcode) {
   return opcode >= 0x8;
 }
 
+bool is_control_opcode(Opcode opcode) {
+  return is_control_opcode(static_cast<uint8_t>(opcode));
+}
+
 uint8_t byte_at(const std::string& buffer, size_t pos) {
   return static_cast<uint8_t>(buffer[pos]);
 }
@@ -89,7 +93,7 @@ ReadResult read_frame(const std::string& buffer,
   pos += 4;
 
   const size_t len = static_cast<size_t>(payload_len);
-  if (buffer.size() < pos + len) return ReadResult::NEED_MORE;
+  if (len > buffer.size() - pos) return ReadResult::NEED_MORE;
 
   Frame frame;
   frame.opcode = static_cast<Opcode>(opcode);
@@ -104,12 +108,72 @@ ReadResult read_frame(const std::string& buffer,
   return ReadResult::OK;
 }
 
+MessageAssembler::MessageAssembler(size_t max_message_size)
+    : max_message_size_(max_message_size) {}
+
+ReadResult MessageAssembler::push_frame(const Frame& frame, Message& out) {
+  out = Message{};
+
+  if (is_control_opcode(frame.opcode)) {
+    out.opcode = frame.opcode;
+    out.payload = frame.payload;
+    return ReadResult::OK;
+  }
+
+  if (frame.opcode == Opcode::CONT) {
+    if (!fragmented_) return ReadResult::MALFORMED;
+    if (fragmented_payload_.size() > max_message_size_ ||
+        frame.payload.size() > max_message_size_ - fragmented_payload_.size()) {
+      reset();
+      return ReadResult::FRAME_TOO_LARGE;
+    }
+    fragmented_payload_.insert(fragmented_payload_.end(),
+                               frame.payload.begin(),
+                               frame.payload.end());
+    if (!frame.fin) return ReadResult::NEED_MORE;
+
+    out.opcode = fragmented_opcode_;
+    out.payload = std::move(fragmented_payload_);
+    reset();
+    return ReadResult::OK;
+  }
+
+  if (frame.opcode != Opcode::TEXT && frame.opcode != Opcode::BINARY) {
+    return ReadResult::MALFORMED;
+  }
+  if (fragmented_) return ReadResult::MALFORMED;
+  if (frame.payload.size() > max_message_size_) return ReadResult::FRAME_TOO_LARGE;
+
+  if (frame.fin) {
+    out.opcode = frame.opcode;
+    out.payload = frame.payload;
+    return ReadResult::OK;
+  }
+
+  fragmented_ = true;
+  fragmented_opcode_ = frame.opcode;
+  fragmented_payload_ = frame.payload;
+  return ReadResult::NEED_MORE;
+}
+
+bool MessageAssembler::has_partial_message() const noexcept {
+  return fragmented_;
+}
+
+void MessageAssembler::reset() {
+  fragmented_ = false;
+  fragmented_opcode_ = Opcode::CONT;
+  fragmented_payload_.clear();
+}
+
 std::vector<uint8_t> write_frame(Opcode opcode,
                                  std::string_view payload,
-                                 bool mask) {
+                                 bool mask,
+                                 bool fin) {
   std::vector<uint8_t> out;
   out.reserve(14 + payload.size());
-  out.push_back(static_cast<uint8_t>(0x80 | (static_cast<uint8_t>(opcode) & 0x0f)));
+  out.push_back(static_cast<uint8_t>((fin ? 0x80 : 0x00) |
+                                     (static_cast<uint8_t>(opcode) & 0x0f)));
 
   const uint64_t len = payload.size();
   const uint8_t mask_bit = mask ? 0x80 : 0x00;
