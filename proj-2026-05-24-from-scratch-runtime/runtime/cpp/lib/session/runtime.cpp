@@ -664,6 +664,18 @@ struct SharedRuntime::Impl {
     if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
     torch::NoGradGuard ng;
 
+    // Cold-start phase timing (additive stdout; helps localize the ~5-6min startup).
+    const auto cold_start_t0 = std::chrono::steady_clock::now();
+    auto cold_phase_prev = cold_start_t0;
+    auto cold_phase = [&](const char* name) {
+      const auto now = std::chrono::steady_clock::now();
+      const double ms = std::chrono::duration<double, std::milli>(now - cold_phase_prev).count();
+      const double cum = std::chrono::duration<double, std::milli>(now - cold_start_t0).count();
+      std::printf("COLD_START_PHASE phase=%s elapsed_ms=%.1f cumulative_ms=%.1f\n", name, ms, cum);
+      std::fflush(stdout);
+      cold_phase_prev = now;
+    };
+
     bundle = torch::jit::load(bundle_path);
     verify_session_bundle_meta(bundle, false);
     tokenizer_value = tokenizer_from_bundle(bundle);
@@ -672,11 +684,14 @@ struct SharedRuntime::Impl {
     audio_geometry = session_runtime_audio_geometry_from_bundle(bundle);
     std::string preproc_path = (fs::path(artifact_dir) / "preproc.ts").string();
     session_runtime_verify_preproc_manifest(artifact_dir, preproc_path, audio_geometry);
+    cold_phase("bundle_tokenizer_preproc");
 
     enc_first = load_module_on_device((fs::path(artifact_dir) / "enc_first.ts").string(), device);
+    cold_phase("enc_first_load");
     enc_steady = std::make_unique<AOTIModelPackageLoader>(
         (fs::path(artifact_dir) / "enc_steady_aoti.pt2").string(), "model", false, cfg.steady_num_runners,
         device.index());
+    cold_phase("enc_steady_load");
 
     finalize_loaders = std::make_unique<FinalizeBucketLoaderPool>(
         finalize_buckets_dir,
@@ -695,13 +710,16 @@ struct SharedRuntime::Impl {
                 bytes_to_mib(finalize_loaders->total_loader_delta_bytes()),
                 finalize_loaders->memory_json().c_str());
     std::fflush(stdout);
+    cold_phase("finalize_preload");
 
     if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
       throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
     }
 
     build_inference_lanes();
+    cold_phase("lane_build");
     warm_inference_lanes();
+    cold_phase("lane_warmup");
 
     if (cfg.scheduler_enabled) {
       std::string batch_dir = resolve_steady_batch_dir(artifact_dir, cfg.steady_artifacts_dir);
@@ -718,10 +736,12 @@ struct SharedRuntime::Impl {
           cfg.steady_num_runners,
           "shared_runtime_scheduler");
       batched_steady->preload_all();
+      cold_phase("scheduler_preload");
       scheduler_ownership.register_scheduler();
       scheduler = std::make_unique<BatchedSteadyScheduler>(*batched_steady, device, policy);
       scheduler->warmup_buckets();
       scheduler->start();
+      cold_phase("scheduler_warmup_start");
       std::printf("shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=%d "
                   "steady_loader_sets=%d warmup_complete=true dispatcher_started=true\n",
                   scheduler_ownership.active_schedulers(),
