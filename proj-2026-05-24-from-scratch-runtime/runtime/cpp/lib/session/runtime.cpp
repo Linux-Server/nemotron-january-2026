@@ -360,7 +360,8 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
                            const std::string& shared_weights_pt,
                            torch::Device device,
                            int num_runners,
-                           std::string policy)
+                           std::string policy,
+                           std::function<void(const char*)> cold_phase = {})
       : buckets_dir_(buckets_dir),
         shared_weights_(shared_weights),
         device_(device),
@@ -387,6 +388,7 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
                 manifest_.contract.weights_sha256.c_str(),
                 num_runners_,
                 policy_.c_str());
+    if (cold_phase) cold_phase("finalize_manifest_verify");
 
     c10::cuda::CUDAGuard device_guard(device_.index());
     runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(before finalize shared constants)");
@@ -400,6 +402,7 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
                 bytes_to_mib(shared_delta_bytes_),
                 policy_.c_str());
     std::fflush(stdout);
+    if (cold_phase) cold_phase("finalize_shared_constants_load");
   }
 
   AOTIModelPackageLoader& get(int64_t drop, int64_t T) override {
@@ -433,6 +436,10 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
   }
 
   size_t shared_delta_bytes() const noexcept { return shared_delta_bytes_; }
+
+  const std::unordered_map<std::string, at::Tensor>& shared_constants() const noexcept {
+    return shared_constants_;
+  }
 
   size_t total_loader_delta_bytes() const {
     std::lock_guard<std::mutex> lock(mu_);
@@ -673,14 +680,26 @@ struct SharedRuntime::Impl {
     if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
     torch::NoGradGuard ng;
 
-    // Cold-start phase timing (additive stdout; helps localize the ~5-6min startup).
-    const auto cold_start_t0 = std::chrono::steady_clock::now();
+    // Cold-start phase timing; aggregate lines intentionally overlap their sub-phases.
+    using ColdStartClock = std::chrono::steady_clock;
+    const auto cold_start_t0 = ColdStartClock::now();
     auto cold_phase_prev = cold_start_t0;
     auto cold_phase = [&](const char* name) {
-      const auto now = std::chrono::steady_clock::now();
+      const auto now = ColdStartClock::now();
       const double ms = std::chrono::duration<double, std::milli>(now - cold_phase_prev).count();
       const double cum = std::chrono::duration<double, std::milli>(now - cold_start_t0).count();
       std::printf("COLD_START_PHASE phase=%s elapsed_ms=%.1f cumulative_ms=%.1f\n", name, ms, cum);
+      std::fflush(stdout);
+      cold_phase_prev = now;
+    };
+    auto cold_phase_total = [&](const char* name, ColdStartClock::time_point start) {
+      const auto now = ColdStartClock::now();
+      const double ms = std::chrono::duration<double, std::milli>(now - start).count();
+      const double cum = std::chrono::duration<double, std::milli>(now - cold_start_t0).count();
+      std::printf("COLD_START_PHASE phase=%s elapsed_ms=%.1f cumulative_ms=%.1f aggregate=1\n",
+                  name,
+                  ms,
+                  cum);
       std::fflush(stdout);
       cold_phase_prev = now;
     };
@@ -702,14 +721,17 @@ struct SharedRuntime::Impl {
         device.index());
     cold_phase("enc_steady_load");
 
+    const auto finalize_preload_t0 = ColdStartClock::now();
     finalize_loaders = std::make_unique<FinalizeBucketLoaderPool>(
         finalize_buckets_dir,
         (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
         (fs::path(artifact_dir) / "finalize_shared_weights.pt").string(),
         device,
         cfg.finalize_num_runners,
-        "ws_shared_finalize_pool");
+        "ws_shared_finalize_pool",
+        cold_phase);
     finalize_loaders->preload_all();
+    cold_phase("finalize_bucket_bind_dlopen");
     std::printf("shared finalize loader pool ready: num_runners=%d loaded_buckets=%zu/%zu "
                 "shared_constants_mib=%.3f loader_mib=%.3f memory=%s\n",
                 finalize_loaders->num_runners(),
@@ -719,7 +741,7 @@ struct SharedRuntime::Impl {
                 bytes_to_mib(finalize_loaders->total_loader_delta_bytes()),
                 finalize_loaders->memory_json().c_str());
     std::fflush(stdout);
-    cold_phase("finalize_preload");
+    cold_phase_total("finalize_preload", finalize_preload_t0);
 
     if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
       throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
@@ -731,6 +753,7 @@ struct SharedRuntime::Impl {
     cold_phase("lane_warmup");
 
     if (cfg.scheduler_enabled) {
+      const auto scheduler_preload_t0 = ColdStartClock::now();
       std::string batch_dir = resolve_steady_batch_dir(artifact_dir, cfg.steady_artifacts_dir);
       scheduler_ownership.register_loader_set();
       BatchedSteadySchedulerPolicy policy;
@@ -739,15 +762,20 @@ struct SharedRuntime::Impl {
       policy.lone_timeout_ms = cfg.batch_lone_timeout_ms;
       policy.queue_capacity = cfg.batch_queue_capacity;
       const auto required_scheduler_buckets = BatchedSteadyScheduler::required_buckets_for_policy(policy);
+      cold_phase("scheduler_preload_setup");
+      const auto& borrowed_shared_constants = finalize_loaders->shared_constants();
       batched_steady = std::make_unique<BatchedSteadyLoaderSet>(
           batch_dir,
           (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
           device,
           cfg.steady_num_runners,
           "shared_runtime_scheduler",
-          required_scheduler_buckets);
+          required_scheduler_buckets,
+          &borrowed_shared_constants,
+          cold_phase);
       batched_steady->preload_buckets(required_scheduler_buckets);
-      cold_phase("scheduler_preload");
+      cold_phase("scheduler_bucket_bind_dlopen");
+      cold_phase_total("scheduler_preload", scheduler_preload_t0);
       scheduler_ownership.register_scheduler();
       scheduler = std::make_unique<BatchedSteadyScheduler>(*batched_steady, device, policy);
       scheduler->warmup_buckets();
@@ -971,6 +999,7 @@ struct SharedRuntime::Impl {
   torch::jit::Module enc_first;
   std::mutex enc_first_mutex;
   std::unique_ptr<AOTIModelPackageLoader> enc_steady;
+  // Declared before batched_steady so borrowed shared constants are destroyed after scheduler loaders.
   std::unique_ptr<FinalizeBucketLoaderPool> finalize_loaders;
   AudioGeometry audio_geometry;
   int lane_count = 0;

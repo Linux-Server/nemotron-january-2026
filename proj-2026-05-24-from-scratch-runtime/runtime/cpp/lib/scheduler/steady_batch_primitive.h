@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -173,7 +174,9 @@ class BatchedSteadyLoaderSet {
                          torch::Device device,
                          int num_runners,
                          std::string policy,
-                         std::vector<int> manifest_verify_buckets = {})
+                         std::vector<int> manifest_verify_buckets = {},
+                         const std::unordered_map<std::string, at::Tensor>* borrowed_shared_constants = nullptr,
+                         std::function<void(const char*)> cold_phase = {})
       : package_dir_(std::move(package_dir)),
         shared_weights_ts_(std::move(shared_weights_ts)),
         device_(device),
@@ -187,10 +190,22 @@ class BatchedSteadyLoaderSet {
       throw std::runtime_error("batched steady shared weights missing: " + shared_weights_ts_);
     }
     verify_manifest(manifest_verify_buckets);
-    shared_constants_ = bsteady_detail::load_shared_constants(shared_weights_ts_, device_);
-    std::printf("density loaded batched steady shared constants: %zu entries policy=%s\n",
-                shared_constants_.size(),
-                policy_.c_str());
+    if (cold_phase) cold_phase("scheduler_manifest_verify");
+    if (borrowed_shared_constants != nullptr) {
+      if (borrowed_shared_constants->empty()) {
+        throw std::runtime_error("batched steady borrowed shared constants map is empty");
+      }
+      shared_constants_ = borrowed_shared_constants;
+      borrowed_shared_constants_ = true;
+    } else {
+      owned_shared_constants_ = bsteady_detail::load_shared_constants(shared_weights_ts_, device_);
+      shared_constants_ = &owned_shared_constants_;
+    }
+    if (cold_phase) cold_phase("scheduler_shared_constants_load");
+    std::printf("density batched steady shared constants ready: %zu entries policy=%s source=%s\n",
+                shared_constants_ref().size(),
+                policy_.c_str(),
+                borrowed_shared_constants_ ? "borrowed" : "owned");
   }
 
   void preload_all() {
@@ -268,6 +283,10 @@ class BatchedSteadyLoaderSet {
     return sealed_;
   }
 
+  bool borrowed_shared_constants() const noexcept {
+    return borrowed_shared_constants_;
+  }
+
   static int bucket_for_k_public(int k) {
     return bucket_for_k(k);
   }
@@ -286,6 +305,13 @@ class BatchedSteadyLoaderSet {
   std::string package_path(int bucket) const {
     return (bsteady_detail::fs::path(package_dir_) /
             ("enc_steady_aoti_b" + std::to_string(bucket) + ".pt2")).string();
+  }
+
+  const std::unordered_map<std::string, at::Tensor>& shared_constants_ref() const {
+    if (shared_constants_ == nullptr) {
+      throw std::runtime_error("batched steady shared constants have not been initialized");
+    }
+    return *shared_constants_;
   }
 
   void verify_manifest(const std::vector<int>& verify_buckets) const {
@@ -376,7 +402,7 @@ class BatchedSteadyLoaderSet {
     if (!bsteady_detail::file_exists(path)) throw std::runtime_error("missing batched steady package: " + path);
     auto loader = std::make_unique<AOTIModelPackageLoader>(
         path, "model", /*run_single_threaded=*/false, num_runners_, device_.index());
-    auto bucket_constants = bsteady_detail::constants_for_bucket(shared_constants_, *loader, path);
+    auto bucket_constants = bsteady_detail::constants_for_bucket(shared_constants_ref(), *loader, path);
     loader->load_constants(bucket_constants.values, false, false, true);
     std::printf("  density batched steady bucket loaded B=%d package=%s constants=%zu direct=%zu alias=%zu "
                 "num_runners=%d policy=%s\n",
@@ -471,6 +497,8 @@ class BatchedSteadyLoaderSet {
   int num_runners_ = 1;
   std::string policy_;
   bool sealed_ = false;
-  std::unordered_map<std::string, at::Tensor> shared_constants_;
+  std::unordered_map<std::string, at::Tensor> owned_shared_constants_;
+  const std::unordered_map<std::string, at::Tensor>* shared_constants_ = nullptr;
+  bool borrowed_shared_constants_ = false;
   std::map<int, std::unique_ptr<AOTIModelPackageLoader>> loaders_;
 };
