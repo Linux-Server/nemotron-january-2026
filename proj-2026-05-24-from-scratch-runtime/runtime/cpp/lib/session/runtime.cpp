@@ -1606,6 +1606,9 @@ struct SessionRuntime::Impl {
       if (phases.scheduler_future_wait_count > 0) {
         timing.scheduler_future_wait_ms = phases.scheduler_future_wait_ms;
       }
+      if (phases.scheduler_completion_wait_count > 0) {
+        timing.scheduler_completion_wait_ms = phases.scheduler_completion_wait_ms;
+      }
       if (phases.decode_count > 0) timing.decode_ms = phases.decode_ms;
     }
 

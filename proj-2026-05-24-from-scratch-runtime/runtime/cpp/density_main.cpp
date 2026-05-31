@@ -33,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <sys/resource.h>
 #include <thread>
@@ -335,13 +336,14 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   }
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
       args.mode != "b2-t1" && args.mode != "enc-first-parity" &&
+      args.mode != "async-ordering" &&
       args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
       args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
       args.mode != "vad-smoke" && args.mode != "ws-lib-smoke" &&
       args.mode != "ws-lifecycle-smoke" && args.mode != "shutdown-smoke" &&
       args.mode != "backpressure-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, enc-first-parity, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, enc-first-parity, async-ordering, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -543,6 +545,7 @@ static std::string scheduler_telemetry_json(const BatchedSteadySchedulerTelemetr
       << ",\"cuda_run_us\":" << scheduler_us_stats_json(telemetry.cuda_run_us)
       << ",\"output_sync_us\":" << scheduler_us_stats_json(telemetry.output_sync_us)
       << ",\"worker_blocked_us\":" << scheduler_us_stats_json(telemetry.worker_blocked_us)
+      << ",\"completion_wait_us\":" << scheduler_us_stats_json(telemetry.completion_wait_us)
       << ",\"window_wakeup_jitter_us\":" << scheduler_us_stats_json(telemetry.window_wakeup_jitter_us)
       << "}"
       << ",\"queue_depth\":" << scheduler_value_stats_json(telemetry.queue_depth)
@@ -752,6 +755,9 @@ static void merge_scheduler_telemetry(BatchedSteadySchedulerTelemetry& dst,
   dst.cuda_run_us.insert(dst.cuda_run_us.end(), src.cuda_run_us.begin(), src.cuda_run_us.end());
   dst.output_sync_us.insert(dst.output_sync_us.end(), src.output_sync_us.begin(), src.output_sync_us.end());
   dst.worker_blocked_us.insert(dst.worker_blocked_us.end(), src.worker_blocked_us.begin(), src.worker_blocked_us.end());
+  dst.completion_wait_us.insert(dst.completion_wait_us.end(),
+                                src.completion_wait_us.begin(),
+                                src.completion_wait_us.end());
   dst.window_wakeup_jitter_us.insert(dst.window_wakeup_jitter_us.end(),
                                      src.window_wakeup_jitter_us.begin(),
                                      src.window_wakeup_jitter_us.end());
@@ -1354,6 +1360,8 @@ static double b2_max_abs_tensor_diff(const at::Tensor& a, const at::Tensor& b) {
   return diff.numel() > 0 ? diff.max().item<double>() : 0.0;
 }
 
+static constexpr double kAotiTensorTolerance = 5.0e-2;
+
 struct B2TensorDiffStats {
   std::mutex mutex;
   int compares = 0;
@@ -1534,6 +1542,22 @@ static std::vector<at::Tensor> run_first_encoder_locked_density(SharedEncFirst& 
   return enc_first.encoder->run(chunk, state, stream);
 }
 
+struct SchedulerConsumerDelayProbe {
+  double delay_ms = 0.0;
+  int min_later_dispatches = 0;
+  std::atomic<int> observed_later_dispatches{0};
+  std::atomic<int> delays_run{0};
+
+  void delay_after_future_ready(BatchedSteadyScheduler& scheduler) {
+    auto before = scheduler.telemetry_snapshot().dispatch_cycles;
+    std::this_thread::sleep_for(ms_duration(delay_ms));
+    auto after = scheduler.telemetry_snapshot().dispatch_cycles;
+    int delta = static_cast<int>(std::max<int64_t>(0, after - before));
+    observed_later_dispatches.store(delta, std::memory_order_release);
+    delays_run.fetch_add(1, std::memory_order_acq_rel);
+  }
+};
+
 static void run_steady_chunk_density(SessionState& state,
                                      torch::jit::Module& bundle,
                                      const std::string& prefix,
@@ -1556,7 +1580,8 @@ static void run_steady_chunk_density(SessionState& state,
                                      B2TensorDiffStats* scheduler_diff_stats,
                                      AOTIModelPackageLoader* scheduler_diff_loader,
                                      std::vector<int64_t>* fill_trace_ready_ns = nullptr,
-                                     StaleGenTelemetry* stale_gen = nullptr) {
+                                     StaleGenTelemetry* stale_gen = nullptr,
+                                     SchedulerConsumerDelayProbe* consumer_delay_probe = nullptr) {
   c10::cuda::CUDAGuard device_guard(device.index());
   c10::cuda::CUDAStreamGuard stream_guard(stream);
   if (state.mode != SessionMode::STREAMING) throw std::runtime_error("density steady chunk outside STREAMING");
@@ -1642,6 +1667,9 @@ static void run_steady_chunk_density(SessionState& state,
         throw std::runtime_error("batch steady scheduler future timeout for " + label);
       }
       auto result = future.get();
+      if (consumer_delay_probe != nullptr) {
+        consumer_delay_probe->delay_after_future_ready(*scheduler);
+      }
       output_sync_start_event.create();
       output_sync_stop_event.create();
       has_scheduler_output_sync_event = true;
@@ -2217,7 +2245,9 @@ static RowReplayResult replay_row_density(int utt,
                                           B2ReusableBarrier* continuation_barrier = nullptr,
                                           B2TensorDiffStats* scheduler_diff_stats = nullptr,
                                           AOTIModelPackageLoader* scheduler_diff_loader = nullptr,
-                                          StaleGenTelemetry* stale_gen = nullptr) {
+                                          StaleGenTelemetry* stale_gen = nullptr,
+                                          int consumer_delay_chunk = -1,
+                                          SchedulerConsumerDelayProbe* consumer_delay_probe = nullptr) {
   RowReplayResult result;
   try {
     SessionState session;
@@ -2227,6 +2257,10 @@ static RowReplayResult replay_row_density(int utt,
     int64_t num_steady = scalar_i64(utt_tensor(ctx.bundle, utt, "num_steady"));
     std::vector<EmittedEvent> events;
     for (int chunk = 0; chunk < num_steady; ++chunk) {
+      B2ReusableBarrier* chunk_barrier = continuation_barrier;
+      if (consumer_delay_chunk >= 0 && continuation_barrier != nullptr) {
+        chunk_barrier = chunk == consumer_delay_chunk ? continuation_barrier : nullptr;
+      }
       run_steady_chunk_density(session,
                                ctx.bundle,
                                prefix,
@@ -2245,11 +2279,12 @@ static RowReplayResult replay_row_density(int utt,
                                timings,
                                label + ".chunk" + std::to_string(chunk),
                                scheduler,
-                               continuation_barrier,
+                               chunk_barrier,
                                scheduler_diff_stats,
                                scheduler_diff_loader,
                                nullptr,
-                               stale_gen);
+                               stale_gen,
+                               chunk == consumer_delay_chunk ? consumer_delay_probe : nullptr);
     }
     bool steady_ok = true;
     if (check_gold) {
@@ -3056,10 +3091,9 @@ static B2A1ParityResult run_b2_a1_parity_check(const DensityArgs& args,
   result.max_cache_t_diff = b2_max_abs_tensor_diff(got[0].tensors[3], prepared.alone_out[3]);
   if (!at::equal(got[0].tensors[1], prepared.alone_out[1])) ++result.enc_len_mismatches;
   if (!at::equal(got[0].tensors[4], prepared.alone_out[4])) ++result.cache_len_mismatches;
-  constexpr double kA1Atol = 5.0e-2;
-  result.tensor_ok = result.max_enc_out_diff <= kA1Atol &&
-                     result.max_cache_ch_diff <= kA1Atol &&
-                     result.max_cache_t_diff <= kA1Atol &&
+  result.tensor_ok = result.max_enc_out_diff <= kAotiTensorTolerance &&
+                     result.max_cache_ch_diff <= kAotiTensorTolerance &&
+                     result.max_cache_t_diff <= kAotiTensorTolerance &&
                      result.enc_len_mismatches == 0 &&
                      result.cache_len_mismatches == 0;
   if (result.production_sha == result.new_b1_sha) {
@@ -3682,6 +3716,246 @@ static bool run_b2_t1_gate(const DensityArgs& args,
               max_enc_out,
               max_cache_ch,
               max_cache_t);
+  return ok;
+}
+
+static std::vector<int> pick_async_ordering_utts(torch::jit::Module& bundle, int rows_total) {
+  std::vector<int> utts;
+  for (int utt = 0; utt < rows_total; ++utt) {
+    if (scalar_i64(utt_tensor(bundle, utt, "num_steady")) >= 4) {
+      utts.push_back(utt);
+      if (utts.size() >= 3) break;
+    }
+  }
+  if (utts.empty()) {
+    throw std::runtime_error("async-ordering found no utterance with at least 3 continuation chunks");
+  }
+  while (utts.size() < 3) utts.push_back(utts.front());
+  return utts;
+}
+
+static std::map<int, RowReplayResult> build_serial_reference_for_utts(
+    const DensityArgs& args,
+    torch::Device device,
+    const std::shared_ptr<torch::jit::Module>& shared_bundle,
+    const std::vector<int>& utts) {
+  auto stream = stream_for_worker(true, 0);
+  auto ctx = make_worker_context(args.dir, device, stream, shared_bundle);
+  auto tokenizer = tokenizer_from_bundle(ctx->bundle);
+  verify_tokenizer_selftest(ctx->bundle, tokenizer);
+  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
+  FinalizeBucketLoaderPool finalize_loaders(args.dir, device, 1, "async_ordering_serial_reference");
+  finalize_loaders.preload_all();
+  std::map<int, RowReplayResult> refs;
+  std::set<int> unique_utts(utts.begin(), utts.end());
+  for (int utt : unique_utts) {
+    auto row = replay_row_density(utt,
+                                  *ctx,
+                                  &enc_steady,
+                                  nullptr,
+                                  finalize_loaders,
+                                  device,
+                                  tokenizer,
+                                  true,
+                                  false,
+                                  nullptr,
+                                  true,
+                                  nullptr,
+                                  nullptr,
+                                  nullptr,
+                                  nullptr);
+    if (!row.ok) {
+      throw std::runtime_error("async-ordering serial reference failed for utt" + std::to_string(utt) +
+                               (row.error.empty() ? "" : ": " + row.error));
+    }
+    refs.emplace(utt, std::move(row));
+  }
+  CUDA_CHECK(cudaDeviceSynchronize());
+  return refs;
+}
+
+static bool run_async_ordering_gate(const DensityArgs& args,
+                                    torch::Device device,
+                                    const std::string& stamp,
+                                    const std::shared_ptr<torch::jit::Module>& shared_bundle,
+                                    int rows_total) {
+  const int sessions = 3;
+  auto utts = pick_async_ordering_utts(*shared_bundle, rows_total);
+  std::printf("ASYNC_ORDERING START sessions=%d utts=%d,%d,%d requirement=delay_consumer_until_2_later_dispatches\n",
+              sessions,
+              utts[0],
+              utts[1],
+              utts[2]);
+
+  auto reference = build_serial_reference_for_utts(args, device, shared_bundle, utts);
+  cleanup_cuda_cache();
+
+  std::string steady_batch_dir = resolve_steady_batch_dir(args);
+  BatchedSteadyLoaderSet batched_steady(steady_batch_dir,
+                                        args.dir + "/finalize_shared_weights.ts",
+                                        device,
+                                        1,
+                                        "async_ordering_scheduler_buckets");
+  batched_steady.preload_all();
+  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, 4, -1);
+  FinalizeBucketLoaderPool finalize_loaders(args.dir,
+                                            device,
+                                            capped_general_finalize_runners(sessions),
+                                            "async_ordering_finalize_pool");
+  finalize_loaders.preload_all();
+  auto shared_enc_first = load_shared_enc_first(args.dir, device, "async_ordering_shared_locked_enc_first");
+
+  BatchedSteadySchedulerPolicy policy = density_batch_policy_effective(args, sessions);
+  policy.B_max = 4;
+  policy.queue_capacity = std::max(policy.queue_capacity, 16);
+  BatchedSteadyScheduler scheduler(batched_steady, device, policy);
+  scheduler.warmup_buckets();
+  scheduler.start();
+
+  std::vector<std::unique_ptr<WorkerContext>> contexts;
+  contexts.reserve(sessions);
+  for (int worker = 0; worker < sessions; ++worker) {
+    contexts.push_back(make_worker_context(args.dir,
+                                           device,
+                                           stream_for_worker(true, worker),
+                                           shared_bundle,
+                                           shared_enc_first));
+  }
+  auto tokenizer = tokenizer_from_bundle(contexts[0]->bundle);
+  B2TensorDiffStats diff_stats;
+  SchedulerConsumerDelayProbe delay_probe;
+  delay_probe.delay_ms = 1000.0;
+  delay_probe.min_later_dispatches = 2;
+  B2ReusableBarrier delay_chunk_barrier(sessions);
+  StartGate gate(sessions);
+  std::vector<RowReplayResult> rows(static_cast<size_t>(sessions));
+  std::vector<std::thread> threads;
+  threads.reserve(sessions);
+  for (int worker = 0; worker < sessions; ++worker) {
+    threads.emplace_back([&, worker] {
+      try {
+        c10::cuda::CUDAGuard device_guard(device.index());
+        gate.arrive_and_wait();
+        rows[static_cast<size_t>(worker)] =
+            replay_row_density(utts[static_cast<size_t>(worker)],
+                               *contexts[worker],
+                               &enc_steady,
+                               nullptr,
+                               finalize_loaders,
+                               device,
+                               tokenizer,
+                               true,
+                               false,
+                               nullptr,
+                               false,
+                               &scheduler,
+                               &delay_chunk_barrier,
+                               &diff_stats,
+                               &enc_steady,
+                               nullptr,
+                               1,
+                               worker == 0 ? &delay_probe : nullptr);
+      } catch (const std::exception& e) {
+        rows[static_cast<size_t>(worker)].ok = false;
+        rows[static_cast<size_t>(worker)].error = e.what();
+      }
+    });
+  }
+  gate.wait_until_ready_and_start();
+  for (auto& thread : threads) thread.join();
+  CUDA_CHECK(cudaDeviceSynchronize());
+  scheduler.close();
+  auto telemetry = scheduler.telemetry_snapshot();
+
+  int errors = 0;
+  int token_divergences = 0;
+  int event_divergences = 0;
+  for (int worker = 0; worker < sessions; ++worker) {
+    const int utt = utts[static_cast<size_t>(worker)];
+    const auto& row = rows[static_cast<size_t>(worker)];
+    if (!row.error.empty()) {
+      ++errors;
+      std::printf("ASYNC_ORDERING_ROW_ERROR worker=%d utt=%d error=%s\n", worker, utt, row.error.c_str());
+      continue;
+    }
+    const auto& ref = reference.at(utt);
+    if (!compare_b2_token_vector(row.steady_tokens, ref.steady_tokens, "async_ordering.steady", worker, utt)) {
+      ++token_divergences;
+    }
+    if (!compare_b2_token_vector(row.final_tokens, ref.final_tokens, "async_ordering.final", worker, utt)) {
+      ++token_divergences;
+    }
+    if (!strict_events_equal(row.events,
+                             ref.events,
+                             "async_ordering.worker" + std::to_string(worker) + ".utt" + std::to_string(utt))) {
+      ++event_divergences;
+    }
+  }
+
+  int enc_len_mismatches = 0;
+  int cache_len_mismatches = 0;
+  double max_enc_out_diff = 0.0;
+  double max_cache_ch_diff = 0.0;
+  double max_cache_t_diff = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(diff_stats.mutex);
+    enc_len_mismatches = diff_stats.enc_len_mismatches;
+    cache_len_mismatches = diff_stats.cache_len_mismatches;
+    max_enc_out_diff = diff_stats.max_enc_out_diff;
+    max_cache_ch_diff = diff_stats.max_cache_ch_diff;
+    max_cache_t_diff = diff_stats.max_cache_t_diff;
+  }
+  int later_dispatches = delay_probe.observed_later_dispatches.load(std::memory_order_acquire);
+  bool delayed_ok = delay_probe.delays_run.load(std::memory_order_acquire) == 1 &&
+                    later_dispatches >= delay_probe.min_later_dispatches;
+  bool events_pass = event_divergences == 0;
+  bool tensor_diffs_pass = max_enc_out_diff <= kAotiTensorTolerance &&
+                           max_cache_ch_diff <= kAotiTensorTolerance &&
+                           max_cache_t_diff <= kAotiTensorTolerance;
+  bool ok = errors == 0 &&
+            token_divergences == 0 &&
+            events_pass &&
+            enc_len_mismatches == 0 &&
+            cache_len_mismatches == 0 &&
+            tensor_diffs_pass &&
+            telemetry.dispatcher_exceptions == 0 &&
+            delayed_ok;
+
+  std::ostringstream json;
+  json << "{\"check\":\"async_ordering_delayed_consumer\""
+       << ",\"sessions\":" << sessions
+       << ",\"utts\":[" << utts[0] << "," << utts[1] << "," << utts[2] << "]"
+       << ",\"delays_run\":" << delay_probe.delays_run.load(std::memory_order_acquire)
+       << ",\"later_dispatches_while_delayed\":" << later_dispatches
+       << ",\"min_later_dispatches\":" << delay_probe.min_later_dispatches
+       << ",\"token_divergences\":" << token_divergences
+       << ",\"event_divergences\":" << event_divergences
+       << ",\"errors\":" << errors
+       << ",\"enc_len_mismatches\":" << enc_len_mismatches
+       << ",\"cache_len_mismatches\":" << cache_len_mismatches
+       << ",\"max_enc_out_diff\":" << max_enc_out_diff
+       << ",\"max_cache_ch_diff\":" << max_cache_ch_diff
+       << ",\"max_cache_t_diff\":" << max_cache_t_diff
+       << ",\"aoti_tensor_tolerance\":" << kAotiTensorTolerance
+       << ",\"scheduler_telemetry\":" << scheduler_telemetry_json(telemetry)
+       << ",\"pass\":" << json_bool(ok)
+       << "}";
+  emit_telemetry(args.dir, stamp, 1, "explicit", "async_ordering_delayed_consumer", json.str());
+  std::printf("ASYNC_ORDERING_RESULT %s sessions=%d delayed_later_dispatches=%d token_divergences=%d "
+              "event_divergences=%d errors=%d max_enc_out=%.3e max_cache_ch=%.3e max_cache_t=%.3e "
+              "aoti_tolerance=%.3e dispatcher_exceptions=%lld\n",
+              ok ? "PASS" : "FAIL",
+              sessions,
+              later_dispatches,
+              token_divergences,
+              event_divergences,
+              errors,
+              max_enc_out_diff,
+              max_cache_ch_diff,
+              max_cache_t_diff,
+              kAotiTensorTolerance,
+              static_cast<long long>(telemetry.dispatcher_exceptions));
+  cleanup_cuda_cache();
   return ok;
 }
 
@@ -6846,6 +7120,18 @@ static bool run_stats_smoke() {
       "\"max\":0.5,\"count\":2},"
       "\"enc_first_lock_wait_ms\":{\"p50\":0.25,\"p90\":0.25,\"p95\":0.25,"
       "\"p99\":0.25,\"max\":0.25,\"count\":3},"
+      "\"lane_queue_wait_ms\":{\"p50\":null,\"p90\":null,\"p95\":null,"
+      "\"p99\":null,\"max\":null,\"count\":0},"
+      "\"preproc_ms\":{\"p50\":null,\"p90\":null,\"p95\":null,"
+      "\"p99\":null,\"max\":null,\"count\":0},"
+      "\"scheduler_enqueue_wait_ms\":{\"p50\":null,\"p90\":null,\"p95\":null,"
+      "\"p99\":null,\"max\":null,\"count\":0},"
+      "\"scheduler_future_wait_ms\":{\"p50\":null,\"p90\":null,\"p95\":null,"
+      "\"p99\":null,\"max\":null,\"count\":0},"
+      "\"scheduler_completion_wait_ms\":{\"p50\":null,\"p90\":null,\"p95\":null,"
+      "\"p99\":null,\"max\":null,\"count\":0},"
+      "\"decode_ms\":{\"p50\":null,\"p90\":null,\"p95\":null,"
+      "\"p99\":null,\"max\":null,\"count\":0},"
       "\"vad_stop_to_finalize_start_ms\":{\"p50\":1.953125,\"p90\":1.953125,"
       "\"p95\":1.953125,\"p99\":1.953125,\"max\":1.953125,\"count\":2}},"
       "\"active_sessions_at_emit\":{\"p50\":3,\"p90\":5,\"p95\":5,\"p99\":5,"
@@ -7976,6 +8262,10 @@ int main(int argc, char** argv) {
     }
     if (args.mode == "b2-t1") {
       bool ok = run_b2_t1_gate(args, device, stamp, shared_bundle, rows_total);
+      return ok ? 0 : 1;
+    }
+    if (args.mode == "async-ordering") {
+      bool ok = run_async_ordering_gate(args, device, stamp, shared_bundle, rows_total);
       return ok ? 0 : 1;
     }
     if (args.mode == "enc-first-parity") {

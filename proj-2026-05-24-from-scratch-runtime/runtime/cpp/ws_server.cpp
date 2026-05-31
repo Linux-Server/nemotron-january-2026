@@ -554,6 +554,7 @@ std::string scheduler_telemetry_json(const BatchedSteadySchedulerTelemetry& tele
       << ",\"cuda_run_us\":" << scheduler_us_stats_json(telemetry.cuda_run_us)
       << ",\"output_sync_us\":" << scheduler_us_stats_json(telemetry.output_sync_us)
       << ",\"worker_blocked_us\":" << scheduler_us_stats_json(telemetry.worker_blocked_us)
+      << ",\"completion_wait_us\":" << scheduler_us_stats_json(telemetry.completion_wait_us)
       << ",\"window_wakeup_jitter_us\":" << scheduler_us_stats_json(telemetry.window_wakeup_jitter_us)
       << "}"
       << ",\"queue_depth\":" << value_stats_json(summarize(telemetry.queue_depth))
@@ -2323,6 +2324,7 @@ bool has_raw_finalize_timing_keys(const nlohmann::json& event) {
       "preproc_ms",
       "scheduler_enqueue_wait_ms",
       "scheduler_future_wait_ms",
+      "scheduler_completion_wait_ms",
       "decode_ms",
       "gil_attrib_enabled",
   };

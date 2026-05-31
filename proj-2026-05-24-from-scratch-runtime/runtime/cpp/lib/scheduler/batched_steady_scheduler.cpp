@@ -3,6 +3,7 @@
 #include <torch/torch.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -13,6 +14,8 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
+constexpr size_t kMaxPendingDispatchTimings = 64;
+constexpr int kDispatchTimingIdlePollMs = 2;
 
 double elapsed_us(Clock::time_point start, Clock::time_point end) {
   return std::chrono::duration<double, std::micro>(end - start).count();
@@ -47,6 +50,7 @@ BatchedSteadyScheduler::BatchedSteadyScheduler(BatchedSteadyLoaderSet& loader_se
     : loader_set_(loader_set),
       device_(device),
       policy_(policy),
+      dispatch_timing_mode_(dispatch_timing_mode_from_env()),
       dispatcher_stream_(c10::cuda::getStreamFromPool(/*isHighPriority=*/false,
                                                       device.index() >= 0 ? device.index() : 0)) {
   if (policy_.window_ms < 0) throw std::runtime_error("batch steady window_ms must be non-negative");
@@ -80,6 +84,14 @@ void BatchedSteadyScheduler::cuda_check(cudaError_t err, const char* expr, const
         << ": " << cudaGetErrorString(err);
     throw std::runtime_error(oss.str());
   }
+}
+
+BatchedSteadyScheduler::DispatchTimingMode BatchedSteadyScheduler::dispatch_timing_mode_from_env() {
+  const char* raw = std::getenv("NEMOTRON_WS_DISPATCH_TIMING");
+  if (raw == nullptr || raw[0] == '\0' || std::string(raw) == "sync") return DispatchTimingMode::Sync;
+  if (std::string(raw) == "poll") return DispatchTimingMode::Poll;
+  if (std::string(raw) == "off") return DispatchTimingMode::Off;
+  throw std::runtime_error("NEMOTRON_WS_DISPATCH_TIMING must be one of {sync,poll,off}");
 }
 
 std::future<DispatchResult> BatchedSteadyScheduler::enqueue(EnqueueRequest&& request) {
@@ -229,10 +241,12 @@ int BatchedSteadyScheduler::dispatch_bucket_for_k(int k) const {
 void BatchedSteadyScheduler::record_worker_wait(int64_t cycle_id,
                                                 int k,
                                                 double output_sync_us,
-                                                double worker_blocked_us) {
+                                                double worker_blocked_us,
+                                                double completion_wait_us) {
   std::lock_guard<std::mutex> lock(telemetry_mutex_);
   telemetry_.output_sync_us.push_back(output_sync_us);
   telemetry_.worker_blocked_us.push_back(worker_blocked_us);
+  if (completion_wait_us >= 0.0) telemetry_.completion_wait_us.push_back(completion_wait_us);
   if (cycle_id < 0 || k <= 0) return;
 
   auto expected_it = worker_wait_expected_by_cycle_.find(cycle_id);
@@ -258,16 +272,23 @@ BatchedSteadySchedulerTelemetry BatchedSteadyScheduler::telemetry_snapshot() con
 }
 
 void BatchedSteadyScheduler::dispatcher_loop() {
+  const std::thread::id dispatcher_thread_id = std::this_thread::get_id();
   try {
     c10::cuda::CUDAGuard device_guard(device_.index());
     c10::cuda::CUDAStreamGuard stream_guard(dispatcher_stream_);
     torch::NoGradGuard no_grad;
     while (true) {
+      drain_dispatch_timing_events(false);
       auto batch = gather_batch();
       if (batch.empty()) break;
-      dispatch_batch(batch);
+      dispatch_batch(batch, dispatcher_thread_id);
     }
+    drain_dispatch_timing_events(true);
   } catch (...) {
+    try {
+      drain_dispatch_timing_events(true);
+    } catch (...) {
+    }
     std::exception_ptr ep = std::current_exception();
     std::vector<std::shared_ptr<QueueItem>> pending;
     {
@@ -298,7 +319,18 @@ void BatchedSteadyScheduler::dispatcher_loop() {
 std::vector<std::shared_ptr<BatchedSteadyScheduler::QueueItem>> BatchedSteadyScheduler::gather_batch() {
   std::vector<std::shared_ptr<QueueItem>> batch;
   std::unique_lock<std::mutex> lock(mutex_);
-  cv_.wait(lock, [&] { return closing_ || fault_ || !queue_.empty(); });
+  auto ready_pred = [&] { return closing_ || fault_ || !queue_.empty(); };
+  while (!ready_pred()) {
+    if (dispatch_timing_mode_ == DispatchTimingMode::Poll && !pending_dispatch_timings_.empty()) {
+      lock.unlock();
+      drain_dispatch_timing_events(false);
+      lock.lock();
+      if (ready_pred()) break;
+      cv_.wait_for(lock, ms_duration(kDispatchTimingIdlePollMs), ready_pred);
+    } else {
+      cv_.wait(lock, ready_pred);
+    }
+  }
   if (fault_) std::rethrow_exception(fault_);
   if (closing_ && queue_.empty()) return batch;
   {
@@ -350,8 +382,11 @@ std::vector<std::shared_ptr<BatchedSteadyScheduler::QueueItem>> BatchedSteadySch
   return batch;
 }
 
-void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch) {
+void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch,
+                                            std::thread::id dispatcher_thread_id) {
   if (batch.empty()) return;
+  assert(dispatcher_stream_.stream() != nullptr);
+  assert(dispatcher_thread_id == std::this_thread::get_id());
   auto dispatch_wall_start = Clock::now();
   double dispatch_cpu_start_us = current_thread_cpu_us();
   c10::cuda::CUDAStreamGuard stream_guard(dispatcher_stream_);
@@ -363,6 +398,8 @@ void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<Qu
     std::lock_guard<std::mutex> lock(mutex_);
     backlog = !queue_.empty();
   }
+
+  drain_dispatch_timing_events(false);
 
   std::vector<BatchedSteadyInput> ready;
   ready.reserve(batch.size());
@@ -388,19 +425,40 @@ void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<Qu
 
   cudaEvent_t ev_start{};
   cudaEvent_t ev_stop{};
-  B2_CUDA_CHECK(cudaEventCreate(&ev_start));
-  B2_CUDA_CHECK(cudaEventCreate(&ev_stop));
-  B2_CUDA_CHECK(cudaEventRecord(ev_start, dispatcher_stream_.stream()));
+  const bool timing_enabled = dispatch_timing_mode_ != DispatchTimingMode::Off;
+  if (timing_enabled) {
+    B2_CUDA_CHECK(cudaEventCreate(&ev_start));
+    B2_CUDA_CHECK(cudaEventCreate(&ev_stop));
+    B2_CUDA_CHECK(cudaEventRecord(ev_start, dispatcher_stream_.stream()));
+  }
+  // Stream-order invariant: scratch reuse is safe because pack_into_scratch()
+  // above, run_raw_prepacked(), unpack_prepacked_outputs(), and the next
+  // pack_into_scratch() are all issued by this single dispatcher thread onto
+  // dispatcher_stream_. The timing sync below is telemetry only; correctness
+  // does not rely on it.
   auto raw = loader_set_.run_raw_prepacked(inputs, bucket, dispatcher_stream_);
-  B2_CUDA_CHECK(cudaEventRecord(ev_stop, dispatcher_stream_.stream()));
-  // TODO(batched-steady): this host-sync is only for CUDA elapsed-time telemetry.
-  // Keep it for B2/B3 diagnosis; move to polling or a debug-only path before production throughput work.
-  B2_CUDA_CHECK(cudaEventSynchronize(ev_stop));
-  float elapsed_ms = 0.0f;
-  B2_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, ev_start, ev_stop));
-  B2_CUDA_CHECK(cudaEventDestroy(ev_start));
-  B2_CUDA_CHECK(cudaEventDestroy(ev_stop));
-  double cuda_run_us = static_cast<double>(elapsed_ms) * 1000.0;
+  double cuda_run_us = -1.0;
+  if (timing_enabled) {
+    B2_CUDA_CHECK(cudaEventRecord(ev_stop, dispatcher_stream_.stream()));
+    if (dispatch_timing_mode_ == DispatchTimingMode::Sync) {
+      // This host-sync is only for CUDA elapsed-time telemetry. Step 1a keeps
+      // sync as the default so the default dispatcher path remains behaviorally
+      // identical while poll/off are opt-in measurement modes.
+      B2_CUDA_CHECK(cudaEventSynchronize(ev_stop));
+      float elapsed_ms = 0.0f;
+      B2_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, ev_start, ev_stop));
+      B2_CUDA_CHECK(cudaEventDestroy(ev_start));
+      B2_CUDA_CHECK(cudaEventDestroy(ev_stop));
+      ev_start = nullptr;
+      ev_stop = nullptr;
+      cuda_run_us = static_cast<double>(elapsed_ms) * 1000.0;
+    } else {
+      pending_dispatch_timings_.push_back({ev_start, ev_stop, k});
+      ev_start = nullptr;
+      ev_stop = nullptr;
+      cap_pending_dispatch_timing_events();
+    }
+  }
 
   auto rows = loader_set_.unpack_prepacked_outputs(raw, ready, bucket);
   if (rows.size() != batch.size()) {
@@ -441,9 +499,42 @@ void BatchedSteadyScheduler::dispatch_batch(const std::vector<std::shared_ptr<Qu
     result.cycle_id = cycle_id;
     result.gather_wait_us = gather_waits[i];
     result.service_wait_us = service_waits[i];
-    result.cuda_run_us = cuda_run_us;
+    result.cuda_run_us = cuda_run_us >= 0.0 ? cuda_run_us : 0.0;
     result.label = rows[i].label;
     batch[i]->promise.set_value(std::move(result));
+  }
+}
+
+bool BatchedSteadyScheduler::drain_one_dispatch_timing_event(bool force) {
+  if (pending_dispatch_timings_.empty()) return false;
+  auto& pending = pending_dispatch_timings_.front();
+  if (!force) {
+    cudaError_t ready = cudaEventQuery(pending.ev_stop);
+    if (ready == cudaErrorNotReady) return false;
+    B2_CUDA_CHECK(ready);
+  } else {
+    B2_CUDA_CHECK(cudaEventSynchronize(pending.ev_stop));
+  }
+  float elapsed_ms = 0.0f;
+  B2_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, pending.ev_start, pending.ev_stop));
+  B2_CUDA_CHECK(cudaEventDestroy(pending.ev_start));
+  B2_CUDA_CHECK(cudaEventDestroy(pending.ev_stop));
+  {
+    std::lock_guard<std::mutex> telemetry_lock(telemetry_mutex_);
+    add_dispatch_timing_telemetry_locked(pending.k, static_cast<double>(elapsed_ms) * 1000.0, Clock::now());
+  }
+  pending_dispatch_timings_.pop_front();
+  return true;
+}
+
+void BatchedSteadyScheduler::drain_dispatch_timing_events(bool force) {
+  while (drain_one_dispatch_timing_event(force)) {
+  }
+}
+
+void BatchedSteadyScheduler::cap_pending_dispatch_timing_events() {
+  while (pending_dispatch_timings_.size() > kMaxPendingDispatchTimings) {
+    (void)drain_one_dispatch_timing_event(true);
   }
 }
 
@@ -543,8 +634,6 @@ void BatchedSteadyScheduler::add_dispatch_telemetry(int bucket,
   if (backlog) ++telemetry_.backlog_gt_bmax;
   telemetry_.gather_wait_us.insert(telemetry_.gather_wait_us.end(), gather_wait_us.begin(), gather_wait_us.end());
   telemetry_.service_wait_us.insert(telemetry_.service_wait_us.end(), service_wait_us.begin(), service_wait_us.end());
-  for (int i = 0; i < k; ++i) telemetry_.cuda_run_us.push_back(cuda_run_us);
-  telemetry_.dispatcher_stream_run_us += cuda_run_us;
   if (wakeup_jitter_us > 0.0) telemetry_.window_wakeup_jitter_us.push_back(wakeup_jitter_us);
   if (!dispatcher_measurement_started_) {
     dispatcher_measurement_started_ = true;
@@ -556,6 +645,18 @@ void BatchedSteadyScheduler::add_dispatch_telemetry(int bucket,
     telemetry_.dispatcher_cpu_us = dispatch_cpu_end_us - dispatcher_measurement_cpu_start_us_;
   }
   worker_wait_expected_by_cycle_[cycle_id] = std::max(worker_wait_expected_by_cycle_[cycle_id], k);
+  if (cuda_run_us >= 0.0) add_dispatch_timing_telemetry_locked(k, cuda_run_us, dispatch_wall_end);
+}
+
+void BatchedSteadyScheduler::add_dispatch_timing_telemetry_locked(int k,
+                                                                  double cuda_run_us,
+                                                                  Clock::time_point timing_wall_end) {
+  for (int i = 0; i < k; ++i) telemetry_.cuda_run_us.push_back(cuda_run_us);
+  telemetry_.dispatcher_stream_run_us += cuda_run_us;
+  if (dispatcher_measurement_started_) {
+    telemetry_.dispatcher_wall_us =
+        std::max(telemetry_.dispatcher_wall_us, elapsed_us(dispatcher_measurement_wall_start_, timing_wall_end));
+  }
 }
 
 #undef B2_CUDA_CHECK

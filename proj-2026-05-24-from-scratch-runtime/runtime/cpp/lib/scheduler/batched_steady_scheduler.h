@@ -104,6 +104,7 @@ struct BatchedSteadySchedulerTelemetry {
   std::vector<double> cuda_run_us;
   std::vector<double> output_sync_us;
   std::vector<double> worker_blocked_us;
+  std::vector<double> completion_wait_us;
   std::vector<double> window_wakeup_jitter_us;
   std::vector<double> queue_depth;
   std::vector<double> per_stream_fairness_spread_us;
@@ -125,7 +126,11 @@ class BatchedSteadyScheduler {
   void start();
   void close();
   void warmup_buckets();
-  void record_worker_wait(int64_t cycle_id, int k, double output_sync_us, double worker_blocked_us);
+  void record_worker_wait(int64_t cycle_id,
+                          int k,
+                          double output_sync_us,
+                          double worker_blocked_us,
+                          double completion_wait_us = -1.0);
 
   BatchedSteadySchedulerTelemetry telemetry_snapshot() const;
   const BatchedSteadySchedulerPolicy& policy() const { return policy_; }
@@ -156,11 +161,23 @@ class BatchedSteadyScheduler {
     std::vector<torch::Tensor> row_indices;
   };
 
+  enum class DispatchTimingMode { Sync, Poll, Off };
+
+  struct PendingDispatchTiming {
+    cudaEvent_t ev_start = nullptr;
+    cudaEvent_t ev_stop = nullptr;
+    int k = 0;
+  };
+
   void dispatcher_loop();
   std::vector<int> required_buckets() const;
   int dispatch_bucket_for_k(int k) const;
   std::vector<std::shared_ptr<QueueItem>> gather_batch();
-  void dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch);
+  void dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch,
+                      std::thread::id dispatcher_thread_id);
+  bool drain_one_dispatch_timing_event(bool force);
+  void drain_dispatch_timing_events(bool force);
+  void cap_pending_dispatch_timing_events();
   std::vector<at::Tensor> pack_into_scratch(const std::vector<BatchedSteadyInput>& ready, int bucket);
   Scratch& ensure_scratch(int bucket, const BatchedSteadyInput& first);
   void set_pending_exception_locked(std::vector<std::shared_ptr<QueueItem>>* pending);
@@ -177,11 +194,14 @@ class BatchedSteadyScheduler {
                               Clock::time_point dispatch_wall_end,
                               double dispatch_cpu_start_us,
                               double dispatch_cpu_end_us);
+  void add_dispatch_timing_telemetry_locked(int k, double cuda_run_us, Clock::time_point timing_wall_end);
   static void cuda_check(cudaError_t err, const char* expr, const char* file, int line);
+  static DispatchTimingMode dispatch_timing_mode_from_env();
 
   BatchedSteadyLoaderSet& loader_set_;
   torch::Device device_;
   BatchedSteadySchedulerPolicy policy_;
+  DispatchTimingMode dispatch_timing_mode_;
   c10::cuda::CUDAStream dispatcher_stream_;
 
   mutable std::mutex mutex_;
@@ -195,6 +215,7 @@ class BatchedSteadyScheduler {
   int64_t next_cycle_id_ = 0;
   std::exception_ptr fault_;
   std::thread dispatcher_thread_;
+  std::deque<PendingDispatchTiming> pending_dispatch_timings_;
 
   mutable std::mutex telemetry_mutex_;
   BatchedSteadySchedulerTelemetry telemetry_;

@@ -20,6 +20,7 @@ struct SessionTiming {
   std::optional<double> preproc_ms;
   std::optional<double> scheduler_enqueue_wait_ms;
   std::optional<double> scheduler_future_wait_ms;
+  std::optional<double> scheduler_completion_wait_ms;
   std::optional<double> decode_ms;
   bool gil_attrib_enabled = false;
 
@@ -55,6 +56,9 @@ struct SessionTiming {
     out["scheduler_future_wait_ms"] = scheduler_future_wait_ms.has_value()
                                           ? nlohmann::json(*scheduler_future_wait_ms)
                                           : nlohmann::json(nullptr);
+    out["scheduler_completion_wait_ms"] = scheduler_completion_wait_ms.has_value()
+                                              ? nlohmann::json(*scheduler_completion_wait_ms)
+                                              : nlohmann::json(nullptr);
     out["decode_ms"] = decode_ms.has_value()
                            ? nlohmann::json(*decode_ms)
                            : nlohmann::json(nullptr);

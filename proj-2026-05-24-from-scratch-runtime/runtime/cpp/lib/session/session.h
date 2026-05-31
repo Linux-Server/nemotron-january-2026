@@ -242,6 +242,8 @@ struct RuntimeSteadyTiming {
   uint64_t scheduler_enqueue_wait_count = 0;
   double scheduler_future_wait_ms = 0.0;
   uint64_t scheduler_future_wait_count = 0;
+  double scheduler_completion_wait_ms = 0.0;
+  uint64_t scheduler_completion_wait_count = 0;
   double decode_ms = 0.0;
   uint64_t decode_count = 0;
 
@@ -249,6 +251,7 @@ struct RuntimeSteadyTiming {
     return preproc_count > 0 ||
            scheduler_enqueue_wait_count > 0 ||
            scheduler_future_wait_count > 0 ||
+           scheduler_completion_wait_count > 0 ||
            decode_count > 0;
   }
 
@@ -259,6 +262,8 @@ struct RuntimeSteadyTiming {
     scheduler_enqueue_wait_count += other.scheduler_enqueue_wait_count;
     scheduler_future_wait_ms += other.scheduler_future_wait_ms;
     scheduler_future_wait_count += other.scheduler_future_wait_count;
+    scheduler_completion_wait_ms += other.scheduler_completion_wait_ms;
+    scheduler_completion_wait_count += other.scheduler_completion_wait_count;
     decode_ms += other.decode_ms;
     decode_count += other.decode_count;
   }
