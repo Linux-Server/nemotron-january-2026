@@ -1,0 +1,1501 @@
+{
+  "comparisons": [
+    {
+      "cudnn_allow_tf32": true,
+      "elapsed_seconds": 384.65274238586426,
+      "event_divergence_details": [
+        {
+          "first_diff": 6,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "Could you translate the phrase where is",
+            "tokens": [
+              112,
+              127,
+              41,
+              212,
+              286,
+              951,
+              149,
+              5,
+              506,
+              949,
+              342,
+              52,
+              103,
+              57
+            ]
+          },
+          "got_len": 41,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "Could you translate the phrase where",
+            "tokens": [
+              112,
+              127,
+              41,
+              212,
+              286,
+              951,
+              149,
+              5,
+              506,
+              949,
+              342,
+              52,
+              103
+            ]
+          },
+          "ref_len": 41,
+          "sample_id": "e018a533-4638-c75e-ef13-395ea8e2eb7b",
+          "utt": 198
+        },
+        {
+          "first_diff": 23,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I would like to arrange for a recurring weekly delivery of fresh produce from a local forum, specifically a medium sized box we",
+            "tokens": [
+              34,
+              7,
+              127,
+              110,
+              78,
+              22,
+              268,
+              949,
+              475,
+              75,
+              3,
+              414,
+              86,
+              949,
+              20,
+              703,
+              965,
+              76,
+              135,
+              552,
+              162,
+              29,
+              24,
+              188,
+              950,
+              147,
+              392,
+              85,
+              142,
+              42,
+              3,
+              802,
+              46,
+              75,
+              191,
+              961,
+              349,
+              954,
+              489,
+              116,
+              3,
+              748,
+              947,
+              191,
+              9,
+              683,
+              366,
+              971,
+              58
+            ]
+          },
+          "got_len": 30,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I would like to arrange for a recurring weekly delivery of fresh produce from a local forum, specifically a medium sized box we del",
+            "tokens": [
+              34,
+              7,
+              127,
+              110,
+              78,
+              22,
+              268,
+              949,
+              475,
+              75,
+              3,
+              414,
+              86,
+              949,
+              20,
+              703,
+              965,
+              76,
+              135,
+              552,
+              162,
+              29,
+              24,
+              188,
+              950,
+              147,
+              392,
+              85,
+              142,
+              42,
+              3,
+              802,
+              46,
+              75,
+              191,
+              961,
+              349,
+              954,
+              489,
+              116,
+              3,
+              748,
+              947,
+              191,
+              9,
+              683,
+              366,
+              971,
+              58,
+              135,
+              951
+            ]
+          },
+          "ref_len": 30,
+          "sample_id": "5dd8def8-9ca0-aabf-8a22-e919d4945632",
+          "utt": 759
+        },
+        {
+          "first_diff": 11,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "My cast higher pressure warning light is on, but I've",
+            "tokens": [
+              791,
+              19,
+              227,
+              16,
+              72,
+              213,
+              25,
+              359,
+              225,
+              789,
+              385,
+              36,
+              115,
+              57,
+              64,
+              961,
+              152,
+              34,
+              966,
+              45
+            ]
+          },
+          "got_len": 36,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "My cast higher pressure warning light is on, but I",
+            "tokens": [
+              791,
+              19,
+              227,
+              16,
+              72,
+              213,
+              25,
+              359,
+              225,
+              789,
+              385,
+              36,
+              115,
+              57,
+              64,
+              961,
+              152,
+              34
+            ]
+          },
+          "ref_len": 37,
+          "sample_id": "0a4b7986-46b9-b9da-9c61-3128e502ff63",
+          "utt": 811
+        },
+        {
+          "first_diff": 13,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I'm trying to find a quiet, scenic hiking trail that's within an hour's",
+            "tokens": [
+              34,
+              966,
+              955,
+              455,
+              20,
+              22,
+              24,
+              193,
+              3,
+              246,
+              947,
+              61,
+              961,
+              417,
+              21,
+              44,
+              16,
+              947,
+              611,
+              622,
+              125,
+              2,
+              11,
+              966,
+              948,
+              7,
+              87,
+              4,
+              98,
+              16,
+              214,
+              966,
+              948
+            ]
+          },
+          "got_len": 37,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I'm trying to find a quiet, scenic hiking trail that's within an hour's dri",
+            "tokens": [
+              34,
+              966,
+              955,
+              455,
+              20,
+              22,
+              24,
+              193,
+              3,
+              246,
+              947,
+              61,
+              961,
+              417,
+              21,
+              44,
+              16,
+              947,
+              611,
+              622,
+              125,
+              2,
+              11,
+              966,
+              948,
+              7,
+              87,
+              4,
+              98,
+              16,
+              214,
+              966,
+              948,
+              939
+            ]
+          },
+          "ref_len": 37,
+          "sample_id": "81717bc0-1ac9-f72e-1c41-da7db7b0dcb8",
+          "utt": 829
+        }
+      ],
+      "event_divergences": 4,
+      "first_chunk_max_abs": {
+        "cache_t": 0.04957008361816406,
+        "enc_out": 6.552040576934814e-05
+      },
+      "known_utt_first_chunk_max_abs": {
+        "198": {
+          "cache_t": 0.008846282958984375,
+          "enc_out": 2.2649765014648438e-06
+        },
+        "759": {
+          "cache_t": 0.006115913391113281,
+          "enc_out": 2.464279532432556e-06
+        },
+        "811": {
+          "cache_t": 0.008696556091308594,
+          "enc_out": 2.002343535423279e-06
+        },
+        "829": {
+          "cache_t": 0.006747245788574219,
+          "enc_out": 1.4211982488632202e-06
+        }
+      },
+      "reference": "ts_cudnn_tf32_true",
+      "rows": 1000,
+      "token_divergence_details": [],
+      "token_divergences": 0,
+      "variant": "original_tf32_aoti"
+    },
+    {
+      "cudnn_allow_tf32": false,
+      "elapsed_seconds": 491.65061950683594,
+      "event_divergence_details": [
+        {
+          "first_diff": 6,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I am reporting a very serious",
+            "tokens": [
+              34,
+              354,
+              477,
+              180,
+              20,
+              3,
+              941,
+              162,
+              433,
+              400
+            ]
+          },
+          "got_len": 35,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I am reporting a very ser",
+            "tokens": [
+              34,
+              354,
+              477,
+              180,
+              20,
+              3,
+              941,
+              162,
+              433
+            ]
+          },
+          "ref_len": 36,
+          "sample_id": "75f64413-5fdd-1428-1ffe-98e2f27c8bdc",
+          "utt": 549
+        },
+        {
+          "first_diff": 0,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A grid",
+            "tokens": [
+              62,
+              330,
+              71
+            ]
+          },
+          "got_len": 12,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A",
+            "tokens": [
+              62
+            ]
+          },
+          "ref_len": 13,
+          "sample_id": "273d8558-adce-ada2-f02a-0e140d5962f6",
+          "utt": 770
+        },
+        {
+          "first_diff": 4,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "The online portal",
+            "tokens": [
+              126,
+              64,
+              951,
+              256,
+              25,
+              180,
+              46
+            ]
+          },
+          "got_len": 34,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "The online portal for",
+            "tokens": [
+              126,
+              64,
+              951,
+              256,
+              25,
+              180,
+              46,
+              75
+            ]
+          },
+          "ref_len": 33,
+          "sample_id": "c7072fbd-e732-6855-7bf5-de671b495fd8",
+          "utt": 798
+        }
+      ],
+      "event_divergences": 3,
+      "first_chunk_max_abs": {
+        "cache_t": 0.15104961395263672,
+        "enc_out": 0.00010211765766143799
+      },
+      "known_utt_first_chunk_max_abs": {
+        "198": {
+          "cache_t": 0.03316211700439453,
+          "enc_out": 7.571280002593994e-05
+        },
+        "759": {
+          "cache_t": 0.10870075225830078,
+          "enc_out": 5.768239498138428e-05
+        },
+        "811": {
+          "cache_t": 0.05421113967895508,
+          "enc_out": 4.719197750091553e-05
+        },
+        "829": {
+          "cache_t": 0.026960372924804688,
+          "enc_out": 6.693601608276367e-05
+        }
+      },
+      "reference": "ts_cudnn_tf32_false",
+      "rows": 1000,
+      "token_divergence_details": [],
+      "token_divergences": 0,
+      "variant": "original_tf32_aoti"
+    },
+    {
+      "cudnn_allow_tf32": true,
+      "elapsed_seconds": 381.7892382144928,
+      "event_divergence_details": [
+        {
+          "first_diff": 6,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "Could you translate the phrase where is",
+            "tokens": [
+              112,
+              127,
+              41,
+              212,
+              286,
+              951,
+              149,
+              5,
+              506,
+              949,
+              342,
+              52,
+              103,
+              57
+            ]
+          },
+          "got_len": 41,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "Could you translate the phrase where",
+            "tokens": [
+              112,
+              127,
+              41,
+              212,
+              286,
+              951,
+              149,
+              5,
+              506,
+              949,
+              342,
+              52,
+              103
+            ]
+          },
+          "ref_len": 41,
+          "sample_id": "e018a533-4638-c75e-ef13-395ea8e2eb7b",
+          "utt": 198
+        },
+        {
+          "first_diff": 4,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I believe there's a billing",
+            "tokens": [
+              34,
+              478,
+              682,
+              5,
+              6,
+              966,
+              948,
+              3,
+              17,
+              114,
+              20
+            ]
+          },
+          "got_len": 38,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I believe there's a bill",
+            "tokens": [
+              34,
+              478,
+              682,
+              5,
+              6,
+              966,
+              948,
+              3,
+              17,
+              114
+            ]
+          },
+          "ref_len": 39,
+          "sample_id": "4040841f-bce4-2cac-a03c-e496e95f8c58",
+          "utt": 515
+        },
+        {
+          "first_diff": 0,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A grid",
+            "tokens": [
+              62,
+              330,
+              71
+            ]
+          },
+          "got_len": 12,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A",
+            "tokens": [
+              62
+            ]
+          },
+          "ref_len": 13,
+          "sample_id": "273d8558-adce-ada2-f02a-0e140d5962f6",
+          "utt": 770
+        },
+        {
+          "first_diff": 11,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "My cast higher pressure warning light is on, but I've",
+            "tokens": [
+              791,
+              19,
+              227,
+              16,
+              72,
+              213,
+              25,
+              359,
+              225,
+              789,
+              385,
+              36,
+              115,
+              57,
+              64,
+              961,
+              152,
+              34,
+              966,
+              45
+            ]
+          },
+          "got_len": 36,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "My cast higher pressure warning light is on, but I",
+            "tokens": [
+              791,
+              19,
+              227,
+              16,
+              72,
+              213,
+              25,
+              359,
+              225,
+              789,
+              385,
+              36,
+              115,
+              57,
+              64,
+              961,
+              152,
+              34
+            ]
+          },
+          "ref_len": 37,
+          "sample_id": "0a4b7986-46b9-b9da-9c61-3128e502ff63",
+          "utt": 811
+        },
+        {
+          "first_diff": 13,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I'm trying to find a quiet, scenic hiking trail that's within an hour's",
+            "tokens": [
+              34,
+              966,
+              955,
+              455,
+              20,
+              22,
+              24,
+              193,
+              3,
+              246,
+              947,
+              61,
+              961,
+              417,
+              21,
+              44,
+              16,
+              947,
+              611,
+              622,
+              125,
+              2,
+              11,
+              966,
+              948,
+              7,
+              87,
+              4,
+              98,
+              16,
+              214,
+              966,
+              948
+            ]
+          },
+          "got_len": 37,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I'm trying to find a quiet, scenic hiking trail that's within an hour's dri",
+            "tokens": [
+              34,
+              966,
+              955,
+              455,
+              20,
+              22,
+              24,
+              193,
+              3,
+              246,
+              947,
+              61,
+              961,
+              417,
+              21,
+              44,
+              16,
+              947,
+              611,
+              622,
+              125,
+              2,
+              11,
+              966,
+              948,
+              7,
+              87,
+              4,
+              98,
+              16,
+              214,
+              966,
+              948,
+              939
+            ]
+          },
+          "ref_len": 37,
+          "sample_id": "81717bc0-1ac9-f72e-1c41-da7db7b0dcb8",
+          "utt": 829
+        }
+      ],
+      "event_divergences": 5,
+      "first_chunk_max_abs": {
+        "cache_t": 0.06454849243164062,
+        "enc_out": 6.552040576934814e-05
+      },
+      "known_utt_first_chunk_max_abs": {
+        "198": {
+          "cache_t": 0.006413459777832031,
+          "enc_out": 2.2649765014648438e-06
+        },
+        "759": {
+          "cache_t": 0.0058498382568359375,
+          "enc_out": 2.464279532432556e-06
+        },
+        "811": {
+          "cache_t": 0.008586883544921875,
+          "enc_out": 2.002343535423279e-06
+        },
+        "829": {
+          "cache_t": 0.0055065155029296875,
+          "enc_out": 1.4211982488632202e-06
+        }
+      },
+      "reference": "ts_cudnn_tf32_true",
+      "rows": 1000,
+      "token_divergence_details": [],
+      "token_divergences": 0,
+      "variant": "variant_a_fp32_cudnn"
+    },
+    {
+      "cudnn_allow_tf32": false,
+      "elapsed_seconds": 496.05729818344116,
+      "event_divergence_details": [
+        {
+          "first_diff": 6,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I am reporting a very serious",
+            "tokens": [
+              34,
+              354,
+              477,
+              180,
+              20,
+              3,
+              941,
+              162,
+              433,
+              400
+            ]
+          },
+          "got_len": 35,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I am reporting a very ser",
+            "tokens": [
+              34,
+              354,
+              477,
+              180,
+              20,
+              3,
+              941,
+              162,
+              433
+            ]
+          },
+          "ref_len": 36,
+          "sample_id": "75f64413-5fdd-1428-1ffe-98e2f27c8bdc",
+          "utt": 549
+        },
+        {
+          "first_diff": 0,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A grid",
+            "tokens": [
+              62,
+              330,
+              71
+            ]
+          },
+          "got_len": 12,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A",
+            "tokens": [
+              62
+            ]
+          },
+          "ref_len": 13,
+          "sample_id": "273d8558-adce-ada2-f02a-0e140d5962f6",
+          "utt": 770
+        },
+        {
+          "first_diff": 4,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "The online portal",
+            "tokens": [
+              126,
+              64,
+              951,
+              256,
+              25,
+              180,
+              46
+            ]
+          },
+          "got_len": 34,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "The online portal for",
+            "tokens": [
+              126,
+              64,
+              951,
+              256,
+              25,
+              180,
+              46,
+              75
+            ]
+          },
+          "ref_len": 33,
+          "sample_id": "c7072fbd-e732-6855-7bf5-de671b495fd8",
+          "utt": 798
+        }
+      ],
+      "event_divergences": 3,
+      "first_chunk_max_abs": {
+        "cache_t": 0.15104961395263672,
+        "enc_out": 0.00010211765766143799
+      },
+      "known_utt_first_chunk_max_abs": {
+        "198": {
+          "cache_t": 0.03316211700439453,
+          "enc_out": 7.571280002593994e-05
+        },
+        "759": {
+          "cache_t": 0.10869646072387695,
+          "enc_out": 5.768239498138428e-05
+        },
+        "811": {
+          "cache_t": 0.05421328544616699,
+          "enc_out": 4.719197750091553e-05
+        },
+        "829": {
+          "cache_t": 0.026962757110595703,
+          "enc_out": 6.693601608276367e-05
+        }
+      },
+      "reference": "ts_cudnn_tf32_false",
+      "rows": 1000,
+      "token_divergence_details": [],
+      "token_divergences": 0,
+      "variant": "variant_a_fp32_cudnn"
+    },
+    {
+      "cudnn_allow_tf32": true,
+      "elapsed_seconds": 380.1826093196869,
+      "event_divergence_details": [
+        {
+          "first_diff": 6,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "Could you translate the phrase where is",
+            "tokens": [
+              112,
+              127,
+              41,
+              212,
+              286,
+              951,
+              149,
+              5,
+              506,
+              949,
+              342,
+              52,
+              103,
+              57
+            ]
+          },
+          "got_len": 41,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "Could you translate the phrase where",
+            "tokens": [
+              112,
+              127,
+              41,
+              212,
+              286,
+              951,
+              149,
+              5,
+              506,
+              949,
+              342,
+              52,
+              103
+            ]
+          },
+          "ref_len": 41,
+          "sample_id": "e018a533-4638-c75e-ef13-395ea8e2eb7b",
+          "utt": 198
+        },
+        {
+          "first_diff": 23,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I would like to arrange for a recurring weekly delivery of fresh produce from a local forum, specifically a medium sized box we",
+            "tokens": [
+              34,
+              7,
+              127,
+              110,
+              78,
+              22,
+              268,
+              949,
+              475,
+              75,
+              3,
+              414,
+              86,
+              949,
+              20,
+              703,
+              965,
+              76,
+              135,
+              552,
+              162,
+              29,
+              24,
+              188,
+              950,
+              147,
+              392,
+              85,
+              142,
+              42,
+              3,
+              802,
+              46,
+              75,
+              191,
+              961,
+              349,
+              954,
+              489,
+              116,
+              3,
+              748,
+              947,
+              191,
+              9,
+              683,
+              366,
+              971,
+              58
+            ]
+          },
+          "got_len": 30,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I would like to arrange for a recurring weekly delivery of fresh produce from a local forum, specifically a medium sized box we del",
+            "tokens": [
+              34,
+              7,
+              127,
+              110,
+              78,
+              22,
+              268,
+              949,
+              475,
+              75,
+              3,
+              414,
+              86,
+              949,
+              20,
+              703,
+              965,
+              76,
+              135,
+              552,
+              162,
+              29,
+              24,
+              188,
+              950,
+              147,
+              392,
+              85,
+              142,
+              42,
+              3,
+              802,
+              46,
+              75,
+              191,
+              961,
+              349,
+              954,
+              489,
+              116,
+              3,
+              748,
+              947,
+              191,
+              9,
+              683,
+              366,
+              971,
+              58,
+              135,
+              951
+            ]
+          },
+          "ref_len": 30,
+          "sample_id": "5dd8def8-9ca0-aabf-8a22-e919d4945632",
+          "utt": 759
+        },
+        {
+          "first_diff": 11,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "My cast higher pressure warning light is on, but I've",
+            "tokens": [
+              791,
+              19,
+              227,
+              16,
+              72,
+              213,
+              25,
+              359,
+              225,
+              789,
+              385,
+              36,
+              115,
+              57,
+              64,
+              961,
+              152,
+              34,
+              966,
+              45
+            ]
+          },
+          "got_len": 36,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "My cast higher pressure warning light is on, but I",
+            "tokens": [
+              791,
+              19,
+              227,
+              16,
+              72,
+              213,
+              25,
+              359,
+              225,
+              789,
+              385,
+              36,
+              115,
+              57,
+              64,
+              961,
+              152,
+              34
+            ]
+          },
+          "ref_len": 37,
+          "sample_id": "0a4b7986-46b9-b9da-9c61-3128e502ff63",
+          "utt": 811
+        },
+        {
+          "first_diff": 13,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I'm trying to find a quiet, scenic hiking trail that's within an hour's",
+            "tokens": [
+              34,
+              966,
+              955,
+              455,
+              20,
+              22,
+              24,
+              193,
+              3,
+              246,
+              947,
+              61,
+              961,
+              417,
+              21,
+              44,
+              16,
+              947,
+              611,
+              622,
+              125,
+              2,
+              11,
+              966,
+              948,
+              7,
+              87,
+              4,
+              98,
+              16,
+              214,
+              966,
+              948
+            ]
+          },
+          "got_len": 37,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I'm trying to find a quiet, scenic hiking trail that's within an hour's dri",
+            "tokens": [
+              34,
+              966,
+              955,
+              455,
+              20,
+              22,
+              24,
+              193,
+              3,
+              246,
+              947,
+              61,
+              961,
+              417,
+              21,
+              44,
+              16,
+              947,
+              611,
+              622,
+              125,
+              2,
+              11,
+              966,
+              948,
+              7,
+              87,
+              4,
+              98,
+              16,
+              214,
+              966,
+              948,
+              939
+            ]
+          },
+          "ref_len": 37,
+          "sample_id": "81717bc0-1ac9-f72e-1c41-da7db7b0dcb8",
+          "utt": 829
+        }
+      ],
+      "event_divergences": 4,
+      "first_chunk_max_abs": {
+        "cache_t": 0.04957008361816406,
+        "enc_out": 6.552040576934814e-05
+      },
+      "known_utt_first_chunk_max_abs": {
+        "198": {
+          "cache_t": 0.008846282958984375,
+          "enc_out": 2.2649765014648438e-06
+        },
+        "759": {
+          "cache_t": 0.006115913391113281,
+          "enc_out": 2.464279532432556e-06
+        },
+        "811": {
+          "cache_t": 0.008696556091308594,
+          "enc_out": 2.002343535423279e-06
+        },
+        "829": {
+          "cache_t": 0.006747245788574219,
+          "enc_out": 1.4211982488632202e-06
+        }
+      },
+      "reference": "ts_cudnn_tf32_true",
+      "rows": 1000,
+      "token_divergence_details": [],
+      "token_divergences": 0,
+      "variant": "variant_b_fp32_samep"
+    },
+    {
+      "cudnn_allow_tf32": false,
+      "elapsed_seconds": 491.5754895210266,
+      "event_divergence_details": [
+        {
+          "first_diff": 6,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I am reporting a very serious",
+            "tokens": [
+              34,
+              354,
+              477,
+              180,
+              20,
+              3,
+              941,
+              162,
+              433,
+              400
+            ]
+          },
+          "got_len": 35,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "I am reporting a very ser",
+            "tokens": [
+              34,
+              354,
+              477,
+              180,
+              20,
+              3,
+              941,
+              162,
+              433
+            ]
+          },
+          "ref_len": 36,
+          "sample_id": "75f64413-5fdd-1428-1ffe-98e2f27c8bdc",
+          "utt": 549
+        },
+        {
+          "first_diff": 0,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A grid",
+            "tokens": [
+              62,
+              330,
+              71
+            ]
+          },
+          "got_len": 12,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "A",
+            "tokens": [
+              62
+            ]
+          },
+          "ref_len": 13,
+          "sample_id": "273d8558-adce-ada2-f02a-0e140d5962f6",
+          "utt": 770
+        },
+        {
+          "first_diff": 4,
+          "got": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "The online portal",
+            "tokens": [
+              126,
+              64,
+              951,
+              256,
+              25,
+              180,
+              46
+            ]
+          },
+          "got_len": 34,
+          "ref": {
+            "collector_text": "",
+            "collector_tokens": [],
+            "kind": 0,
+            "text": "The online portal for",
+            "tokens": [
+              126,
+              64,
+              951,
+              256,
+              25,
+              180,
+              46,
+              75
+            ]
+          },
+          "ref_len": 33,
+          "sample_id": "c7072fbd-e732-6855-7bf5-de671b495fd8",
+          "utt": 798
+        }
+      ],
+      "event_divergences": 3,
+      "first_chunk_max_abs": {
+        "cache_t": 0.15104961395263672,
+        "enc_out": 0.00010211765766143799
+      },
+      "known_utt_first_chunk_max_abs": {
+        "198": {
+          "cache_t": 0.03316211700439453,
+          "enc_out": 7.571280002593994e-05
+        },
+        "759": {
+          "cache_t": 0.10870075225830078,
+          "enc_out": 5.768239498138428e-05
+        },
+        "811": {
+          "cache_t": 0.05421113967895508,
+          "enc_out": 4.719197750091553e-05
+        },
+        "829": {
+          "cache_t": 0.026960372924804688,
+          "enc_out": 6.693601608276367e-05
+        }
+      },
+      "reference": "ts_cudnn_tf32_false",
+      "rows": 1000,
+      "token_divergence_details": [],
+      "token_divergences": 0,
+      "variant": "variant_b_fp32_samep"
+    }
+  ],
+  "device": "NVIDIA GeForce RTX 5090",
+  "elapsed_seconds": 3189.620446920395,
+  "references": {
+    "ts_cudnn_tf32_false": {
+      "cudnn_allow_tf32": false,
+      "elapsed_seconds": 495.1999623775482,
+      "label": "ts_cudnn_tf32_false",
+      "vs_bundle": {
+        "event_divergences": 9,
+        "token_divergences": 0
+      }
+    },
+    "ts_cudnn_tf32_true": {
+      "cudnn_allow_tf32": true,
+      "elapsed_seconds": 0.0,
+      "label": "ts_cudnn_tf32_true_bundle",
+      "vs_bundle": {
+        "event_divergences": 0,
+        "token_divergences": 0
+      }
+    }
+  },
+  "rows": 1000,
+  "settings": {
+    "TORCHINDUCTOR_MAX_AUTOTUNE": "0",
+    "cuda.matmul.allow_tf32": false,
+    "matmul_precision": "highest"
+  },
+  "torch": "2.8.0+cu128",
+  "variant_constants": {
+    "original_tf32_aoti": {
+      "alias": 0,
+      "direct": 637,
+      "fqns": 637,
+      "matched": 637,
+      "package_path": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_first_aoti.pt2"
+    },
+    "variant_a_fp32_cudnn": {
+      "alias": 0,
+      "direct": 637,
+      "fqns": 637,
+      "matched": 637,
+      "package_path": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_first_aoti_fp32.pt2"
+    },
+    "variant_b_fp32_samep": {
+      "alias": 0,
+      "direct": 637,
+      "fqns": 637,
+      "matched": 637,
+      "package_path": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_first_aoti_fp32_samep.pt2"
+    }
+  }
+}
