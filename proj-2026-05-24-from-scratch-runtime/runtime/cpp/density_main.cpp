@@ -70,6 +70,12 @@ struct ScopedCudaEvent {
     if (event != nullptr) CUDA_CHECK(cudaEventDestroy(event));
     CUDA_CHECK(cudaEventCreateWithFlags(&event, flags));
   }
+
+  cudaEvent_t release() noexcept {
+    cudaEvent_t out = event;
+    event = nullptr;
+    return out;
+  }
 };
 
 #include "lib/scheduler/steady_batch_primitive.h"
@@ -337,13 +343,14 @@ static DensityArgs parse_density_args(int argc, char** argv) {
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
       args.mode != "b2-t1" && args.mode != "enc-first-parity" &&
       args.mode != "async-ordering" &&
-      args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
+      args.mode != "admission-smoke" && args.mode != "scheduler-admission-smoke" &&
+      args.mode != "stalegen-smoke" &&
       args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
       args.mode != "vad-smoke" && args.mode != "ws-lib-smoke" &&
       args.mode != "ws-lifecycle-smoke" && args.mode != "shutdown-smoke" &&
       args.mode != "backpressure-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, enc-first-parity, async-ordering, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, enc-first-parity, async-ordering, admission-smoke, scheduler-admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -6518,6 +6525,149 @@ static bool run_admission_smoke() {
   return ok;
 }
 
+static BatchedSteadyInput make_scheduler_admission_input(torch::Device device, const std::string& label) {
+  auto float_options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+  auto long_options = torch::TensorOptions().dtype(torch::kLong).device(device);
+  return {
+      torch::zeros({1, 128, 25}, float_options),
+      torch::zeros({24, 1, 70, 1024}, float_options),
+      torch::zeros({24, 1, 1024, 8}, float_options),
+      torch::zeros({1}, long_options),
+      label,
+  };
+}
+
+static bool run_scheduler_admission_smoke(const DensityArgs& args, torch::Device device) {
+  const int producers = 4;
+  const int offers_per_producer = 96;
+  const int offered = producers * offers_per_producer;
+  std::string steady_batch_dir = resolve_steady_batch_dir(args);
+  BatchedSteadyLoaderSet batched_steady(steady_batch_dir,
+                                        args.dir + "/finalize_shared_weights.ts",
+                                        device,
+                                        1,
+                                        "scheduler_admission_smoke");
+  BatchedSteadySchedulerPolicy policy;
+  policy.B_max = 4;
+  policy.window_ms = 10;
+  policy.lone_timeout_ms = 10;
+  policy.queue_capacity = 2;
+  BatchedSteadyScheduler scheduler(batched_steady, device, policy);
+  scheduler.warmup_buckets();
+  scheduler.start();
+
+  std::atomic<int> admitted{0};
+  std::atomic<int> timeouts{0};
+  std::atomic<int> producer_errors{0};
+  std::mutex futures_mutex;
+  std::mutex errors_mutex;
+  std::vector<std::future<DispatchResult>> futures;
+  std::vector<std::string> errors;
+  futures.reserve(static_cast<size_t>(offered));
+  StartGate gate(producers);
+  std::vector<std::thread> threads;
+  threads.reserve(producers);
+  for (int producer = 0; producer < producers; ++producer) {
+    threads.emplace_back([&, producer] {
+      gate.arrive_and_wait();
+      try {
+        c10::cuda::CUDAGuard device_guard(device.index());
+        auto stream = c10::cuda::getStreamFromPool(/*isHighPriority=*/false, device.index());
+        c10::cuda::CUDAStreamGuard stream_guard(stream);
+        for (int i = 0; i < offers_per_producer; ++i) {
+          std::string label = "scheduler_admission_smoke.p" + std::to_string(producer) +
+                              ".offer" + std::to_string(i);
+          auto input = make_scheduler_admission_input(device, label);
+          ScopedCudaEvent producer_event;
+          producer_event.create(cudaEventDisableTiming);
+          CUDA_CHECK(cudaEventRecord(producer_event.event, stream.stream()));
+          auto deadline = Clock::now() + std::chrono::milliseconds(5);
+          auto future = scheduler.try_enqueue_until({std::move(input), stream, producer_event.event}, deadline);
+          if (future.has_value()) {
+            producer_event.release();
+            admitted.fetch_add(1, std::memory_order_relaxed);
+            std::lock_guard<std::mutex> lock(futures_mutex);
+            futures.push_back(std::move(*future));
+          } else {
+            timeouts.fetch_add(1, std::memory_order_relaxed);
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+      } catch (const std::exception& e) {
+        producer_errors.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(errors_mutex);
+        errors.push_back(e.what());
+      }
+    });
+  }
+  gate.wait_until_ready_and_start();
+  for (auto& thread : threads) thread.join();
+
+  std::vector<std::future<DispatchResult>> admitted_futures;
+  {
+    std::lock_guard<std::mutex> lock(futures_mutex);
+    admitted_futures = std::move(futures);
+  }
+
+  int completed = 0;
+  int future_timeouts = 0;
+  int bad_results = 0;
+  auto consumer_stream = c10::cuda::getStreamFromPool(/*isHighPriority=*/false, device.index());
+  {
+    c10::cuda::CUDAStreamGuard stream_guard(consumer_stream);
+    for (auto& future : admitted_futures) {
+      auto wait_status = future.wait_for(std::chrono::seconds(10));
+      if (wait_status != std::future_status::ready) {
+        ++future_timeouts;
+        continue;
+      }
+      auto result = future.get();
+      if (result.completion.get() == nullptr || result.row_tensors.size() < 5) {
+        ++bad_results;
+        continue;
+      }
+      CUDA_CHECK(cudaStreamWaitEvent(consumer_stream.stream(), result.completion.get(), 0));
+      CUDA_CHECK(cudaStreamSynchronize(consumer_stream.stream()));
+      ++completed;
+    }
+  }
+
+  scheduler.close();
+  auto telemetry = scheduler.telemetry_snapshot();
+  if (producer_errors.load(std::memory_order_relaxed) > 0) {
+    for (const auto& error : errors) {
+      std::printf("SCHEDULER_ADMISSION_SMOKE_PRODUCER_ERROR %s\n", error.c_str());
+    }
+  }
+
+  bool ok = producer_errors.load(std::memory_order_relaxed) == 0 &&
+            future_timeouts == 0 &&
+            bad_results == 0 &&
+            timeouts.load(std::memory_order_relaxed) > 0 &&
+            admitted.load(std::memory_order_relaxed) > policy.queue_capacity &&
+            completed == admitted.load(std::memory_order_relaxed) &&
+            telemetry.completed == admitted.load(std::memory_order_relaxed) &&
+            telemetry.dispatcher_exceptions == 0;
+  std::printf("SCHEDULER_ADMISSION_SMOKE %s offered=%d admitted=%d cap_wait_timeouts=%d "
+              "completed=%d future_timeouts=%d bad_results=%d producer_errors=%d policy_capacity=%d "
+              "dispatch_cycles=%lld telemetry_completed=%lld dispatcher_exceptions=%lld telemetry=%s\n",
+              ok ? "PASS" : "FAIL",
+              offered,
+              admitted.load(std::memory_order_relaxed),
+              timeouts.load(std::memory_order_relaxed),
+              completed,
+              future_timeouts,
+              bad_results,
+              producer_errors.load(std::memory_order_relaxed),
+              policy.queue_capacity,
+              static_cast<long long>(telemetry.dispatch_cycles),
+              static_cast<long long>(telemetry.completed),
+              static_cast<long long>(telemetry.dispatcher_exceptions),
+              scheduler_telemetry_json(telemetry).c_str());
+  cleanup_cuda_cache();
+  return ok;
+}
+
 static bool run_stalegen_smoke() {
   StaleGenTelemetry telemetry;
   int stale_events_emitted = 0;
@@ -8247,6 +8397,10 @@ int main(int argc, char** argv) {
     std::string stamp = timestamp_utc();
     if (args.mode == "runtime-smoke") {
       bool ok = run_runtime_smoke(args, device);
+      return ok ? 0 : 1;
+    }
+    if (args.mode == "scheduler-admission-smoke") {
+      bool ok = run_scheduler_admission_smoke(args, device);
       return ok ? 0 : 1;
     }
     if (args.mode == "vad-smoke") {

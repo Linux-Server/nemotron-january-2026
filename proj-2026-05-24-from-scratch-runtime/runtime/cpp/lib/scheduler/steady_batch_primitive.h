@@ -528,6 +528,10 @@ class BatchedSteadyLoaderSet {
       item.bucket = bucket;
       item.row = static_cast<int>(row);
       item.label = ready[static_cast<size_t>(row)].label;
+      // These .contiguous() calls only allocate for non-contiguous row views.
+      // B=1 and first-dimension selects can remain aliases of the raw AOTI
+      // outputs, so the async scheduler clones any published row tensor that
+      // still aliases those raw outputs before recording its completion event.
       item.tensors = {
           out[0].select(0, row).unsqueeze(0).contiguous(),
           out[1].select(0, row).reshape({1}).contiguous(),

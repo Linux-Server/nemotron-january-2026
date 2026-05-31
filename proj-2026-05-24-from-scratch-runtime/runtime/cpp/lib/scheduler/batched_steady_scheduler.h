@@ -169,15 +169,61 @@ class BatchedSteadyScheduler {
     int k = 0;
   };
 
+  struct PendingDispatch {
+    cudaEvent_t dispatch_done = nullptr;
+    std::vector<std::shared_ptr<QueueItem>> input_owners;
+    int capacity_tokens = 0;
+
+    PendingDispatch() = default;
+    PendingDispatch(const PendingDispatch&) = delete;
+    PendingDispatch& operator=(const PendingDispatch&) = delete;
+
+    PendingDispatch(PendingDispatch&& other) noexcept
+        : dispatch_done(other.dispatch_done),
+          input_owners(std::move(other.input_owners)),
+          capacity_tokens(other.capacity_tokens) {
+      other.dispatch_done = nullptr;
+      other.capacity_tokens = 0;
+    }
+
+    PendingDispatch& operator=(PendingDispatch&& other) noexcept {
+      if (this != &other) {
+        reset();
+        dispatch_done = other.dispatch_done;
+        input_owners = std::move(other.input_owners);
+        capacity_tokens = other.capacity_tokens;
+        other.dispatch_done = nullptr;
+        other.capacity_tokens = 0;
+      }
+      return *this;
+    }
+
+    ~PendingDispatch() {
+      reset();
+    }
+
+    void reset() noexcept {
+      if (dispatch_done != nullptr) cudaEventDestroy(dispatch_done);
+      dispatch_done = nullptr;
+      input_owners.clear();
+      capacity_tokens = 0;
+    }
+  };
+
   void dispatcher_loop();
   std::vector<int> required_buckets() const;
   int dispatch_bucket_for_k(int k) const;
   std::vector<std::shared_ptr<QueueItem>> gather_batch();
-  void dispatch_batch(const std::vector<std::shared_ptr<QueueItem>>& batch,
+  void dispatch_batch(std::vector<std::shared_ptr<QueueItem>> batch,
                       std::thread::id dispatcher_thread_id);
   bool drain_one_dispatch_timing_event(bool force);
   void drain_dispatch_timing_events(bool force);
   void cap_pending_dispatch_timing_events();
+  bool capacity_available_locked() const;
+  void release_capacity_tokens_locked(int tokens);
+  bool drain_one_pending_dispatch_locked(bool force);
+  void drain_pending_dispatches_locked(bool force);
+  void cap_pending_dispatches_locked();
   std::vector<at::Tensor> pack_into_scratch(const std::vector<BatchedSteadyInput>& ready, int bucket);
   Scratch& ensure_scratch(int bucket, const BatchedSteadyInput& first);
   void set_pending_exception_locked(std::vector<std::shared_ptr<QueueItem>>* pending);
@@ -213,9 +259,11 @@ class BatchedSteadyScheduler {
   bool closed_ = false;
   int64_t next_sequence_ = 0;
   int64_t next_cycle_id_ = 0;
+  int capacity_tokens_in_use_ = 0;
   std::exception_ptr fault_;
   std::thread dispatcher_thread_;
   std::deque<PendingDispatchTiming> pending_dispatch_timings_;
+  std::deque<PendingDispatch> pending_dispatches_;
 
   mutable std::mutex telemetry_mutex_;
   BatchedSteadySchedulerTelemetry telemetry_;
