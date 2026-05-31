@@ -746,10 +746,17 @@ struct SharedRuntime::Impl {
 
     enc_first = load_module_on_device((fs::path(artifact_dir) / "enc_first.ts").string(), device);
     cold_phase("enc_first_load");
-    enc_steady = std::make_unique<AOTIModelPackageLoader>(
-        (fs::path(artifact_dir) / "enc_steady_aoti.pt2").string(), "model", false, cfg.steady_num_runners,
-        device.index());
-    cold_phase("enc_steady_load");
+    // Fail fast on the invalid shadow-without-scheduler config BEFORE doing any
+    // expensive inline/finalize loads (shadow compares scheduler vs inline, so it
+    // needs the scheduler). Mirrors the upstream ws_server.cpp:706 guard.
+    if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
+      throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
+    }
+    const bool need_inline_at_startup = !cfg.scheduler_enabled || cfg.steady_shadow_enabled;
+    if (need_inline_at_startup) {
+      (void)ensure_inline_enc_steady();
+      cold_phase("enc_steady_load");
+    }
 
     const auto finalize_preload_t0 = ColdStartClock::now();
     finalize_loaders = std::make_unique<FinalizeBucketLoaderPool>(
@@ -773,14 +780,8 @@ struct SharedRuntime::Impl {
     std::fflush(stdout);
     cold_phase_total("finalize_preload", finalize_preload_t0);
 
-    if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
-      throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
-    }
-
     build_inference_lanes();
     cold_phase("lane_build");
-    warm_inference_lanes();
-    cold_phase("lane_warmup");
 
     if (cfg.scheduler_enabled) {
       const auto scheduler_preload_t0 = ColdStartClock::now();
@@ -827,6 +828,8 @@ struct SharedRuntime::Impl {
                   "steady_loader_sets=0\n");
       std::fflush(stdout);
     }
+    warm_inference_lanes();
+    cold_phase("lane_warmup");
     if (background_warmup_enabled) {
       launch_pending_background_warmup(cold_start_t0);
       cold_phase("sync_warm_done");
@@ -851,6 +854,31 @@ struct SharedRuntime::Impl {
     }
   }
 
+  AOTIModelPackageLoader& ensure_inline_enc_steady() {
+    std::call_once(enc_steady_once, [this]() {
+      const auto t0 = std::chrono::steady_clock::now();
+      enc_steady = std::make_unique<AOTIModelPackageLoader>(
+          (fs::path(artifact_dir) / "enc_steady_aoti.pt2").string(),
+          "model",
+          false,
+          cfg.steady_num_runners,
+          device.index());
+      const auto now = std::chrono::steady_clock::now();
+      const double ms = std::chrono::duration<double, std::milli>(now - t0).count();
+      const char* reason = !cfg.scheduler_enabled
+                               ? "scheduler_off"
+                               : (cfg.steady_shadow_enabled ? "steady_shadow" : "lazy");
+      std::printf("INLINE_ENC_STEADY_LAZY_LOAD elapsed_ms=%.1f reason=%s\n", ms, reason);
+      std::fflush(stdout);
+    });
+    return *enc_steady;
+  }
+
+  AOTIModelPackageLoader* inline_enc_steady_ptr() {
+    if (cfg.scheduler_enabled && !cfg.steady_shadow_enabled) return nullptr;
+    return &ensure_inline_enc_steady();
+  }
+
   void build_inference_lanes() {
     lane_count = parse_positive_env_int("NEMOTRON_WS_LANES", 1);
     c10::cuda::CUDAGuard device_guard(device.index());
@@ -872,11 +900,17 @@ struct SharedRuntime::Impl {
       throw std::runtime_error("inference lane memory delta suggests big-module duplication: per_lane_mib=" +
                                std::to_string(bytes_to_mib(lane_delta_per_lane_bytes)));
     }
+    const char* inline_status = enc_steady ? "loaded" : "skipped";
+    const char* shared_big_modules = enc_steady
+                                         ? "enc_first,enc_steady,finalize_loaders"
+                                         : "enc_first,finalize_loaders";
     std::printf("inference lane pool built: lanes=%d per_lane_mib=%.3f total_lane_mib=%.3f "
-                "no_big_module_duplication=true shared_big_modules=enc_first,enc_steady,finalize_loaders\n",
+                "no_big_module_duplication=true shared_big_modules=%s inline_enc_steady=%s\n",
                 lane_count,
                 bytes_to_mib(lane_delta_per_lane_bytes),
-                bytes_to_mib(lane_delta_bytes));
+                bytes_to_mib(lane_delta_bytes),
+                shared_big_modules,
+                inline_status);
     std::fflush(stdout);
   }
 
@@ -1094,16 +1128,19 @@ struct SharedRuntime::Impl {
           auto ctx = lane.execution_context();
           {
             std::lock_guard<std::mutex> enc_first_lock(enc_first_mutex);
+            BatchedSteadyScheduler* steady_scheduler = cfg.scheduler_enabled ? scheduler.get() : nullptr;
             (void)session_runtime_append_pcm_and_drain(warm_state,
                                                        warmup_input.audio,
                                                        *warm_audio,
                                                        enc_first,
-                                                       *enc_steady,
+                                                       inline_enc_steady_ptr(),
                                                        ctx,
                                                        device,
                                                        tokenizer_value,
                                                        events,
-                                                       label + ".append");
+                                                       label + ".append",
+                                                       steady_scheduler,
+                                                       cfg.steady_shadow_enabled);
           }
           vad_stop(warm_state);
           (void)session_runtime_finalize(warm_state,
@@ -1337,6 +1374,7 @@ struct SharedRuntime::Impl {
   torch::jit::Module enc_first;
   std::mutex enc_first_mutex;
   std::unique_ptr<AOTIModelPackageLoader> enc_steady;
+  std::once_flag enc_steady_once;
   // Declared before batched_steady so borrowed shared constants are destroyed after scheduler loaders.
   std::unique_ptr<FinalizeBucketLoaderPool> finalize_loaders;
   AudioGeometry audio_geometry;
@@ -1521,7 +1559,7 @@ struct SessionRuntime::Impl {
                                              pcm,
                                              *audio,
                                              s.enc_first,
-                                             *s.enc_steady,
+                                             s.inline_enc_steady_ptr(),
                                              ctx,
                                              s.device,
                                              s.tokenizer_value,
@@ -1535,7 +1573,7 @@ struct SessionRuntime::Impl {
                                              pcm,
                                              *audio,
                                              s.enc_first,
-                                             *s.enc_steady,
+                                             s.inline_enc_steady_ptr(),
                                              ctx,
                                              s.device,
                                              s.tokenizer_value,
@@ -1574,7 +1612,7 @@ struct SessionRuntime::Impl {
         session_runtime_vad_start(state,
                                   *audio,
                                   s.enc_first,
-                                  *s.enc_steady,
+                                  s.inline_enc_steady_ptr(),
                                   ctx,
                                   s.device,
                                   s.tokenizer_value,
@@ -1587,7 +1625,7 @@ struct SessionRuntime::Impl {
         session_runtime_vad_start(state,
                                   *audio,
                                   s.enc_first,
-                                  *s.enc_steady,
+                                  s.inline_enc_steady_ptr(),
                                   ctx,
                                   s.device,
                                   s.tokenizer_value,

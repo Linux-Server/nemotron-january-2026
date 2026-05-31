@@ -2948,7 +2948,7 @@ static int drain_audio_steady(SessionState& state,
 static void run_steady_chunk_tensor_runtime(SessionState& state,
                                             const torch::Tensor& new_mel_in,
                                             torch::jit::Module& enc_first,
-                                            AOTIModelPackageLoader& enc_steady,
+                                            AOTIModelPackageLoader* enc_steady,
                                             const ExecutionContext& ctx,
                                             torch::Device device,
                                             const Tokenizer& tokenizer,
@@ -2978,10 +2978,14 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
       throw std::runtime_error("steady shadow requested without a steady scheduler for " + label);
     }
     if (steady_shadow_enabled) {
+      if (enc_steady == nullptr) {
+        throw std::runtime_error("inline enc_steady required (scheduler off or shadow on) but not loaded: " +
+                                 label);
+      }
       run_steady_shadow_compare_and_commit(state,
                                            chunk,
                                            new_mel,
-                                           enc_steady,
+                                           *enc_steady,
                                            *steady_scheduler,
                                            ctx,
                                            tokenizer,
@@ -3005,7 +3009,11 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
                                                             steady_timing);
       out = std::move(scheduler_result.tensors);
     } else {
-      out = run_steady_encoder(enc_steady, chunk, state, ctx);
+      if (enc_steady == nullptr) {
+        throw std::runtime_error("inline enc_steady required (scheduler off or shadow on) but not loaded: " +
+                                 label);
+      }
+      out = run_steady_encoder(*enc_steady, chunk, state, ctx);
     }
   }
 
@@ -3029,7 +3037,7 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
 static int drain_audio_steady_runtime(SessionState& state,
                                       AudioFrontend& audio,
                                       torch::jit::Module& enc_first,
-                                      AOTIModelPackageLoader& enc_steady,
+                                      AOTIModelPackageLoader* enc_steady,
                                       const ExecutionContext& ctx,
                                       torch::Device device,
                                       const Tokenizer& tokenizer,
@@ -3079,7 +3087,7 @@ static int append_pcm_and_drain_runtime(SessionState& state,
                                         const std::vector<float>& pcm,
                                         AudioFrontend& audio,
                                         torch::jit::Module& enc_first,
-                                        AOTIModelPackageLoader& enc_steady,
+                                        AOTIModelPackageLoader* enc_steady,
                                         const ExecutionContext& ctx,
                                         torch::Device device,
                                         const Tokenizer& tokenizer,
@@ -3117,7 +3125,7 @@ static int append_pcm_and_drain_runtime(SessionState& state,
                                         const std::vector<float>& pcm,
                                         AudioFrontend& audio,
                                         torch::jit::Module& enc_first,
-                                        AOTIModelPackageLoader& enc_steady,
+                                        AOTIModelPackageLoader* enc_steady,
                                         torch::jit::Module& joint,
                                         torch::jit::Module& predict,
                                         torch::Device device,
@@ -3144,7 +3152,7 @@ static int append_pcm_and_drain_runtime(SessionState& state,
 static int flush_post_stop_audio_runtime(SessionState& state,
                                          AudioFrontend& audio,
                                          torch::jit::Module& enc_first,
-                                         AOTIModelPackageLoader& enc_steady,
+                                         AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
                                          const Tokenizer& tokenizer,
@@ -3179,7 +3187,7 @@ static int flush_post_stop_audio_runtime(SessionState& state,
 static int flush_post_stop_audio_runtime(SessionState& state,
                                          AudioFrontend& audio,
                                          torch::jit::Module& enc_first,
-                                         AOTIModelPackageLoader& enc_steady,
+                                         AOTIModelPackageLoader* enc_steady,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
                                          torch::Device device,
@@ -3210,7 +3218,7 @@ void vad_stop(SessionState& state) {
 static int vad_start(SessionState& state,
                      AudioFrontend& audio,
                      torch::jit::Module& enc_first,
-                     AOTIModelPackageLoader& enc_steady,
+                     AOTIModelPackageLoader* enc_steady,
                      const ExecutionContext& ctx,
                      torch::Device device,
                      const Tokenizer& tokenizer,
@@ -3260,7 +3268,7 @@ static int vad_start(SessionState& state,
 static int vad_start(SessionState& state,
                      AudioFrontend& audio,
                      torch::jit::Module& enc_first,
-                     AOTIModelPackageLoader& enc_steady,
+                     AOTIModelPackageLoader* enc_steady,
                      torch::jit::Module& joint,
                      torch::jit::Module& predict,
                      torch::Device device,
@@ -3323,7 +3331,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
                                          torch::jit::Module& enc_first,
-                                         AOTIModelPackageLoader& enc_steady,
+                                         AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
                                          const Tokenizer& tokenizer,
@@ -3351,7 +3359,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
                                          torch::jit::Module& enc_first,
-                                         AOTIModelPackageLoader& enc_steady,
+                                         AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
                                          const Tokenizer& tokenizer,
@@ -3383,7 +3391,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
                                          torch::jit::Module& enc_first,
-                                         AOTIModelPackageLoader& enc_steady,
+                                         AOTIModelPackageLoader* enc_steady,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
                                          torch::Device device,
@@ -3406,7 +3414,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
-                              AOTIModelPackageLoader& enc_steady,
+                              AOTIModelPackageLoader* enc_steady,
                               const ExecutionContext& ctx,
                               torch::Device device,
                               const Tokenizer& tokenizer,
@@ -3432,7 +3440,7 @@ int session_runtime_vad_start(SessionState& state,
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
-                              AOTIModelPackageLoader& enc_steady,
+                              AOTIModelPackageLoader* enc_steady,
                               const ExecutionContext& ctx,
                               torch::Device device,
                               const Tokenizer& tokenizer,
@@ -3462,7 +3470,7 @@ int session_runtime_vad_start(SessionState& state,
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
                               torch::jit::Module& enc_first,
-                              AOTIModelPackageLoader& enc_steady,
+                              AOTIModelPackageLoader* enc_steady,
                               torch::jit::Module& joint,
                               torch::jit::Module& predict,
                               torch::Device device,
@@ -4660,24 +4668,24 @@ static bool run_real_vad_start_cancel_check(
     std::vector<EmittedEvent> cancel_events;
     std::vector<EmittedEvent> no_stop_events;
 
-    append_pcm_and_drain_runtime(cancel, pre, audio, enc_first, enc_steady, joint, predict,
+    append_pcm_and_drain_runtime(cancel, pre, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, cancel_events, "vad_start_cancel.cancel.pre");
-    append_pcm_and_drain_runtime(no_stop, pre, audio, enc_first, enc_steady, joint, predict,
+    append_pcm_and_drain_runtime(no_stop, pre, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, no_stop_events, "vad_start_cancel.no_stop.pre");
 
     vad_stop(cancel);
     auto pending_snapshot = snapshot_asr(cancel);
     size_t event_count_before_pending = cancel_events.size();
-    append_pcm_and_drain_runtime(cancel, post, audio, enc_first, enc_steady, joint, predict,
+    append_pcm_and_drain_runtime(cancel, post, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, cancel_events, "vad_start_cancel.cancel.held");
     bool parent_unchanged = fork_assert_parent_unchanged(cancel, pending_snapshot);
     bool held_ok = cancel.post_stop_audio.size() == post.size() &&
                    cancel_events.size() == event_count_before_pending;
 
-    int flush_chunks = vad_start(cancel, audio, enc_first, enc_steady, joint, predict,
+    int flush_chunks = vad_start(cancel, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, cancel_events, "vad_start_cancel.cancel.flush");
     bool flushed_ok = cancel.mode == SessionMode::STREAMING && cancel.post_stop_audio.empty();
-    append_pcm_and_drain_runtime(no_stop, post, audio, enc_first, enc_steady, joint, predict,
+    append_pcm_and_drain_runtime(no_stop, post, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, no_stop_events, "vad_start_cancel.no_stop.post");
 
     bool post_tokens_ok = equal_tokens(cancel.hyp,
@@ -4694,9 +4702,9 @@ static bool run_real_vad_start_cancel_check(
         longer.begin() + static_cast<std::ptrdiff_t>(pre_len + post_len),
         longer.begin() + static_cast<std::ptrdiff_t>(pre_len + post_len + need));
     int64_t emitted_before_continuation = cancel.emitted;
-    append_pcm_and_drain_runtime(cancel, continuation, audio, enc_first, enc_steady, joint, predict,
+    append_pcm_and_drain_runtime(cancel, continuation, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, cancel_events, "vad_start_cancel.cancel.continuation");
-    append_pcm_and_drain_runtime(no_stop, continuation, audio, enc_first, enc_steady, joint, predict,
+    append_pcm_and_drain_runtime(no_stop, continuation, audio, enc_first, &enc_steady, joint, predict,
                                  device, tokenizer, no_stop_events, "vad_start_cancel.no_stop.continuation");
     bool continuation_drained = cancel.emitted > emitted_before_continuation;
     bool continuation_tokens_ok = equal_tokens(cancel.hyp,

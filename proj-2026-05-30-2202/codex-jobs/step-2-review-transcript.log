@@ -1,0 +1,100 @@
+Starting Codex task thread.
+Thread ready (019e7ceb-9ef7-79b0-8d05-2ad70b5392ba).
+Turn started (019e7ceb-9f34-7972-8124-91127c8775ec).
+Assistant message captured: I’ll do this as a read-only review. I’m going to inspect the diff first, then read the call s...
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- proj-2026-05-24-from-s...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- proj-2026-05-24-from-s... (exit 0)
+Assistant message captured: The diff shows the intended plumbing: nullable pointer through the runtime APIs, a new `ensur...
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '720,920p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '720,920p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1490,1645p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1490,1645p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1040,1155p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1040,1155p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1320,1395p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1320,1395p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1640,1785p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1640,1785p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2920,3478p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2920,3478p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1155,1325p'"
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '330,420p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '330,420p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1155,1325p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '3470,3498p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '3470,3498p'" (exit 0)
+Running command: /bin/bash -lc 'rg -n "warmed_lane_count|warmed_lanes|publish_warmed_lane|lane_lease|acquire_l...
+Command completed: /bin/bash -lc 'rg -n "warmed_lane_count|warmed_lanes|publish_warmed_lane|lane_lease|acquire_l... (exit 0)
+Running command: /bin/bash -lc 'rg -n "warmup_buckets|class BatchedSteadyScheduler|struct BatchedSteadySchedul...
+Command completed: /bin/bash -lc 'rg -n "warmup_buckets|class BatchedSteadyScheduler|struct BatchedSteadySchedul... (exit 0)
+Running command: /bin/bash -lc 'rg -n "enc_steady|inline_enc_steady|ensure_inline" cpp/lib/session/runtime.cpp...
+Running command: /bin/bash -lc "rg -n \"SharedRuntime::Impl|~Impl|finalize_loaders|batched_steady|scheduler\" ...
+Command completed: /bin/bash -lc 'rg -n "enc_steady|inline_enc_steady|ensure_inline" cpp/lib/session/runtime.cpp... (exit 0)
+Command completed: /bin/bash -lc "rg -n \"SharedRuntime::Impl|~Impl|finalize_loaders|batched_steady|scheduler\" ... (exit 0)
+Assistant message captured: So far I see the leaf runtime function has explicit null checks before both inline derefs, an...
+Running command: /bin/bash -lc "rg -n \"class BatchedSteadyScheduler|struct BatchedSteadyScheduler|warmup_buck...
+Command completed: /bin/bash -lc "rg -n \"class BatchedSteadyScheduler|struct BatchedSteadyScheduler|warmup_buck... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '920,990p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '920,990p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/ws_server.cpp | sed -n '1840,1915p'"
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1400,1465p'"
+Command completed: /bin/bash -lc "nl -ba cpp/ws_server.cpp | sed -n '1840,1915p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1400,1465p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/scheduler/batched_steady_scheduler.h | sed -n '112,210p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/scheduler/batched_steady_scheduler.h | sed -n '112,210p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/scheduler/batched_steady_scheduler.cpp | sed -n '1,220p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/scheduler/batched_steady_scheduler.cpp | sed -n '1,220p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/scheduler/batched_steady_scheduler.cpp | sed -n '220,430p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/scheduler/batched_steady_scheduler.cpp | sed -n '220,430p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2310,2435p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2310,2435p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2435,2525p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2435,2525p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '969,1045p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '969,1045p'" (exit 0)
+Running command: /bin/bash -lc "rg -n \"struct WarmupInput|make_bucket_warmup_input|make_fixture_warmup_input\...
+Command completed: /bin/bash -lc "rg -n \"struct WarmupInput|make_bucket_warmup_input|make_fixture_warmup_input\... (exit 0)
+Running command: /bin/bash -lc "rg -n \"warm_sync_lanes|background_warmup_enabled|NEMOTRON_WS_WARM_SYNC_LANES|...
+Command completed: /bin/bash -lc "rg -n \"warm_sync_lanes|background_warmup_enabled|NEMOTRON_WS_WARM_SYNC_LANES|... (exit 0)
+Running command: /bin/bash -lc 'rg -n "scheduler_enabled|steady_shadow_enabled|background_warmup|warm_sync" cp...
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.h | sed -n '1,130p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.h | sed -n '1,130p'" (exit 0)
+Command completed: /bin/bash -lc 'rg -n "scheduler_enabled|steady_shadow_enabled|background_warmup|warm_sync" cp... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '690,715p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '690,715p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/PLAN.md |...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/PLAN.md |... (exit 0)
+Assistant message captured: The scheduler side looks order-safe: `warmup_buckets()` completes synchronously on the dispat...
+Running command: /bin/bash -lc "rg -n \"session_runtime_append_pcm_and_drain\\(|session_runtime_vad_start\\(\"...
+Command completed: /bin/bash -lc "rg -n \"session_runtime_append_pcm_and_drain\\(|session_runtime_vad_start\\(\"... (exit 0)
+Running command: /bin/bash -lc "rg -n \"append_pcm_and_drain_runtime\\(|vad_start\\(|flush_post_stop_audio_run...
+Command completed: /bin/bash -lc "rg -n \"append_pcm_and_drain_runtime\\(|vad_start\\(|flush_post_stop_audio_run... (exit 0)
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --check -- proj-2026-05-2...
+Running command: /bin/bash -lc "rg -n \"run_steady_encoder\\(|run_steady_shadow_compare_and_commit\\(|\\*enc_s...
+Command completed: /bin/bash -lc "rg -n \"run_steady_encoder\\(|run_steady_shadow_compare_and_commit\\(|\\*enc_s... (exit 0)
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --check -- proj-2026-05-2... (exit 0)
+Running command: /bin/bash -lc "rg -n \"session_runtime_append_pcm_and_drain\\(|session_runtime_vad_start\\(\"...
+Command completed: /bin/bash -lc "rg -n \"session_runtime_append_pcm_and_drain\\(|session_runtime_vad_start\\(\"... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '1,40p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '1,40p'" (exit 0)
+Assistant message captured: **Verdict: SHIP** No correctness bug found in the reviewed diff. I do not see a path where `N...
+Turn completed.
+**Verdict: SHIP**
+
+No correctness bug found in the reviewed diff. I do not see a path where `NEMOTRON_WS_SCHEDULER=1` and `NEMOTRON_WS_STEADY_SHADOW=0` can reach an inline `*enc_steady` deref.
+
+**Findings**
+
+- Null-safety: OK. `inline_enc_steady_ptr()` returns `nullptr` only for scheduler-on/shadow-off ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:875)); the leaf uses scheduler when present ([session.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:2998)) and throws before both inline derefs in shadow and fallback branches ([session.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:2980), [session.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:3012)). `vad_stop` does not touch it, finalize uses only `finalize_loaders`, and flush paths only pass the pointer through to the same guarded leaf.
+
+- Reorder: OK. Scheduler preload/build/warmup/start now completes before lane warmup ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:784), [runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:829)); that block depends on `finalize_loaders->shared_constants()`, not warmed lanes ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:795)). Warmup passes `scheduler.get()` and shadow flag ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1129)).
+
+- Admission safety: OK. Sync warmup still marks and publishes lanes before ctor return: all lanes in normal mode ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1329)), sync lanes in background mode ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1347)); admission provider is installed only after `SharedRuntime` construction ([ws_server.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/ws_server.cpp:1881)).
+
+- Lifetime: OK. `scheduler`/`batched_steady` are destroyed before `finalize_loaders`, preserving borrowed shared constants ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1376)); `enc_steady_once` is inert and adjacent to `enc_steady` ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1374)). Memory logging only tests pointer presence, no deref ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:901)).
+
+- Lazy latency: OK. Valid scheduler-off/shadow modes eagerly call `ensure_inline_enc_steady()` during construction and log `INLINE_ENC_STEADY_LAZY_LOAD` ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:749), [runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:855)). Deploy mode returns null and never lazy-loads. No deadlock found with `enc_first_mutex`; valid lazy-use modes are already loaded before serving/warmup.
+
+- Warmup/scope: OK. Shadow warmup now intentionally runs the shadow-compare path with both scheduler and inline available ([session.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:2980)); no byte/token numeric risk seen, because routing only chooses scheduler vs existing inline path.
+
+What might be missed: invalid config `steady_shadow_enabled && !scheduler_enabled` loads inline before throwing ([runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:749), [runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:777)). Not a valid serving-mode bug, but moving that validation earlier would avoid wasted startup work on misconfig. Also expect shadow warmup to add warmup-labeled shadow reports; that is a diagnostic behavior change, not a correctness regression.
