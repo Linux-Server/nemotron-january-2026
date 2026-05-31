@@ -1,0 +1,5 @@
+label	enc_first_ts	cache	bg	listen_ms	background_complete_ms	background_elapsed_ms	enc_first_load_ms	shared_encoder_constants_load_ms	enc_steady_load_ms	peak_gpu_mib	peak_host_rss_mib	tmp_delta_mb
+encfirst_ts_cold_on	1	cold	1	21050.3	73365.6	52315.4	3166.1	3278.8	ABSENT	14014	8806	135
+encfirst_ts_warm_on	1	warm	1	16369.2	68457.5	52088.4	560.4	997.0	ABSENT	14014	8888	134
+encfirst_aoti_cold_on	0	cold	1	16461.1	75558.5	59097.6	12.0	3215.6	ABSENT	11018	7510	138
+encfirst_aoti_warm_on	0	warm	1	14058.1	72779.2	58721.2	4.2	1000.1	ABSENT	11018	7537	138

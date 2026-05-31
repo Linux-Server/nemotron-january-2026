@@ -1,0 +1,15 @@
+=== artifact sizes ===
+2478955502 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_first.ts
+3981953 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_first_aoti.pt2
+2481444207 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_steady_aoti.pt2
+2477736629 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.pt
+2477725779 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+4118141 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b1.pt2
+2481554617 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b1.pt2.full.pt2
+4330836 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b2.pt2
+2481778991 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b2.pt2.full.pt2
+4407529 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b4.pt2
+2481910575 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b4.pt2.full.pt2
+2490186811 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_t2a_b1.pt2
+2497867323 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_t2a_b2.pt2
+2513228347 /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_t2a_b4.pt2

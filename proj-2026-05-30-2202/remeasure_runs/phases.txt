@@ -1,0 +1,96 @@
+### encfirst_ts_cold_on (enc_first_ts=1 bg=1 cache=cold)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2519.5 cumulative_ms=2519.5
+shared encoder constants loaded: entries=637 shared_delta_mib=2366.000 source=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+COLD_START_PHASE phase=shared_encoder_constants_load elapsed_ms=3278.8 cumulative_ms=5798.3
+shared runtime first encoder ready: adapter=ts env_NEMOTRON_WS_ENC_FIRST_TS=1
+COLD_START_PHASE phase=enc_first_load elapsed_ms=3166.1 cumulative_ms=8964.3
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2066.5 cumulative_ms=11030.9
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=107.6 cumulative_ms=11138.5
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2174.3 cumulative_ms=11138.6 aggregate=1
+inference lane pool built: lanes=64 per_lane_mib=36.062 total_lane_mib=2308.000 no_big_module_duplication=true shared_big_modules=enc_first_ts,finalize_loaders inline_enc_steady=skipped first_encoder=ts
+COLD_START_PHASE phase=lane_build elapsed_ms=728.1 cumulative_ms=11866.7
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.0 cumulative_ms=11866.7
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=150.4 cumulative_ms=12017.1
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=12017.1
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.6 cumulative_ms=12024.7
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=158.0 cumulative_ms=12024.7 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=547.8 cumulative_ms=12572.5
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+COLD_START_PHASE phase=lane_warmup elapsed_ms=8477.7 cumulative_ms=21050.2
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=21050.3
+ws_server listening on 127.0.0.1:8091
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=52315.4 cumulative_ms=73365.6 background=1 warmed_lanes=64 lanes=64
+  >> peak_gpu_mib=14014 peak_host_rss_mib=8806 tmp_delta_mb=135
+
+### encfirst_ts_warm_on (enc_first_ts=1 bg=1 cache=warm)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2267.0 cumulative_ms=2267.0
+shared encoder constants loaded: entries=637 shared_delta_mib=2366.000 source=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+COLD_START_PHASE phase=shared_encoder_constants_load elapsed_ms=997.0 cumulative_ms=3264.0
+shared runtime first encoder ready: adapter=ts env_NEMOTRON_WS_ENC_FIRST_TS=1
+COLD_START_PHASE phase=enc_first_load elapsed_ms=560.4 cumulative_ms=3824.3
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2075.8 cumulative_ms=5900.2
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=100.8 cumulative_ms=6001.0
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2176.7 cumulative_ms=6001.1 aggregate=1
+inference lane pool built: lanes=64 per_lane_mib=36.062 total_lane_mib=2308.000 no_big_module_duplication=true shared_big_modules=enc_first_ts,finalize_loaders inline_enc_steady=skipped first_encoder=ts
+COLD_START_PHASE phase=lane_build elapsed_ms=682.1 cumulative_ms=6683.2
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.0 cumulative_ms=6683.2
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=137.1 cumulative_ms=6820.3
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=6820.3
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.8 cumulative_ms=6828.1
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=144.9 cumulative_ms=6828.1 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=542.2 cumulative_ms=7370.2
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+COLD_START_PHASE phase=lane_warmup elapsed_ms=8998.9 cumulative_ms=16369.1
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=16369.2
+ws_server listening on 127.0.0.1:8091
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=52088.4 cumulative_ms=68457.5 background=1 warmed_lanes=64 lanes=64
+  >> peak_gpu_mib=14014 peak_host_rss_mib=8888 tmp_delta_mb=134
+
+### encfirst_aoti_cold_on (enc_first_ts=0 bg=1 cache=cold)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2501.9 cumulative_ms=2501.9
+shared encoder constants loaded: entries=637 shared_delta_mib=2366.000 source=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+COLD_START_PHASE phase=shared_encoder_constants_load elapsed_ms=3215.6 cumulative_ms=5717.5
+shared runtime first encoder ready: adapter=aoti env_NEMOTRON_WS_ENC_FIRST_TS=0
+COLD_START_PHASE phase=enc_first_load elapsed_ms=12.0 cumulative_ms=5729.5
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2073.9 cumulative_ms=7803.5
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=102.9 cumulative_ms=7906.4
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2177.0 cumulative_ms=7906.5 aggregate=1
+inference lane pool built: lanes=64 per_lane_mib=36.031 total_lane_mib=2306.000 no_big_module_duplication=true shared_big_modules=finalize_loaders inline_enc_steady=skipped first_encoder=aoti
+COLD_START_PHASE phase=lane_build elapsed_ms=737.0 cumulative_ms=8643.5
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.1 cumulative_ms=8643.6
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=147.5 cumulative_ms=8791.1
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=8791.1
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.5 cumulative_ms=8798.6
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=155.1 cumulative_ms=8798.6 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=545.9 cumulative_ms=9344.5
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+COLD_START_PHASE phase=lane_warmup elapsed_ms=7116.4 cumulative_ms=16460.9
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=16461.1
+ws_server listening on 127.0.0.1:8091
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=59097.6 cumulative_ms=75558.5 background=1 warmed_lanes=64 lanes=64
+  >> peak_gpu_mib=11018 peak_host_rss_mib=7510 tmp_delta_mb=138
+
+### encfirst_aoti_warm_on (enc_first_ts=0 bg=1 cache=warm)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2267.4 cumulative_ms=2267.4
+shared encoder constants loaded: entries=637 shared_delta_mib=2366.000 source=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+COLD_START_PHASE phase=shared_encoder_constants_load elapsed_ms=1000.1 cumulative_ms=3267.5
+shared runtime first encoder ready: adapter=aoti env_NEMOTRON_WS_ENC_FIRST_TS=0
+COLD_START_PHASE phase=enc_first_load elapsed_ms=4.2 cumulative_ms=3271.7
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2106.9 cumulative_ms=5378.6
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=105.6 cumulative_ms=5484.2
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2212.6 cumulative_ms=5484.3 aggregate=1
+inference lane pool built: lanes=64 per_lane_mib=36.031 total_lane_mib=2306.000 no_big_module_duplication=true shared_big_modules=finalize_loaders inline_enc_steady=skipped first_encoder=aoti
+COLD_START_PHASE phase=lane_build elapsed_ms=688.9 cumulative_ms=6173.2
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.0 cumulative_ms=6173.3
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=136.2 cumulative_ms=6309.5
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=6309.5
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.5 cumulative_ms=6317.0
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=143.8 cumulative_ms=6317.1 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=543.2 cumulative_ms=6860.2
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+COLD_START_PHASE phase=lane_warmup elapsed_ms=7197.8 cumulative_ms=14058.1
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=14058.1
+ws_server listening on 127.0.0.1:8091
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=58721.2 cumulative_ms=72779.2 background=1 warmed_lanes=64 lanes=64
+  >> peak_gpu_mib=11018 peak_host_rss_mib=7537 tmp_delta_mb=138
+
