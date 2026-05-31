@@ -1,0 +1,84 @@
+### cold_off (bg=0 cache=cold)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2544.5 cumulative_ms=2544.5
+COLD_START_PHASE phase=enc_first_load elapsed_ms=3331.5 cumulative_ms=5876.0
+COLD_START_PHASE phase=enc_steady_load elapsed_ms=3128.4 cumulative_ms=9004.4
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2072.7 cumulative_ms=11077.1
+COLD_START_PHASE phase=finalize_shared_constants_load elapsed_ms=3020.9 cumulative_ms=14098.0
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=107.2 cumulative_ms=14205.2
+COLD_START_PHASE phase=finalize_preload elapsed_ms=5200.9 cumulative_ms=14205.4 aggregate=1
+COLD_START_PHASE phase=lane_build elapsed_ms=732.3 cumulative_ms=14937.7
+COLD_START_PHASE phase=lane_warmup elapsed_ms=69605.2 cumulative_ms=84543.0
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.1 cumulative_ms=84543.0
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=147.6 cumulative_ms=84690.6
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=84690.6
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.3 cumulative_ms=84697.9
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=155.0 cumulative_ms=84697.9 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=479.2 cumulative_ms=85177.1
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+ws_server listening on 127.0.0.1:8091
+  >> peak_gpu_mib=16364 peak_host_rss_mib=12396 tmp_delta_mb=2501
+
+### warm_off (bg=0 cache=warm)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2269.1 cumulative_ms=2269.1
+COLD_START_PHASE phase=enc_first_load elapsed_ms=732.3 cumulative_ms=3001.4
+COLD_START_PHASE phase=enc_steady_load elapsed_ms=813.1 cumulative_ms=3814.5
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2086.3 cumulative_ms=5900.8
+COLD_START_PHASE phase=finalize_shared_constants_load elapsed_ms=768.9 cumulative_ms=6669.6
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=104.1 cumulative_ms=6773.7
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2959.3 cumulative_ms=6773.8 aggregate=1
+COLD_START_PHASE phase=lane_build elapsed_ms=688.3 cumulative_ms=7462.1
+COLD_START_PHASE phase=lane_warmup elapsed_ms=69034.0 cumulative_ms=76496.0
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.0 cumulative_ms=76496.1
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=137.0 cumulative_ms=76633.1
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=76633.1
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.1 cumulative_ms=76640.2
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=144.2 cumulative_ms=76640.2 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=480.5 cumulative_ms=77120.7
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+ws_server listening on 127.0.0.1:8091
+  >> peak_gpu_mib=16364 peak_host_rss_mib=12574 tmp_delta_mb=2501
+
+### cold_on (bg=1 cache=cold)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2545.6 cumulative_ms=2545.6
+COLD_START_PHASE phase=enc_first_load elapsed_ms=3330.7 cumulative_ms=5876.3
+COLD_START_PHASE phase=enc_steady_load elapsed_ms=3142.7 cumulative_ms=9019.0
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2079.4 cumulative_ms=11098.3
+COLD_START_PHASE phase=finalize_shared_constants_load elapsed_ms=2999.8 cumulative_ms=14098.1
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=104.2 cumulative_ms=14202.3
+COLD_START_PHASE phase=finalize_preload elapsed_ms=5183.4 cumulative_ms=14202.4 aggregate=1
+COLD_START_PHASE phase=lane_build elapsed_ms=733.6 cumulative_ms=14936.0
+COLD_START_PHASE phase=lane_warmup elapsed_ms=9687.9 cumulative_ms=24623.8
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.1 cumulative_ms=24623.9
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=148.4 cumulative_ms=24772.3
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=24772.3
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.8 cumulative_ms=24780.1
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=156.3 cumulative_ms=24780.1 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=468.8 cumulative_ms=25248.9
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=25249.0
+ws_server listening on 127.0.0.1:8091
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=60567.5 cumulative_ms=85816.4 background=1 warmed_lanes=64 lanes=64
+  >> peak_gpu_mib=16364 peak_host_rss_mib=12275 tmp_delta_mb=2501
+
+### warm_on (bg=1 cache=warm)
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2305.3 cumulative_ms=2305.3
+COLD_START_PHASE phase=enc_first_load elapsed_ms=733.0 cumulative_ms=3038.3
+COLD_START_PHASE phase=enc_steady_load elapsed_ms=812.1 cumulative_ms=3850.4
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2082.8 cumulative_ms=5933.3
+COLD_START_PHASE phase=finalize_shared_constants_load elapsed_ms=772.2 cumulative_ms=6705.5
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=103.7 cumulative_ms=6809.2
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2958.9 cumulative_ms=6809.3 aggregate=1
+COLD_START_PHASE phase=lane_build elapsed_ms=695.9 cumulative_ms=7505.2
+COLD_START_PHASE phase=lane_warmup elapsed_ms=9327.7 cumulative_ms=16832.9
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.1 cumulative_ms=16833.0
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=138.3 cumulative_ms=16971.2
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=16971.3
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.4 cumulative_ms=16978.6
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=145.7 cumulative_ms=16978.6 aggregate=1
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=472.2 cumulative_ms=17450.8
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=17450.9
+ws_server listening on 127.0.0.1:8091
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=60638.6 cumulative_ms=78089.4 background=1 warmed_lanes=64 lanes=64
+  >> peak_gpu_mib=16364 peak_host_rss_mib=12490 tmp_delta_mb=2501
+
