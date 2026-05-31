@@ -60,7 +60,7 @@ The C++ `ws_server` warm-cache time-to-serving is already ~18s (background warmu
   Capture the current cold-boot reality so every lever is sized. On a box with the current binary: drop page cache (`echo 3 | sudo tee /proc/sys/vm/drop_caches`) then start `ws_server` (CAP=64, both `NEMOTRON_WS_BACKGROUND_WARMUP` off and on); record the full `COLD_START_PHASE` breakdown + `sync_warm_done` + total, artifact file sizes, and `/tmp` growth; then a WARM repeat for contrast. Record GPU + host peak memory. Output a baseline table in the proj dir. No code change (commit the baseline notes only).
   Key files: `proj-2026-05-30-2202/baseline.md`
 
-- [ ] **1. PROBE: weights identity + AOTI first-chunk PARITY + extraction-cache API (gates 4,5,7,8)**
+- [x] **1. PROBE: weights identity + AOTI first-chunk PARITY + extraction-cache API (gates 4,5,7,8)**
   Read-only. (a) WEIGHTS: are `enc_first`'s encoder params tensor-equal (ideally byte-equal) to `finalize_shared_weights`? Match by FQN (alias logic as `constants_for_bucket`); report per-tensor max-abs-diff, shape/dtype, and mutual FQN coverage. Same for the inline `enc_steady` constants. (b) AOTI FIRST-CHUNK PARITY: the existing `enc_first_aoti.pt2` is tolerance-only (`compile_enc_first_manifest.json` max_abs≈0.004) and `export_enc_first_t2a.py:37` reshapes via `keep_all_outputs`+slice — run that AOTI enc_first (bound to shared constants) through the FULL decode on the b2-t1 / corpus fixtures and report TOKEN/EVENT divergences vs the shipped TS enc_first. GO only if 0 token/event divergences; else document why TS was retained and mark the enc_first unify NO-GO (item 1 then reduces to Step 2 only). (c) CACHE API: confirm (header + torch 2.8.0 source) there is no public pre-extracted-dir ctor; estimate post-unify extraction cost. Output GO/NO-GO for Steps 4-5 and 7-8.
   Key files: `export_enc_first_t2a.py`, `aot_compile_enc_first.py`, `artifacts/compile_enc_first_manifest.json`, `cpp/lib/scheduler/steady_batch_primitive.h`, `.venv/.../model_package_loader.h`
 
@@ -107,8 +107,8 @@ The C++ `ws_server` warm-cache time-to-serving is already ~18s (background warmu
 ## Progress
 | # | Step | Status | Commit | Notes |
 |---|------|--------|--------|-------|
-| 0 | COLD baseline (pre-change) | done | (pending) | warm TTServe 17.5s/cold 25.2s (bg-warmup); 7.7s cold penalty = 3×2.48GB reads; GPU 16.4GB; /tmp +2.5GB/boot; lane_warmup 69s=compute (out of scope). baseline.md |
-| 1 | PROBE: weights + AOTI first-chunk parity + cache API | pending | — | gates 4,5,7,8 |
+| 0 | COLD baseline (pre-change) | done | 59a7b6a | warm TTServe 17.5s/cold 25.2s (bg-warmup); 7.7s cold penalty = 3×2.48GB reads; GPU 16.4GB; /tmp +2.5GB/boot; lane_warmup 69s=compute (out of scope). baseline.md |
+| 1 | PROBE: weights + AOTI first-chunk parity + cache API | done | (pending) | (a) weights PASS: enc_first/enc_steady/finalize 637/637 BYTE-EQUAL → unify premise holds. (b) AOTI first-chunk NO-GO-default: 0 token div but **4/1000 EVENT div** → fails 0-tok-AND-0-evt gate; TS stays default. (c) cache NO-GO-speed (post-unify extract only ~140MiB, no pre-extracted API), GO /tmp-hygiene only. step1-probe-findings.md |
 | 2 | Lazy inline enc_steady (warmup+API reorder) | pending | — | ~-2.48GB; scheduler-before-warmup + thread loader ptr |
 | 3 | SharedEncoderConstants owner (lifetime refactor) | pending | — | fixes destruction-order use-after-free |
 | 4 | enc_first AOTI artifact + first-encoder adapter | pending | — | gated Step1 GO; tolerance + token-exact |

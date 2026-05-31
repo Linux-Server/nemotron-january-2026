@@ -1,0 +1,35 @@
+{
+  "description": "First-chunk output numeric diffs for the four corpus rows with AOTI-vs-TS event divergences. Compared artifacts/enc_first.ts to artifacts/enc_first_aoti.pt2 bound to finalize_shared_weights.pt on the same bundle chunk0 inputs.",
+  "aoti_first_constants": {
+    "fqns": 637,
+    "matched": 637,
+    "direct": 637,
+    "alias": 0
+  },
+  "rows": {
+    "198": {
+      "enc_out_max_abs": 5.543231964111328e-06,
+      "cache_ch_max_abs": 2.9334798455238342e-05,
+      "cache_t_max_abs": 0.005637168884277344,
+      "int_outputs_byte_equal": true
+    },
+    "759": {
+      "enc_out_max_abs": 2.464279532432556e-06,
+      "cache_ch_max_abs": 2.8848648071289062e-05,
+      "cache_t_max_abs": 0.006115913391113281,
+      "int_outputs_byte_equal": true
+    },
+    "811": {
+      "enc_out_max_abs": 2.002343535423279e-06,
+      "cache_ch_max_abs": 6.608664989471436e-05,
+      "cache_t_max_abs": 0.008696556091308594,
+      "int_outputs_byte_equal": true
+    },
+    "829": {
+      "enc_out_max_abs": 1.4211982488632202e-06,
+      "cache_ch_max_abs": 3.473460674285889e-05,
+      "cache_t_max_abs": 0.006747245788574219,
+      "int_outputs_byte_equal": true
+    }
+  }
+}

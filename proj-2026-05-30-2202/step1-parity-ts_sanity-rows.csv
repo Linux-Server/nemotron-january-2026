@@ -1,0 +1,5 @@
+utt,sample_id,token_match,event_match,steady_token_match,final_token_len,event_len
+0,6744343e-ef8c-3154-50a2-5ad464c723bc,True,True,True,20,10
+1,0a2570b5-668a-ea08-0546-1db4e518482f,True,True,True,11,8
+2,e02b3cc7-0a8d-83d6-85a4-1f3240b18e47,True,True,True,74,38
+3,739f778d-e8e2-be4f-3fe6-015adcac4682,True,True,True,78,39

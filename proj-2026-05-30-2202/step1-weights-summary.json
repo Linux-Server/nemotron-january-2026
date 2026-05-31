@@ -1,0 +1,81 @@
+{
+  "elapsed_seconds": 11.859707832336426,
+  "enc_first_all_vs_shared": {
+    "alias_matches": 637,
+    "all_byte_equal": true,
+    "byte_equal": 637,
+    "csv": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/step1-weights-enc-first-all.csv",
+    "direct_matches": 0,
+    "matched": 637,
+    "max_abs": 0.0,
+    "meta_mismatch": [],
+    "missing": [],
+    "shared_extras": [],
+    "source": "enc_first.ts parameters+buffers",
+    "total": 637
+  },
+  "enc_first_aoti_constant_fqns": {
+    "count": 637,
+    "missing_from_shared": []
+  },
+  "enc_first_params_vs_shared": {
+    "alias_matches": 636,
+    "all_byte_equal": true,
+    "byte_equal": 636,
+    "csv": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/step1-weights-enc-first-params.csv",
+    "direct_matches": 0,
+    "matched": 636,
+    "max_abs": 0.0,
+    "meta_mismatch": [],
+    "missing": [],
+    "shared_extras": [
+      "encoder.pos_enc.pe"
+    ],
+    "source": "enc_first.ts parameters",
+    "total": 636
+  },
+  "enc_steady_inline_vs_shared": {
+    "alias_matches": 637,
+    "all_byte_equal": true,
+    "byte_equal": 637,
+    "csv": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/step1-weights-enc-steady-inline.csv",
+    "direct_matches": 0,
+    "matched": 637,
+    "max_abs": 0.0,
+    "meta_mismatch": [],
+    "missing": [],
+    "shared_extras": [],
+    "source": "enc_steady_aoti.pt2 inline constants",
+    "total": 637
+  },
+  "finalize_ts_vs_pt": {
+    "alias_matches": 0,
+    "all_byte_equal": true,
+    "byte_equal": 637,
+    "csv": "/home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/step1-finalize-ts-vs-pt.csv",
+    "direct_matches": 637,
+    "matched": 637,
+    "max_abs": 0.0,
+    "meta_mismatch": [],
+    "missing": [],
+    "shared_extras": [],
+    "source": "finalize_shared_weights.ts",
+    "total": 637
+  },
+  "shared_pt_count": 637,
+  "steady_b_stripped_constant_fqns": {
+    "1": {
+      "count": 637,
+      "missing_from_shared": []
+    },
+    "2": {
+      "count": 637,
+      "missing_from_shared": []
+    },
+    "4": {
+      "count": 637,
+      "missing_from_shared": []
+    }
+  },
+  "torch": "2.8.0+cu128"
+}
