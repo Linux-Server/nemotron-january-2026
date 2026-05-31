@@ -73,6 +73,17 @@ Project directory: /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from
 >   (window/lone tuning, configurable buckets) is justified for diagnostic + low-load preserve purposes
 >   but the production setpoint is the boring one. Validates the design didn't over-tune.
 
+> **v6 (2026-05-31) — Tier-3/Tier-4 ACTIVATED in a dedicated plan.** The 2026-05-30 nsys re-profile of the
+> shipped batched-steady runtime @ N=96 (L40S) confirmed v4 insight#4's prediction: the post-batching binding
+> INVERTED to the **single steady-scheduler dispatcher front-end** (GPU only ~74.5% busy, 1.22× overlap, sheds via
+> `steady scheduler future timeout`; ~7M launches/69% API; a per-dispatch blocking `cudaEventSynchronize` that's
+> only telemetry). That promotes the deferred **Tier-3 (steady CUDA-graph)** + **Tier-4 (multi-dispatcher)** levers
+> + the CHECKPOINT §4 clean-knee kill-gate (Step 1c-B) into an active, 5-round paired-reviewed implementation plan:
+> **`proj-2026-05-31-1050/PLAN.md`** (Steps 0 clean-knee-gate → 1a/1b/1c async-dispatch de-serialization → 2 event-pool
+> → 3a/3b steady CUDA-graph → 4 multi-dispatcher → 5 final knee sweep). Evidence: `proj-2026-05-30-2202/nsys-paired-verdict.md`.
+> Execution gated by Step 0 (if the clean knee shows GPU-saturated not dispatch-bound, the levers STOP and route back
+> to batching-depth/model). See that plan for the lever details; this file's Tier-3/Tier-4 rows are now "in progress there."
+>
 > **v5 (2026-05-28, post-B3 landed + Codex plan-v4 review folded) — refinements + scope corrections.** B3
 > committed `dc0c551`; plan-v4 paired-reviewed (`reviews/codex-plan-v4-review.md`, GO-with-changes); F1
 > CLEARED (≥1.60× bounded → ~1.88-2.66× production-equiv vs S_py=20). The v4 insights are right in shape;
