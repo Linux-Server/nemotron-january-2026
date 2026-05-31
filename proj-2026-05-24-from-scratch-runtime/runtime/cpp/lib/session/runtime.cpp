@@ -1,5 +1,6 @@
 #include "lib/session/runtime.h"
 
+#include "lib/runtime_io/tmp_hygiene.h"
 #include "lib/scheduler/batched_steady_scheduler.h"
 #include "lib/session/first_encoder.h"
 
@@ -744,6 +745,7 @@ struct SharedRuntime::Impl {
         bundle_path(bundle_path_from_config(cfg, artifact_dir)),
         finalize_buckets_dir(finalize_buckets_dir_from_config(cfg, artifact_dir)),
         device(torch::kCUDA, cfg.device_index) {
+    runtime_io::reclaim_stale_aoti_tmp_dirs();
     if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
     background_warmup_enabled =
         parse_enabled_env("NEMOTRON_WS_BACKGROUND_WARMUP", cfg.background_warmup_enabled);

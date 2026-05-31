@@ -1,0 +1,219 @@
+Starting Codex task thread.
+Thread ready (019e7da2-4a0d-7401-b497-f7233d834c7d).
+Turn started (019e7da2-4a53-70f3-bccb-15481ad4b03c).
+Assistant message captured: I’ll harden the existing guard in place, starting by reading the current tmp hygiene implemen...
+Running command: /bin/bash -lc "sed -n '1,280p' cpp/lib/runtime_io/tmp_hygiene.cpp"
+Command completed: /bin/bash -lc "sed -n '1,280p' cpp/lib/runtime_io/tmp_hygiene.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' cpp/lib/runtime_io/tmp_hygiene.h"
+Command completed: /bin/bash -lc "sed -n '1,220p' cpp/lib/runtime_io/tmp_hygiene.h" (exit 0)
+Running command: /bin/bash -lc 'rg -n "tmp_hygiene|TMP_HYGIENE|NEMOTRON_WS_TMP_HYGIENE|aotinductor|sum_tree_by...
+Running command: /bin/bash -lc 'git status --short'
+Command completed: /bin/bash -lc 'rg -n "tmp_hygiene|TMP_HYGIENE|NEMOTRON_WS_TMP_HYGIENE|aotinductor|sum_tree_by... (exit 0)
+Command completed: /bin/bash -lc 'git status --short' (exit 0)
+Assistant message captured: The file is already an isolated runtime hygiene module, and the worktree has unrelated change...
+Running command: /bin/bash -lc "nl -ba cpp/lib/runtime_io/tmp_hygiene.cpp | sed -n '1,520p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/runtime_io/tmp_hygiene.cpp | sed -n '1,520p'" (exit 0)
+Running command: /bin/bash -lc 'git ls-files --stage cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tmp...
+Command completed: /bin/bash -lc 'git ls-files --stage cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tmp... (exit 0)
+Running command: /bin/bash -lc "sed -n '280,540p' cpp/lib/runtime_io/tmp_hygiene.cpp"
+Running command: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm...
+Command completed: /bin/bash -lc "sed -n '280,540p' cpp/lib/runtime_io/tmp_hygiene.cpp" (exit 0)
+Command completed: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm... (exit 0)
+Assistant message captured: The existing implementation already double-checks lstat/inode/uid before sum and delete. I’m ...
+Assistant message captured: I’ve got enough context now. The patch plan is: parse the min-age env once per run, track max...
+Assistant message captured: I’m about to edit the C++ implementation. I’ll keep the public header unchanged because the r...
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: The core patch is in. I’m checking the resulting diff and compile-sensitive details now, espe...
+Running command: /bin/bash -lc 'git diff -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tmp_hygiene.h'
+Command completed: /bin/bash -lc 'git diff -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tmp_hygiene.h' (exit 0)
+Running command: /bin/bash -lc 'rg -n "compute_tree_bytes|sum_tree_bytes_fd|remove_tree_contents_fd|remove_can...
+Command completed: /bin/bash -lc 'rg -n "compute_tree_bytes|sum_tree_bytes_fd|remove_tree_contents_fd|remove_can... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,520p' cpp/lib/runtime_io/tmp_hygiene.cpp"
+Command completed: /bin/bash -lc "sed -n '1,520p' cpp/lib/runtime_io/tmp_hygiene.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '500,590p' cpp/lib/runtime_io/tmp_hygiene.cpp"
+Command completed: /bin/bash -lc "sed -n '500,590p' cpp/lib/runtime_io/tmp_hygiene.cpp" (exit 0)
+Assistant message captured: The header remains untouched. I’m starting the requested build now; if the container build su...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density... (exit 0)
+Assistant message captured: The requested build completed cleanly for `ws_server` and `density_main`. I’m moving on to th...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm... (exit 0)
+Assistant message captured: `runtime-smoke` passed with `token_divergences=0`, `event_divergences=0`, and `errors=0`. I’m...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co...
+Assistant message captured: The `b2-t1` run is still active and quiet after the container banner, which matches a longer ...
+Assistant message captured: The `b2-t1` run has reached model/session loading and is progressing. I’m waiting for the fin...
+Assistant message captured: `b2-t1` has entered the actual case execution after loading all buckets. The logs already sho...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co... (exit 0)
+Assistant message captured: Both requested density validations are green: `runtime-smoke` and `b2-t1` exited 0 with `toke...
+Running command: /bin/bash -lc "sed -n '1,220p' start_ws_server_local.sh"
+Command completed: /bin/bash -lc "sed -n '1,220p' start_ws_server_local.sh" (exit 0)
+Running command: /bin/bash -lc 'rg -n "int main|argc|argv|Usage|port" cpp -S'
+Command completed: /bin/bash -lc 'rg -n "int main|argc|argv|Usage|port" cpp -S' (exit 0)
+Running command: /bin/bash -lc 'rg -n "ws_server|start_ws|runtime-smoke|NEMOTRON_WS_PORT|TMP_HYGIENE|NEMOTRON_...
+Running command: /bin/bash -lc 'cpp/build_step10/ws_server --help'
+Command completed: /bin/bash -lc 'rg -n "ws_server|start_ws|runtime-smoke|NEMOTRON_WS_PORT|TMP_HYGIENE|NEMOTRON_... (exit 0)
+Command failed: /bin/bash -lc 'cpp/build_step10/ws_server --help' (exit 127)
+Running command: /bin/bash -lc "sed -n '760,820p' cpp/ws_server.cpp"
+Command completed: /bin/bash -lc "sed -n '760,820p' cpp/ws_server.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '380,730p' cpp/ws_server.cpp"
+Command completed: /bin/bash -lc "sed -n '380,730p' cpp/ws_server.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '2650,2700p' cpp/ws_server.cpp"
+Running command: /bin/bash -lc "sed -n '7040,7235p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '2650,2700p' cpp/ws_server.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '7040,7235p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "reclaim_stale_aoti_tmp_dirs|TMP_HYGIENE|tmp_hygiene" cpp -S'
+Command completed: /bin/bash -lc 'rg -n "reclaim_stale_aoti_tmp_dirs|TMP_HYGIENE|tmp_hygiene" cpp -S' (exit 0)
+Running command: /bin/bash -lc "sed -n '700,775p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '700,775p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' container/enter.sh"
+Command completed: /bin/bash -lc "sed -n '1,220p' container/enter.sh" (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Running command: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|ws_server'"
+Running command: /bin/bash -lc "find /tmp -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '/t...
+Command completed: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|ws_server'" (exit 0)
+Command completed: /bin/bash -lc "find /tmp -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '/t... (exit 0)
+Running command: /bin/bash -lc "ldd cpp/build_step10/ws_server | sed -n '1,120p'"
+Command completed: /bin/bash -lc "ldd cpp/build_step10/ws_server | sed -n '1,120p'" (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Running command: /bin/bash -lc 'ls -d .venv/lib/python*/site-packages/torch/lib'
+Running command: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Status}}' | sed -n '1,80p'"
+Command completed: /bin/bash -lc 'ls -d .venv/lib/python*/site-packages/torch/lib' (exit 0)
+Command completed: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Status}}' | sed -n '1,80p'" (exit 0)
+Running command: /bin/bash -lc "sed -n '2320,2665p' cpp/ws_server.cpp"
+Command completed: /bin/bash -lc "sed -n '2320,2665p' cpp/ws_server.cpp" (exit 0)
+Running command: /bin/bash -lc 'env LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages/torch/lib:${LD_LIBRARY_...
+Command completed: /bin/bash -lc 'env LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages/torch/lib:${LD_LIBRARY_... (exit 0)
+Running command: /bin/bash -lc 'rg -n "TMP_HYGIENE|reclaim_stale|tmp_hygiene" -S . ../../proj-2026-05-30-2202 ...
+Command completed: /bin/bash -lc 'rg -n "TMP_HYGIENE|reclaim_stale|tmp_hygiene" -S . ../../proj-2026-05-30-2202 ... (exit 0)
+Assistant message captured: I’m adding a focused Python test driver under the runtime directory. It starts the host `ws_s...
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc 'chmod +x tmp_hygiene_ws_test.py'
+Command completed: /bin/bash -lc 'chmod +x tmp_hygiene_ws_test.py' (exit 0)
+Running command: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm...
+Command completed: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm... (exit 0)
+Running command: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py'
+Command completed: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py' (exit 0)
+Assistant message captured: The test driver compiles as Python and is executable. I’m running it now; it will take longer...
+Running command: /bin/bash -lc ./tmp_hygiene_ws_test.py
+Command failed: /bin/bash -lc ./tmp_hygiene_ws_test.py (exit 1)
+Assistant message captured: The first test run exposed a bug in the test script, not the C++: it parsed the launcher’s ex...
+Running command: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|start_ws_server_local.sh'"
+Command failed: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|start_ws_server_local.sh'" (exit 1)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py'
+Command completed: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py' (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Assistant message captured: The parser fix is in and `/tmp` is still clean for the marker pattern. I’m rerunning the full...
+Running command: /bin/bash -lc ./tmp_hygiene_ws_test.py
+Command failed: /bin/bash -lc ./tmp_hygiene_ws_test.py (exit 1)
+Assistant message captured: The fresh restart is reporting the leaked trees as `skipped_live` instead of `too_recent`. Th...
+Running command: /bin/bash -lc "python3 - <<'PY' import os candidate='/tmp/WVMcHV' refs=[] for name in os.list...
+Command completed: /bin/bash -lc "python3 - <<'PY' import os candidate='/tmp/WVMcHV' refs=[] for name in os.list... (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Running command: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|start_ws_server_local.sh'"
+Command completed: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|start_ws_server_local.sh'" (exit 0)
+Running command: /bin/bash -lc "kill -TERM 2952466 && sleep 5 && pgrep -af 'cpp/build_step10/ws_server|start_w...
+Command completed: /bin/bash -lc "kill -TERM 2952466 && sleep 5 && pgrep -af 'cpp/build_step10/ws_server|start_w... (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Assistant message captured: I found the reason the fresh leak was marked `skipped_live`: my first tri-state implementatio...
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: I’ve updated the test driver to use real `ws_server` starts for the hygiene checks but stop t...
+Running command: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py'
+Command completed: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py' (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density... (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Running command: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|start_ws_server_local.sh'"
+Command failed: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|start_ws_server_local.sh'" (exit 1)
+Assistant message captured: The rebuild with the corrected `/proc` ownership handling succeeded. There are 68 candidate t...
+Running command: /bin/bash -lc ./tmp_hygiene_ws_test.py
+Assistant message captured: The preclean still reports every stale tree as `skipped_live`, so there is a same-euid or unk...
+Command failed: /bin/bash -lc ./tmp_hygiene_ws_test.py (exit 1)
+Running command: /bin/bash -lc "python3 - <<'PY' import os, stat me=os.geteuid() print('euid', me) for name in...
+Command completed: /bin/bash -lc "python3 - <<'PY' import os, stat me=os.geteuid() print('euid', me) for name in... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "pgrep -af 'tmp_hygiene_ws_test.py|cpp/build_step10/ws_server|start_ws_server_l...
+Command completed: /bin/bash -lc "pgrep -af 'tmp_hygiene_ws_test.py|cpp/build_step10/ws_server|start_ws_server_l... (exit 0)
+Running command: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py'
+Command completed: /bin/bash -lc 'python3 -m py_compile tmp_hygiene_ws_test.py' (exit 0)
+Assistant message captured: The host run is blocked by same-euid non-dumpable desktop/session pids, which is exactly the ...
+Running command: /bin/bash -lc './container/enter.sh env TMP_HYGIENE_TEST_DIRECT_WS=1 ./tmp_hygiene_ws_test.py'
+Command completed: /bin/bash -lc './container/enter.sh env TMP_HYGIENE_TEST_DIRECT_WS=1 ./tmp_hygiene_ws_test.py' (exit 0)
+Assistant message captured: The containerized `/tmp` hygiene script passed end to end: fresh leak skipped as `too_recent`...
+Running command: /bin/bash -lc 'IMG="${NEMOTRON_CUDA_IMG:-nemotron-aoti:cu128}"; docker image inspect "$IMG" >...
+Command completed: /bin/bash -lc 'IMG="${NEMOTRON_CUDA_IMG:-nemotron-aoti:cu128}"; docker image inspect "$IMG" >... (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Assistant message captured: The host leftovers from the failed host-mode test are cleaned with the same guard (`reclaimed...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm... (exit 0)
+Assistant message captured: `runtime-smoke` is green again after the `/proc` correction: `token_divergences=0`, `event_di...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co...
+Assistant message captured: `b2-t1` is in its quiet startup window after the container banner. I’m waiting for the final ...
+Assistant message captured: `b2-t1` has moved into model and bucket loading. The serial reference path is running; I’m co...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co... (exit 0)
+Running command: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm...
+Command completed: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm... (exit 0)
+Running command: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|tmp_hygiene_ws_test.py|density_main'"
+Command completed: /bin/bash -lc "pgrep -af 'cpp/build_step10/ws_server|tmp_hygiene_ws_test.py|density_main'" (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Running command: /bin/bash -lc "find . -maxdepth 3 -type d -name '__pycache__' -print"
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Command completed: /bin/bash -lc "find . -maxdepth 3 -type d -name '__pycache__' -print" (exit 0)
+Running command: /bin/bash -lc "rm -rf __pycache__ && find . -maxdepth 2 -type d -name '__pycache__' -print"
+Command completed: /bin/bash -lc "rm -rf __pycache__ && find . -maxdepth 2 -type d -name '__pycache__' -print" (exit 0)
+Running command: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm...
+Command completed: /bin/bash -lc 'git status --short -- cpp/lib/runtime_io/tmp_hygiene.cpp cpp/lib/runtime_io/tm... (exit 0)
+Running command: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null...
+Command completed: /bin/bash -lc "find /tmp -maxdepth 4 -path '/tmp/??????/*data/aotinductor' -print 2>/dev/null... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/runtime_io/tmp_hygiene.cpp | sed -n '20,620p'"
+Running command: /bin/bash -lc "nl -ba tmp_hygiene_ws_test.py | sed -n '1,320p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/runtime_io/tmp_hygiene.cpp | sed -n '20,620p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba tmp_hygiene_ws_test.py | sed -n '1,320p'" (exit 0)
+Assistant message captured: Implemented and validated. **Fixes Applied** - [tmp_hygiene.cpp](/home/khkramer/src/nemotron-...
+Turn completed.
+Implemented and validated.
+
+**Fixes Applied**
+- [tmp_hygiene.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:25): added default-on age gate, `NEMOTRON_WS_TMP_HYGIENE_MIN_AGE_S`, full-tree newest `st_mtim` tracking during fd-relative scan, and `reason=too_recent` logging.
+- [tmp_hygiene.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:197): converted `/proc` maps/fd checks to fail-closed for same-euid unreadable pids; gone pids are ignored.
+- [tmp_hygiene.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:301): added root `st_dev` mount-boundary checks to byte-sum and delete recursion, with `reason=mount_boundary`.
+- Kept the existing same-inode reopen/revalidation rather than doing the larger end-to-end-fd refactor.
+
+**Validation**
+- Build: `./container/enter.sh cmake --build cpp/build_step10 --target ws_server density_main -j8` passed.
+- Runtime smoke: `RUNTIME_SMOKE PASS ... token_divergences=0 event_divergences=0 errors=0`.
+- B2-T1: `B2_T1_RESULT PASS ... token_divergences=0 event_divergences=0 errors=0`.
+
+**/tmp Hygiene Tests**
+- Added [tmp_hygiene_ws_test.py](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/tmp_hygiene_ws_test.py:1).
+- Containerized shared-`/tmp` ws_server test passed:
+  - Fresh SIGKILL leak skipped with `reason=too_recent`.
+  - With `NEMOTRON_WS_TMP_HYGIENE_MIN_AGE_S=1` after 2s, aged leak reclaimed: `reclaimed_dirs=34`; baseline restored.
+  - Live primary server protected: second startup logged `skipped_live` for 34 live dirs and did not delete them.
+- Host `/tmp` artifacts from an earlier host-mode failed test were cleaned with the same guard; final marker count is `0`.
+
+**Notes**
+- No commit made.
+- I did not edit `proj-2026-05-30-2202/PLAN.md`; it was already modified in the worktree.
+- Host-mode hygiene testing encountered same-euid non-dumpable desktop/session pids, so the new `/proc` fail-closed logic correctly made it skip. The deterministic age-gate test was run inside an isolated CUDA container `/proc`.
+
+**Next Step**
+Run one MPS K=3 concurrent-startup canary with default `MIN_AGE=60` before enabling broadly in that deployment mode.

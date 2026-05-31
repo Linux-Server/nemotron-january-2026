@@ -1,0 +1,64 @@
+Starting Codex task thread.
+Thread ready (019e7d9c-56a6-73e1-8aa0-1082a4d64cf4).
+Turn started (019e7d9c-56d7-7a40-8e3a-0c3f46236a97).
+Assistant message captured: I’ll treat this as a read-only code review and focus on concrete delete paths, inode validati...
+Running command: /bin/bash -lc "pwd && rg --files /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-fro...
+Command completed: /bin/bash -lc "pwd && rg --files /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-fro... (exit 0)
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-r...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-r... (exit 0)
+Assistant message captured: The worktree is dirty, including the new hygiene files, so I’m only reading. Next I’m pulling...
+Running command: /bin/bash -lc 'nl -ba cpp/lib/runtime_io/tmp_hygiene.cpp'
+Command completed: /bin/bash -lc 'nl -ba cpp/lib/runtime_io/tmp_hygiene.cpp' (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '720,780p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '720,780p'" (exit 0)
+Running command: /bin/bash -lc 'nl -ba cpp/lib/runtime_io/tmp_hygiene.h'
+Running command: /bin/bash -lc 'rg -n "reclaim|tmp_hygiene|aotinductor|/tmp|mkdtemp|TMPDIR|temporary" cpp/lib -S'
+Command completed: /bin/bash -lc 'nl -ba cpp/lib/runtime_io/tmp_hygiene.h' (exit 0)
+Command completed: /bin/bash -lc 'rg -n "reclaim|tmp_hygiene|aotinductor|/tmp|mkdtemp|TMPDIR|temporary" cpp/lib -S' (exit 0)
+Assistant message captured: The syscall path is mostly fd-relative once a candidate is open, and the top-level name is re...
+Running command: /bin/bash -lc "git -C /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-r...
+Command completed: /bin/bash -lc "git -C /home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-r... (exit 0)
+Running command: /bin/bash -lc 'rg -n "tmp_hygiene|reclaim_stale_aoti_tmp_dirs|TMP_HYGIENE|aotinductor" -S .'
+Command completed: /bin/bash -lc 'rg -n "tmp_hygiene|reclaim_stale_aoti_tmp_dirs|TMP_HYGIENE|aotinductor" -S .' (exit 0)
+Running command: /bin/bash -lc "find cpp -maxdepth 4 -type f \\( -name '*tmp*' -o -name '*runtime*test*' -o -n...
+Command completed: /bin/bash -lc "find cpp -maxdepth 4 -type f \\( -name '*tmp*' -o -name '*runtime*test*' -o -n... (exit 0)
+Running command: /bin/bash -lc "nl -ba extraction_cache_api_probe.py | sed -n '120,190p'"
+Command completed: /bin/bash -lc "nl -ba extraction_cache_api_probe.py | sed -n '120,190p'" (exit 0)
+Running command: /bin/bash -lc 'rg -n "mkdtemp|TemporaryDirectory|tempdir|aotinductor" -S .'
+Command completed: /bin/bash -lc 'rg -n "mkdtemp|TemporaryDirectory|tempdir|aotinductor" -S .' (exit 0)
+Running command: /bin/bash -lc "nl -ba probe_step1.py | sed -n '900,960p'"
+Command completed: /bin/bash -lc "nl -ba probe_step1.py | sed -n '900,960p'" (exit 0)
+Assistant message captured: **Verdict: FIX-NEEDED** I found no ordinary symlink-follow delete path, but I would not ship ...
+Turn completed.
+**Verdict: FIX-NEEDED**
+
+I found no ordinary symlink-follow delete path, but I would not ship this default-on yet.
+
+**Concrete destructive scenarios**
+
+1. **Concurrent startup / mid-extraction live false-negative: High, blocker**
+   At [runtime.cpp:748](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:748), every new runtime runs hygiene before construction. If process A has created `/tmp/ABC123/data/aotinductor` but is between extraction writes with no fd open and no mmap yet, process B can pass both live checks at [tmp_hygiene.cpp:429](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:429) and [tmp_hygiene.cpp:443](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:443), then recursively delete A’s active extraction at [tmp_hygiene.cpp:450](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:450).  
+   Fix: add a conservative age gate, for example skip dirs with recent `ctime/mtime`, and ideally require an extractor-held lock/in-progress sentinel or complete marker. A global hygiene lock helps multiple reapers, but does not by itself protect a live extractor holding no fd.
+
+2. **Unreadable per-pid `/proc` fails open: High in hardened/containerized deployments**
+   Global `/proc` open failure is fail-safe at [tmp_hygiene.cpp:204](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:204), but per-pid `maps`/`fd` failures return false at [tmp_hygiene.cpp:168](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:168) and [tmp_hygiene.cpp:182](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:182). If a same-euid live process is non-dumpable, hidden by procfs policy, or otherwise unreadable, its mapped `.so` / open fd can be missed and the tree can be deleted.  
+   Fix: make proc scanning tri-state; treat `EACCES`/`EPERM`/unknown same-euid pid inspection as live/unsafe, while ignoring normal `ESRCH`/`ENOENT`.
+
+3. **Non-symlink mount escape: Conditional high**
+   Recursive delete descends into any real directory at [tmp_hygiene.cpp:323](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:323). If an attacker with mount/bind/FUSE capability plants a mount point under `/tmp/<6char>` or makes the candidate itself a mount point, the code can delete contents of the mounted target outside the underlying tmp tree.  
+   Fix: do not cross mount points. Use `openat2` with `RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS` where available, or compare `statx` mount IDs and fail closed on mount-id changes.
+
+4. **Stale inode TOCTOU: Medium/low probability, still worth fixing**
+   Candidate identity is saved by `lstat` at [tmp_hygiene.cpp:420](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:420), then fds are closed and later reopened by name for sum/delete. Same `(dev, ino)` revalidation at [tmp_hygiene.cpp:276](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:276) and [tmp_hygiene.cpp:346](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:346) handles ordinary swaps, but not adversarial inode reuse after the original candidate is removed.  
+   Fix: open `/tmp` once, open the candidate fd-relative with `O_NOFOLLOW`, keep that fd through marker/sum/delete, and revalidate parent name against the still-open fd before final `unlinkat`.
+
+**Six-area summary**
+
+- **Symlink escape:** No child symlink-follow path found; `fstatat(...AT_SYMLINK_NOFOLLOW)`, `O_NOFOLLOW`, and fd-relative recursion are good. Caveat: marker open uses absolute `/tmp/name` at [tmp_hygiene.cpp:76](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/runtime_io/tmp_hygiene.cpp:76), and mount points are not blocked.
+- **TOCTOU:** Root swap to symlink/different inode is mostly covered, but stale inode reuse remains because candidate fds are not held end-to-end.
+- **Live-process false-negative:** Fully loaded `.so` is detected if `/proc` is readable; mid-extraction with no fd/mmap is not detected; unreadable per-pid proc entries fail open.
+- **Pattern/ownership:** `is_mkdtemp_basename` is strict exactly six ASCII alnum, and root euid is checked at selection and delete; marker is required but broad, so a non-AOTI owned dir containing `data/aotinductor` can be deleted.
+- **Prefix match:** Boundary check is correct for `/tmp/abc1234/x` versus `/tmp/abc123`; possible whitespace false positives only cause skipped cleanup, not deletion.
+- **Robustness:** Fd cleanup looks okay; errors mostly fail closed. Gaps: unbounded delete/sum recursion, no mount boundary, no child ownership check, and per-pid proc errors are too permissive.
+
+Concurrent-startup race: **blocker for default-on shipping** on MPS/multi-process cold-start boxes. Acceptable only as documented residual if hygiene is opt-in or gated by a conservative stale-age/lock protocol.
