@@ -1,7 +1,16 @@
 #include "lib/admission/density_admission.h"
 
+#include <algorithm>
+#include <utility>
+
 DensityAdmission::DensityAdmission(uint64_t active_cap, uint64_t backlog_cap)
     : active_cap_(active_cap), backlog_cap_(backlog_cap) {}
+
+uint64_t DensityAdmission::effective_active_cap() const {
+  std::lock_guard<std::mutex> lock(active_cap_provider_mutex_);
+  if (!active_cap_provider_) return active_cap_;
+  return std::min(active_cap_, active_cap_provider_());
+}
 
 bool DensityAdmission::try_increment_below(std::atomic<uint64_t>& counter,
                                            uint64_t cap,
@@ -54,7 +63,8 @@ AdmitResult DensityAdmission::try_admit(const std::string& stream_id) {
   }
 
   uint64_t active_after = 0;
-  if (try_increment_below(active_count_, active_cap_, &active_after)) {
+  const uint64_t active_cap = effective_active_cap();
+  if (try_increment_below(active_count_, active_cap, &active_after)) {
     admitted_.fetch_add(1, std::memory_order_relaxed);
     update_peak(active_peak_, active_after);
     remember_stream(stream_id, StreamSlot::ACTIVE);
@@ -90,7 +100,7 @@ bool DensityAdmission::try_admit_complete(const std::string& stream_id) {
   }
 
   uint64_t active_after = 0;
-  if (!try_increment_below(active_count_, active_cap_, &active_after)) return false;
+  if (!try_increment_below(active_count_, effective_active_cap(), &active_after)) return false;
 
   bool promoted = false;
   {
@@ -144,9 +154,14 @@ void DensityAdmission::on_close(const std::string& stream_id) {
   }
 }
 
+void DensityAdmission::set_active_cap_provider(std::function<uint64_t()> provider) {
+  std::lock_guard<std::mutex> lock(active_cap_provider_mutex_);
+  active_cap_provider_ = std::move(provider);
+}
+
 AdmissionTelemetry DensityAdmission::telemetry_snapshot() const {
   AdmissionTelemetry out;
-  out.active_cap = active_cap_;
+  out.active_cap = effective_active_cap();
   out.backlog_cap = backlog_cap_;
   out.offered = offered_.load(std::memory_order_acquire);
   out.admitted = admitted_.load(std::memory_order_acquire);

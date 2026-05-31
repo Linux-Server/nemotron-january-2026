@@ -20,6 +20,7 @@
 #include <functional>
 #include <future>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -65,6 +66,12 @@ int parse_positive_env_int(const char* name, int fallback) {
   return static_cast<int>(value);
 }
 
+bool parse_enabled_env(const char* name, bool fallback) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') return fallback;
+  return std::strcmp(raw, "0") != 0;
+}
+
 size_t gpu_used_bytes() {
   size_t free_bytes = 0;
   size_t total_bytes = 0;
@@ -102,6 +109,15 @@ class InferenceLane {
   InferenceLane& operator=(const InferenceLane&) = delete;
 
   int id() const noexcept { return id_; }
+  bool warmed() const noexcept { return warmed_.load(std::memory_order_acquire); }
+
+  bool mark_warmed() noexcept {
+    bool expected = false;
+    return warmed_.compare_exchange_strong(expected,
+                                           true,
+                                           std::memory_order_acq_rel,
+                                           std::memory_order_acquire);
+  }
 
   c10::cuda::CUDAStream stream() const {
     if (!stream_.has_value()) throw std::runtime_error("inference lane stream has not been initialized");
@@ -214,6 +230,7 @@ class InferenceLane {
   std::deque<std::function<void()>> tasks_;
   bool closed_ = false;
   std::thread worker_;
+  std::atomic<bool> warmed_{false};
 };
 
 class SharedSchedulerOwnership {
@@ -681,7 +698,17 @@ struct SharedRuntime::Impl {
         finalize_buckets_dir(finalize_buckets_dir_from_config(cfg, artifact_dir)),
         device(torch::kCUDA, cfg.device_index) {
     if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
+    background_warmup_enabled =
+        parse_enabled_env("NEMOTRON_WS_BACKGROUND_WARMUP", cfg.background_warmup_enabled);
+    if (background_warmup_enabled && cfg.warm_sync_lanes <= 0) {
+      throw std::runtime_error("warm_sync_lanes must be positive when background warmup is enabled");
+    }
+    if (background_warmup_enabled) {
+      warm_sync_lanes_requested =
+          parse_positive_env_int("NEMOTRON_WS_WARM_SYNC_LANES", cfg.warm_sync_lanes);
+    }
     torch::NoGradGuard ng;
+    try {
 
     // Cold-start phase timing; aggregate lines intentionally overlap their sub-phases.
     using ColdStartClock = std::chrono::steady_clock;
@@ -800,10 +827,19 @@ struct SharedRuntime::Impl {
                   "steady_loader_sets=0\n");
       std::fflush(stdout);
     }
+    if (background_warmup_enabled) {
+      launch_pending_background_warmup(cold_start_t0);
+      cold_phase("sync_warm_done");
+    }
+    } catch (...) {
+      stop_background_warmup();
+      throw;
+    }
   }
 
   ~Impl() {
     session_runtime_print_steady_shadow_report();
+    stop_background_warmup();
     if (scheduler) scheduler->close();
     {
       std::lock_guard<std::mutex> lock(lanes_mu);
@@ -822,7 +858,6 @@ struct SharedRuntime::Impl {
     lanes.reserve(static_cast<size_t>(lane_count));
     for (int lane_id = 0; lane_id < lane_count; ++lane_id) {
       lanes.push_back(std::make_unique<InferenceLane>(lane_id, device, artifact_dir));
-      free_lanes.push_back(lane_id);
     }
     runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after inference lanes)");
     const size_t used_after_lanes = gpu_used_bytes();
@@ -851,22 +886,55 @@ struct SharedRuntime::Impl {
     if (lanes_closing) throw std::runtime_error("inference lane pool is closing");
     int lane_id = free_lanes.front();
     free_lanes.pop_front();
-    std::printf("inference lane acquired: lane=%d label=%s\n", lane_id, label.c_str());
+    InferenceLane& lane = *lanes.at(static_cast<size_t>(lane_id));
+    if (!lane.warmed()) {
+      throw std::runtime_error("attempted to acquire unwarmed inference lane: lane=" +
+                               std::to_string(lane_id));
+    }
+    if (background_warmup_enabled) {
+      std::printf("inference lane acquired: lane=%d label=%s warmed_lanes=%llu\n",
+                  lane_id,
+                  label.c_str(),
+                  static_cast<unsigned long long>(
+                      warmed_lanes.load(std::memory_order_acquire)));
+    } else {
+      std::printf("inference lane acquired: lane=%d label=%s\n", lane_id, label.c_str());
+    }
     std::fflush(stdout);
-    return *lanes.at(static_cast<size_t>(lane_id));
+    return lane;
   }
 
   void release_lane(InferenceLane* lane) noexcept {
     if (lane == nullptr) return;
     {
       std::lock_guard<std::mutex> lock(lanes_mu);
-      if (!lanes_closing) free_lanes.push_back(lane->id());
+      if (!lanes_closing && lane->warmed()) free_lanes.push_back(lane->id());
     }
     lanes_cv.notify_one();
   }
 
-  void warm_inference_lanes() {
-    constexpr int kWarmupItersPerInput = 5;
+  struct LaneWarmupContext {
+    static constexpr int kFullWarmupItersPerInput = 5;
+
+    std::shared_ptr<const std::vector<WarmupInput>> full_warmup_inputs;
+    std::shared_ptr<const std::vector<WarmupInput>> tail_warmup_inputs;
+    std::shared_ptr<const std::vector<FinalizeBucketKey>> tail_direct_finalize_warmup_keys;
+    size_t bucket_warmup_inputs = 0;
+    int full_warm_lanes = 0;
+    int tail_warmup_iters = 1;
+    int tail_warmup_input_env = 1;
+  };
+
+  struct LaneWarmupResult {
+    int lane_id = 0;
+    int completed = 0;
+    int iters_per_input = 0;
+    size_t input_count = 0;
+    size_t direct_finalize_count = 0;
+    bool full = false;
+  };
+
+  LaneWarmupContext build_lane_warmup_context() {
     const auto finalize_bucket_keys = finalize_loaders->bucket_keys();
     std::vector<WarmupInput> inputs;
     inputs.reserve(finalize_bucket_keys.size());
@@ -949,21 +1017,12 @@ struct SharedRuntime::Impl {
     const auto tail_direct_finalize_warmup_keys =
         std::make_shared<const std::vector<FinalizeBucketKey>>(std::move(tail_direct_finalize_keys));
 
-    struct LaneWarmupResult {
-      int lane_id = 0;
-      int completed = 0;
-      int iters_per_input = 0;
-      size_t input_count = 0;
-      size_t direct_finalize_count = 0;
-      bool full = false;
-    };
-
     std::printf("inference lane warmup dispatch: lanes=%d full_lanes=%d full_iters_per_input=%d "
                 "tail_iters_per_input=%d full_warmup_inputs=%zu tail_warmup_inputs=%zu "
                 "tail_requested_inputs=%d tail_direct_finalize_buckets=%zu finalize_buckets=%zu\n",
                 lane_count,
                 full_warm_lanes,
-                kWarmupItersPerInput,
+                LaneWarmupContext::kFullWarmupItersPerInput,
                 tail_warmup_iters,
                 full_warmup_inputs->size(),
                 tail_warmup_inputs->size(),
@@ -972,110 +1031,182 @@ struct SharedRuntime::Impl {
                 finalize_loaders->total_bucket_count());
     std::fflush(stdout);
 
-    std::vector<std::future<LaneWarmupResult>> futures;
-    futures.reserve(lanes.size());
-    for (size_t lane_index = 0; lane_index < lanes.size(); ++lane_index) {
-      InferenceLane& lane = *lanes[lane_index];
-      const bool full = static_cast<int>(lane_index) < full_warm_lanes;
-      const int lane_warmup_iters = full ? kWarmupItersPerInput : tail_warmup_iters;
-      const auto lane_warmup_inputs = full ? full_warmup_inputs : tail_warmup_inputs;
-      futures.push_back(lane.submit([this,
-                                     &lane,
-                                     warmup_inputs = lane_warmup_inputs,
-                                     tail_direct_finalize_warmup_keys,
-                                     warmup_iters = lane_warmup_iters,
-                                     full]() {
-        int completed = 0;
-        for (const auto& warmup_input : *warmup_inputs) {
-          for (int iter = 0; iter < warmup_iters; ++iter) {
-            SessionState warm_state;
-            reset_session(warm_state, bundle, device);
-            auto warm_audio = make_session_runtime_audio_frontend(bundle, lane.preproc(), device);
-            reset_session_runtime_audio_front(warm_state, *warm_audio);
+    LaneWarmupContext warmup;
+    warmup.full_warmup_inputs = std::move(full_warmup_inputs);
+    warmup.tail_warmup_inputs = std::move(tail_warmup_inputs);
+    warmup.tail_direct_finalize_warmup_keys = std::move(tail_direct_finalize_warmup_keys);
+    warmup.bucket_warmup_inputs = bucket_warmup_inputs;
+    warmup.full_warm_lanes = full_warm_lanes;
+    warmup.tail_warmup_iters = tail_warmup_iters;
+    warmup.tail_warmup_input_env = tail_warmup_input_env;
+    return warmup;
+  }
 
-            std::vector<EmittedEvent> events;
-            const std::string label = "inference_lane" + std::to_string(lane.id()) +
-                                      ".warmup." + warmup_input.label +
-                                      ".iter" + std::to_string(iter);
-            auto ctx = lane.execution_context();
-            {
-              std::lock_guard<std::mutex> enc_first_lock(enc_first_mutex);
-              (void)session_runtime_append_pcm_and_drain(warm_state,
-                                                         warmup_input.audio,
-                                                         *warm_audio,
-                                                         enc_first,
-                                                         *enc_steady,
-                                                         ctx,
-                                                         device,
-                                                         tokenizer_value,
-                                                         events,
-                                                         label + ".append");
-            }
-            vad_stop(warm_state);
-            (void)session_runtime_finalize(warm_state,
-                                           bundle,
-                                           *warm_audio,
-                                           *finalize_loaders,
-                                           ctx,
-                                           device,
-                                           tokenizer_value,
-                                           events,
-                                           FinalizeFinish::SPECULATIVE_KEEP,
-                                           label + ".finalize");
-            ++completed;
-          }
-        }
-        size_t direct_finalize_count = 0;
-        if (!full && !tail_direct_finalize_warmup_keys->empty()) {
-          c10::cuda::CUDAGuard device_guard(device.index());
-          c10::cuda::CUDAStreamGuard stream_guard(lane.stream());
-          SessionState direct_state;
-          reset_session(direct_state, bundle, device);
-          auto options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
-          for (const auto& key : *tail_direct_finalize_warmup_keys) {
-            auto final_chunk = torch::zeros({1, 128, key.second}, options);
-            std::vector<at::Tensor> loader_inputs = {
-                final_chunk.contiguous(),
-                direct_state.clc.contiguous(),
-                direct_state.clt.contiguous(),
-                direct_state.clcl.contiguous(),
-            };
-            AOTIModelPackageLoader& loader = finalize_loaders->get(key.first, key.second);
-            auto out = loader.run(loader_inputs, reinterpret_cast<void*>(lane.stream().stream()));
-            if (out.size() < 2) {
-              throw std::runtime_error("tail finalize warmup bucket returned fewer than 2 outputs");
-            }
-            ++direct_finalize_count;
-          }
-        }
-        lane.synchronize();
-        return LaneWarmupResult{
-            lane.id(), completed, warmup_iters, warmup_inputs->size(), direct_finalize_count, full};
-      }));
+  bool mark_lane_warmed(int lane_id) {
+    InferenceLane& lane = *lanes.at(static_cast<size_t>(lane_id));
+    if (!lane.mark_warmed()) return false;
+    warmed_lanes.fetch_add(1, std::memory_order_acq_rel);
+    return true;
+  }
+
+  void publish_warmed_lane(int lane_id) {
+    InferenceLane& lane = *lanes.at(static_cast<size_t>(lane_id));
+    if (!lane.warmed()) {
+      throw std::runtime_error("attempted to publish unwarmed inference lane: lane=" +
+                               std::to_string(lane_id));
     }
+    {
+      std::lock_guard<std::mutex> lock(lanes_mu);
+      if (!lanes_closing) free_lanes.push_back(lane_id);
+    }
+    lanes_cv.notify_all();
+  }
 
+  std::future<LaneWarmupResult> submit_lane_warmup(size_t lane_index,
+                                                   const LaneWarmupContext& warmup,
+                                                   bool publish_when_done) {
+    InferenceLane& lane = *lanes.at(lane_index);
+    const bool full = static_cast<int>(lane_index) < warmup.full_warm_lanes;
+    const int lane_warmup_iters =
+        full ? LaneWarmupContext::kFullWarmupItersPerInput : warmup.tail_warmup_iters;
+    const auto lane_warmup_inputs =
+        full ? warmup.full_warmup_inputs : warmup.tail_warmup_inputs;
+    const auto tail_direct_finalize_warmup_keys = warmup.tail_direct_finalize_warmup_keys;
+    return lane.submit([this,
+                        &lane,
+                        warmup_inputs = lane_warmup_inputs,
+                        tail_direct_finalize_warmup_keys,
+                        warmup_iters = lane_warmup_iters,
+                        full,
+                        publish_when_done]() {
+      int completed = 0;
+      for (const auto& warmup_input : *warmup_inputs) {
+        for (int iter = 0; iter < warmup_iters; ++iter) {
+          SessionState warm_state;
+          reset_session(warm_state, bundle, device);
+          auto warm_audio = make_session_runtime_audio_frontend(bundle, lane.preproc(), device);
+          reset_session_runtime_audio_front(warm_state, *warm_audio);
+
+          std::vector<EmittedEvent> events;
+          const std::string label = "inference_lane" + std::to_string(lane.id()) +
+                                    ".warmup." + warmup_input.label +
+                                    ".iter" + std::to_string(iter);
+          auto ctx = lane.execution_context();
+          {
+            std::lock_guard<std::mutex> enc_first_lock(enc_first_mutex);
+            (void)session_runtime_append_pcm_and_drain(warm_state,
+                                                       warmup_input.audio,
+                                                       *warm_audio,
+                                                       enc_first,
+                                                       *enc_steady,
+                                                       ctx,
+                                                       device,
+                                                       tokenizer_value,
+                                                       events,
+                                                       label + ".append");
+          }
+          vad_stop(warm_state);
+          (void)session_runtime_finalize(warm_state,
+                                         bundle,
+                                         *warm_audio,
+                                         *finalize_loaders,
+                                         ctx,
+                                         device,
+                                         tokenizer_value,
+                                         events,
+                                         FinalizeFinish::SPECULATIVE_KEEP,
+                                         label + ".finalize");
+          ++completed;
+        }
+      }
+      size_t direct_finalize_count = 0;
+      if (!full && !tail_direct_finalize_warmup_keys->empty()) {
+        c10::cuda::CUDAGuard device_guard(device.index());
+        c10::cuda::CUDAStreamGuard stream_guard(lane.stream());
+        SessionState direct_state;
+        reset_session(direct_state, bundle, device);
+        auto options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+        for (const auto& key : *tail_direct_finalize_warmup_keys) {
+          auto final_chunk = torch::zeros({1, 128, key.second}, options);
+          std::vector<at::Tensor> loader_inputs = {
+              final_chunk.contiguous(),
+              direct_state.clc.contiguous(),
+              direct_state.clt.contiguous(),
+              direct_state.clcl.contiguous(),
+          };
+          AOTIModelPackageLoader& loader = finalize_loaders->get(key.first, key.second);
+          auto out = loader.run(loader_inputs, reinterpret_cast<void*>(lane.stream().stream()));
+          if (out.size() < 2) {
+            throw std::runtime_error("tail finalize warmup bucket returned fewer than 2 outputs");
+          }
+          ++direct_finalize_count;
+        }
+      }
+      lane.synchronize();
+      const bool first_mark = mark_lane_warmed(lane.id());
+      if (publish_when_done && first_mark) publish_warmed_lane(lane.id());
+      return LaneWarmupResult{
+          lane.id(), completed, warmup_iters, warmup_inputs->size(), direct_finalize_count, full};
+    });
+  }
+
+  void log_lane_warmed(const LaneWarmupResult& result) {
+    if (background_warmup_enabled) {
+      std::printf("inference lane warmed: lane=%d mode=%s iters=%d iters_per_input=%d "
+                  "warmup_inputs=%zu direct_finalize_buckets=%zu finalize_buckets=%zu "
+                  "warmed_lanes=%llu\n",
+                  result.lane_id,
+                  result.full ? "full" : "tail",
+                  result.completed,
+                  result.iters_per_input,
+                  result.input_count,
+                  result.direct_finalize_count,
+                  finalize_loaders->total_bucket_count(),
+                  static_cast<unsigned long long>(
+                      warmed_lanes.load(std::memory_order_acquire)));
+    } else {
+      std::printf("inference lane warmed: lane=%d mode=%s iters=%d iters_per_input=%d "
+                  "warmup_inputs=%zu direct_finalize_buckets=%zu finalize_buckets=%zu\n",
+                  result.lane_id,
+                  result.full ? "full" : "tail",
+                  result.completed,
+                  result.iters_per_input,
+                  result.input_count,
+                  result.direct_finalize_count,
+                  finalize_loaders->total_bucket_count());
+    }
+    std::fflush(stdout);
+  }
+
+  int collect_lane_warmups(std::vector<std::future<LaneWarmupResult>>& futures) {
     int total_warmed = 0;
     std::exception_ptr first_exception;
     for (auto& future : futures) {
       try {
         LaneWarmupResult result = future.get();
         total_warmed += result.completed;
-        std::printf("inference lane warmed: lane=%d mode=%s iters=%d iters_per_input=%d "
-                    "warmup_inputs=%zu direct_finalize_buckets=%zu finalize_buckets=%zu\n",
-                    result.lane_id,
-                    result.full ? "full" : "tail",
-                    result.completed,
-                    result.iters_per_input,
-                    result.input_count,
-                    result.direct_finalize_count,
-                    finalize_loaders->total_bucket_count());
-        std::fflush(stdout);
+        log_lane_warmed(result);
       } catch (...) {
         if (!first_exception) first_exception = std::current_exception();
       }
     }
     if (first_exception) std::rethrow_exception(first_exception);
+    return total_warmed;
+  }
 
+  int warm_lane_range(size_t begin_lane,
+                      size_t end_lane,
+                      const LaneWarmupContext& warmup,
+                      bool publish_when_done) {
+    std::vector<std::future<LaneWarmupResult>> futures;
+    futures.reserve(end_lane - begin_lane);
+    for (size_t lane_index = begin_lane; lane_index < end_lane; ++lane_index) {
+      futures.push_back(submit_lane_warmup(lane_index, warmup, publish_when_done));
+    }
+    return collect_lane_warmups(futures);
+  }
+
+  void print_lane_pool_warmed(const LaneWarmupContext& warmup, int total_warmed) {
     std::printf("inference lane pool warmed: lanes=%d total_iters=%d full_warmup_inputs=%zu "
                 "tail_warmup_inputs=%zu tail_requested_inputs=%d "
                 "tail_direct_finalize_buckets=%zu "
@@ -1083,17 +1214,117 @@ struct SharedRuntime::Impl {
                 "tail_iters_per_input=%d per_lane_mib=%.3f\n",
                 lane_count,
                 total_warmed,
-                full_warmup_inputs->size(),
-                tail_warmup_inputs->size(),
-                tail_warmup_input_env,
-                tail_direct_finalize_warmup_keys->size(),
-                bucket_warmup_inputs,
+                warmup.full_warmup_inputs->size(),
+                warmup.tail_warmup_inputs->size(),
+                warmup.tail_warmup_input_env,
+                warmup.tail_direct_finalize_warmup_keys->size(),
+                warmup.bucket_warmup_inputs,
                 finalize_loaders->total_bucket_count(),
-                full_warm_lanes,
-                kWarmupItersPerInput,
-                tail_warmup_iters,
+                warmup.full_warm_lanes,
+                LaneWarmupContext::kFullWarmupItersPerInput,
+                warmup.tail_warmup_iters,
                 bytes_to_mib(lane_delta_per_lane_bytes));
     std::fflush(stdout);
+  }
+
+  void print_background_warm_complete(std::chrono::steady_clock::time_point cold_start_t0,
+                                      std::chrono::steady_clock::time_point background_t0) {
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed_ms = std::chrono::duration<double, std::milli>(now - background_t0).count();
+    const double cumulative_ms = std::chrono::duration<double, std::milli>(now - cold_start_t0).count();
+    std::printf("COLD_START_PHASE phase=background_warm_complete elapsed_ms=%.1f "
+                "cumulative_ms=%.1f background=1 warmed_lanes=%llu lanes=%d\n",
+                elapsed_ms,
+                cumulative_ms,
+                static_cast<unsigned long long>(warmed_lanes.load(std::memory_order_acquire)),
+                lane_count);
+    std::fflush(stdout);
+  }
+
+  void start_background_warmup(LaneWarmupContext warmup,
+                               size_t begin_lane,
+                               int already_warmed_iters,
+                               std::chrono::steady_clock::time_point cold_start_t0) {
+    if (begin_lane >= lanes.size()) {
+      print_lane_pool_warmed(warmup, already_warmed_iters);
+      print_background_warm_complete(cold_start_t0, std::chrono::steady_clock::now());
+      return;
+    }
+    background_warmup_stop.store(false, std::memory_order_release);
+    const auto background_t0 = std::chrono::steady_clock::now();
+    background_warmup_thread = std::thread([this, warmup = std::move(warmup), begin_lane,
+                                            already_warmed_iters, cold_start_t0, background_t0]() {
+      int total_warmed = already_warmed_iters;
+      try {
+        if (!background_warmup_stop.load(std::memory_order_acquire)) {
+          total_warmed += warm_lane_range(begin_lane, lanes.size(), warmup, true);
+        }
+        if (!background_warmup_stop.load(std::memory_order_acquire)) {
+          print_lane_pool_warmed(warmup, total_warmed);
+          print_background_warm_complete(cold_start_t0, background_t0);
+        }
+      } catch (const std::exception& e) {
+        std::fprintf(stderr, "inference lane background warmup failed: %s\n", e.what());
+        std::fflush(stderr);
+      } catch (...) {
+        std::fprintf(stderr, "inference lane background warmup failed: unknown exception\n");
+        std::fflush(stderr);
+      }
+    });
+  }
+
+  void launch_pending_background_warmup(std::chrono::steady_clock::time_point cold_start_t0) {
+    if (!pending_background_warmup.has_value()) return;
+    start_background_warmup(std::move(*pending_background_warmup),
+                            pending_background_begin_lane,
+                            pending_background_warmup_iters,
+                            cold_start_t0);
+    pending_background_warmup.reset();
+    pending_background_begin_lane = 0;
+    pending_background_warmup_iters = 0;
+  }
+
+  void stop_background_warmup() {
+    background_warmup_stop.store(true, std::memory_order_release);
+    if (background_warmup_thread.joinable()) background_warmup_thread.join();
+  }
+
+  void warm_inference_lanes() {
+    LaneWarmupContext warmup = build_lane_warmup_context();
+    if (!background_warmup_enabled) {
+      const int total_warmed = warm_lane_range(0, lanes.size(), warmup, false);
+      for (size_t lane_index = 0; lane_index < lanes.size(); ++lane_index) {
+        publish_warmed_lane(static_cast<int>(lane_index));
+      }
+      print_lane_pool_warmed(warmup, total_warmed);
+      return;
+    }
+
+    const int sync_lanes = std::min(lane_count, warm_sync_lanes_requested);
+    std::printf("inference lane background warmup enabled: lanes=%d sync_lanes=%d "
+                "remaining_lanes=%d warmed_lanes=%llu\n",
+                lane_count,
+                sync_lanes,
+                lane_count - sync_lanes,
+                static_cast<unsigned long long>(warmed_lanes.load(std::memory_order_acquire)));
+    std::fflush(stdout);
+
+    const int sync_total_warmed =
+        warm_lane_range(0, static_cast<size_t>(sync_lanes), warmup, false);
+    for (int lane_id = 0; lane_id < sync_lanes; ++lane_id) {
+      publish_warmed_lane(lane_id);
+    }
+    std::printf("inference lane sync warmup done: sync_lanes=%d total_iters=%d warmed_lanes=%llu "
+                "configured_lanes=%d\n",
+                sync_lanes,
+                sync_total_warmed,
+                static_cast<unsigned long long>(warmed_lanes.load(std::memory_order_acquire)),
+                lane_count);
+    std::fflush(stdout);
+
+    pending_background_begin_lane = static_cast<size_t>(sync_lanes);
+    pending_background_warmup_iters = sync_total_warmed;
+    pending_background_warmup = std::move(warmup);
   }
 
   SharedRuntimeConfig cfg;
@@ -1116,7 +1347,15 @@ struct SharedRuntime::Impl {
   std::mutex lanes_mu;
   std::condition_variable lanes_cv;
   std::deque<int> free_lanes;
+  std::atomic<uint64_t> warmed_lanes{0};
   bool lanes_closing = false;
+  bool background_warmup_enabled = false;
+  int warm_sync_lanes_requested = 4;
+  std::atomic<bool> background_warmup_stop{false};
+  std::thread background_warmup_thread;
+  std::optional<LaneWarmupContext> pending_background_warmup;
+  size_t pending_background_begin_lane = 0;
+  int pending_background_warmup_iters = 0;
   SharedSchedulerOwnership scheduler_ownership;
   std::unique_ptr<BatchedSteadyLoaderSet> batched_steady;
   std::unique_ptr<BatchedSteadyScheduler> scheduler;
@@ -1136,6 +1375,10 @@ const SharedRuntimeConfig& SharedRuntime::config() const {
 
 bool SharedRuntime::has_scheduler() const noexcept {
   return impl_ && impl_->scheduler != nullptr;
+}
+
+uint64_t SharedRuntime::warmed_lane_count() const noexcept {
+  return impl_ ? impl_->warmed_lanes.load(std::memory_order_acquire) : 0;
 }
 
 BatchedSteadySchedulerTelemetry SharedRuntime::scheduler_telemetry_snapshot() const {

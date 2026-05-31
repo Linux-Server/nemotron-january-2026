@@ -608,6 +608,8 @@ struct ServerConfig {
   int steady_num_runners = 1;
   int finalize_num_runners = 1;
   int ws_lanes = 1;
+  bool background_warmup_enabled = false;
+  int warm_sync_lanes = 4;
 
   bool stats_enabled = true;
   size_t stats_window = kDefaultStatsWindow;
@@ -635,6 +637,10 @@ void populate_env_config(ServerConfig* cfg) {
   cfg->steady_num_runners = read_env_int("NEMOTRON_DENSITY_STEADY_RUNNERS", 1);
   cfg->stats_enabled = read_env_enabled("NEMOTRON_STATS_ENABLED", true);
   cfg->stats_window = read_env_size_t("NEMOTRON_STATS_WINDOW", kDefaultStatsWindow);
+  cfg->background_warmup_enabled = read_env_enabled("NEMOTRON_WS_BACKGROUND_WARMUP", false);
+  if (cfg->background_warmup_enabled) {
+    cfg->warm_sync_lanes = read_env_int("NEMOTRON_WS_WARM_SYNC_LANES", 4);
+  }
   cfg->ws_max_message_size =
       read_env_size_t("NEMOTRON_WS_MAX_MESSAGE_SIZE", kDefaultWsMaxMessageSize);
   cfg->ws_send_timeout_sec = read_env_int("NEMOTRON_WS_SEND_TIMEOUT_SEC", kDefaultWsSendTimeoutSec);
@@ -706,6 +712,9 @@ void validate_config(ServerConfig* cfg, bool require_port_and_admission) {
   if (cfg->ws_lanes <= 0) {
     throw std::runtime_error("NEMOTRON_WS_LANES must be positive");
   }
+  if (cfg->background_warmup_enabled && cfg->warm_sync_lanes <= 0) {
+    throw std::runtime_error("NEMOTRON_WS_WARM_SYNC_LANES must be positive");
+  }
   if (cfg->batch_b_max != 1 && cfg->batch_b_max != 2 && cfg->batch_b_max != 4) {
     throw std::runtime_error("NEMOTRON_DENSITY_BATCH_MAX must be one of 1, 2, 4");
   }
@@ -732,6 +741,8 @@ std::string config_table(const ServerConfig& cfg) {
       << "  steady_shadow_enabled = " << json_bool(cfg.steady_shadow_enabled) << "\n"
       << "  steady_shadow_timing = INVALID_WHEN_ENABLED\n"
       << "  lanes = " << cfg.ws_lanes << "\n"
+      << "  background_warmup_enabled = " << json_bool(cfg.background_warmup_enabled) << "\n"
+      << "  warm_sync_lanes = " << cfg.warm_sync_lanes << "\n"
       << "  steady_runners = " << cfg.steady_num_runners << "\n"
       << "  finalize_runners = " << cfg.finalize_num_runners << "\n"
       << "  steady_batch_dir = " << cfg.effective_steady_batch_dir << "\n"
@@ -1859,6 +1870,8 @@ class WsServer {
     shared_cfg.finalize_num_runners = state_->cfg.finalize_num_runners;
     shared_cfg.scheduler_enabled = state_->cfg.scheduler_enabled;
     shared_cfg.steady_shadow_enabled = state_->cfg.steady_shadow_enabled;
+    shared_cfg.background_warmup_enabled = state_->cfg.background_warmup_enabled;
+    shared_cfg.warm_sync_lanes = state_->cfg.warm_sync_lanes;
 
     state_->admission = std::make_unique<DensityAdmission>(state_->cfg.admission_active_cap,
                                                            state_->cfg.admission_backlog_cap);
@@ -1866,6 +1879,12 @@ class WsServer {
     state_->stats = std::move(stats);
     if (!state_->cfg.selftest_lightweight_runtime) {
       state_->shared_runtime = std::make_unique<SharedRuntime>(shared_cfg);
+      if (state_->cfg.background_warmup_enabled) {
+        SharedRuntime* runtime = state_->shared_runtime.get();
+        state_->admission->set_active_cap_provider([runtime]() {
+          return runtime != nullptr ? runtime->warmed_lane_count() : 0;
+        });
+      }
     } else if (state_->cfg.scheduler_enabled) {
       std::printf("shared runtime scheduler skipped: selftest_lightweight_runtime=true\n");
       std::fflush(stdout);

@@ -53,6 +53,8 @@ struct SharedRuntimeConfig {
   int finalize_num_runners = 1;
   bool verify_tokenizer = true;
   bool gil_attrib_enabled = false;
+  bool background_warmup_enabled = false;
+  int warm_sync_lanes = 4;
 };
 
 struct SessionConfig {
@@ -77,6 +79,7 @@ class SharedRuntime {
   const Tokenizer& tokenizer() const;
   const SharedRuntimeConfig& config() const;
   bool has_scheduler() const noexcept;
+  uint64_t warmed_lane_count() const noexcept;
   BatchedSteadySchedulerTelemetry scheduler_telemetry_snapshot() const;
 
  private:

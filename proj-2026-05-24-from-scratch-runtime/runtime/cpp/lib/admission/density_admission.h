@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -49,6 +50,7 @@ class DensityAdmission {
   bool try_admit_complete(const std::string& stream_id = {});
   void on_admit_complete(const std::string& stream_id = {});
   void on_close(const std::string& stream_id = {});
+  void set_active_cap_provider(std::function<uint64_t()> provider);
   AdmissionTelemetry telemetry_snapshot() const;
   // Step 10 extension: process-level drain gate for SIGTERM shutdown.
   void shutting_down(bool value);
@@ -61,6 +63,7 @@ class DensityAdmission {
   void decrement_if_positive(std::atomic<uint64_t>& counter);
   void update_peak(std::atomic<uint64_t>& peak, uint64_t value);
   void remember_stream(const std::string& stream_id, StreamSlot slot);
+  uint64_t effective_active_cap() const;
 
   const uint64_t active_cap_;
   const uint64_t backlog_cap_;
@@ -75,6 +78,9 @@ class DensityAdmission {
   std::atomic<uint64_t> backlog_cap_hits_{0};
   std::atomic<uint64_t> shed_close_count_{0};
   std::atomic<bool> shutting_down_{false};
+
+  mutable std::mutex active_cap_provider_mutex_;
+  std::function<uint64_t()> active_cap_provider_;
 
   mutable std::mutex streams_mutex_;
   std::unordered_map<std::string, StreamSlot> streams_;
