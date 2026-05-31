@@ -370,6 +370,34 @@ struct FinalizeLoaderMemoryRecord {
   size_t cumulative_delta = 0;
 };
 
+class SharedEncoderConstants {
+ public:
+  SharedEncoderConstants(const std::string& weights_ts_path,
+                         torch::Device device,
+                         std::function<void(const char*)> cold_phase = {}) {
+    c10::cuda::CUDAGuard device_guard(device.index());
+    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(before shared encoder constants)");
+    size_t before = gpu_used_bytes();
+    constants_ = load_shared_constants(weights_ts_path, device);
+    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after shared encoder constants)");
+    size_t after = gpu_used_bytes();
+    delta_bytes_ = after >= before ? after - before : 0;
+    std::printf("shared encoder constants loaded: entries=%zu shared_delta_mib=%.3f source=%s\n",
+                constants_.size(),
+                bytes_to_mib(delta_bytes_),
+                weights_ts_path.c_str());
+    std::fflush(stdout);
+    if (cold_phase) cold_phase("shared_encoder_constants_load");
+  }
+
+  const std::unordered_map<std::string, at::Tensor>& constants() const noexcept { return constants_; }
+  size_t delta_bytes() const noexcept { return delta_bytes_; }
+
+ private:
+  std::unordered_map<std::string, at::Tensor> constants_;
+  size_t delta_bytes_ = 0;
+};
+
 class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
  public:
   FinalizeBucketLoaderPool(const std::string& buckets_dir,
@@ -378,6 +406,7 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
                            torch::Device device,
                            int num_runners,
                            std::string policy,
+                           const std::unordered_map<std::string, at::Tensor>* borrowed_shared_constants = nullptr,
                            std::function<void(const char*)> cold_phase = {})
       : buckets_dir_(buckets_dir),
         shared_weights_(shared_weights),
@@ -410,19 +439,30 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
                 policy_.c_str());
     if (cold_phase) cold_phase("finalize_manifest_verify");
 
-    c10::cuda::CUDAGuard device_guard(device_.index());
-    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(before finalize shared constants)");
-    size_t before = gpu_used_bytes();
-    shared_constants_ = load_shared_constants(shared_weights_, device_);
-    runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after finalize shared constants)");
-    size_t after = gpu_used_bytes();
-    shared_delta_bytes_ = after >= before ? after - before : 0;
-    std::printf("runtime finalize shared constants loaded: entries=%zu shared_delta_mib=%.3f policy=%s\n",
-                shared_constants_.size(),
+    if (borrowed_shared_constants != nullptr) {
+      if (borrowed_shared_constants->empty()) {
+        throw std::runtime_error("finalize borrowed shared constants map is empty");
+      }
+      shared_constants_ptr_ = borrowed_shared_constants;
+      borrowed_shared_constants_ = true;
+      shared_delta_bytes_ = 0;
+    } else {
+      c10::cuda::CUDAGuard device_guard(device_.index());
+      runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(before finalize shared constants)");
+      size_t before = gpu_used_bytes();
+      shared_constants_ = load_shared_constants(shared_weights_, device_);
+      runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after finalize shared constants)");
+      size_t after = gpu_used_bytes();
+      shared_delta_bytes_ = after >= before ? after - before : 0;
+      shared_constants_ptr_ = &shared_constants_;
+      if (cold_phase) cold_phase("finalize_shared_constants_load");
+    }
+    std::printf("runtime finalize shared constants ready: entries=%zu shared_delta_mib=%.3f source=%s policy=%s\n",
+                shared_constants_ref().size(),
                 bytes_to_mib(shared_delta_bytes_),
+                borrowed_shared_constants_ ? "borrowed" : "owned",
                 policy_.c_str());
     std::fflush(stdout);
-    if (cold_phase) cold_phase("finalize_shared_constants_load");
   }
 
   AOTIModelPackageLoader& get(int64_t drop, int64_t T) override {
@@ -458,7 +498,7 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
   size_t shared_delta_bytes() const noexcept { return shared_delta_bytes_; }
 
   const std::unordered_map<std::string, at::Tensor>& shared_constants() const noexcept {
-    return shared_constants_;
+    return shared_constants_ref();
   }
 
   size_t total_loader_delta_bytes() const {
@@ -500,6 +540,10 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
   }
 
  private:
+  const std::unordered_map<std::string, at::Tensor>& shared_constants_ref() const noexcept {
+    return *shared_constants_ptr_;
+  }
+
   std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>>::iterator load_bucket_locked(
       const FinalizeBucketKey& key) {
     auto path_it = bucket_paths_.find(key);
@@ -514,7 +558,7 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
     size_t before = gpu_used_bytes();
     auto loader = std::make_unique<AOTIModelPackageLoader>(
         path_it->second, "model", false, num_runners_, device_.index());
-    auto bucket_constants = constants_for_bucket(shared_constants_, *loader, path_it->second);
+    auto bucket_constants = constants_for_bucket(shared_constants_ref(), *loader, path_it->second);
     loader->load_constants(bucket_constants.values, false, false, true);
     runtime_cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(after finalize bucket load)");
     size_t after = gpu_used_bytes();
@@ -553,6 +597,8 @@ class FinalizeBucketLoaderPool final : public FinalizeBucketLoaderProvider {
   BucketManifest manifest_;
   std::map<FinalizeBucketKey, std::string> bucket_paths_;
   std::unordered_map<std::string, at::Tensor> shared_constants_;
+  const std::unordered_map<std::string, at::Tensor>* shared_constants_ptr_ = nullptr;
+  bool borrowed_shared_constants_ = false;
   std::map<FinalizeBucketKey, std::unique_ptr<AOTIModelPackageLoader>> loaders_;
   mutable std::mutex mu_;
   std::vector<FinalizeLoaderMemoryRecord> records_;
@@ -752,6 +798,10 @@ struct SharedRuntime::Impl {
     if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
       throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
     }
+    shared_encoder_constants_ = std::make_unique<SharedEncoderConstants>(
+        (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
+        device,
+        cold_phase);
     const bool need_inline_at_startup = !cfg.scheduler_enabled || cfg.steady_shadow_enabled;
     if (need_inline_at_startup) {
       (void)ensure_inline_enc_steady();
@@ -766,6 +816,7 @@ struct SharedRuntime::Impl {
         device,
         cfg.finalize_num_runners,
         "ws_shared_finalize_pool",
+        &shared_encoder_constants_->constants(),
         cold_phase);
     finalize_loaders->preload_all();
     cold_phase("finalize_bucket_bind_dlopen");
@@ -794,7 +845,7 @@ struct SharedRuntime::Impl {
       policy.queue_capacity = cfg.batch_queue_capacity;
       const auto required_scheduler_buckets = BatchedSteadyScheduler::required_buckets_for_policy(policy);
       cold_phase("scheduler_preload_setup");
-      const auto& borrowed_shared_constants = finalize_loaders->shared_constants();
+      const auto& borrowed_shared_constants = shared_encoder_constants_->constants();
       batched_steady = std::make_unique<BatchedSteadyLoaderSet>(
           batch_dir,
           (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
@@ -1369,13 +1420,17 @@ struct SharedRuntime::Impl {
   std::string bundle_path;
   std::string finalize_buckets_dir;
   torch::Device device;
+  // Declared before every user-managed constants borrower so reverse destruction
+  // keeps the shared encoder constants alive until all loaders are gone.
+  std::unique_ptr<SharedEncoderConstants> shared_encoder_constants_;
   torch::jit::Module bundle;
   Tokenizer tokenizer_value;
   torch::jit::Module enc_first;
   std::mutex enc_first_mutex;
   std::unique_ptr<AOTIModelPackageLoader> enc_steady;
   std::once_flag enc_steady_once;
-  // Declared before batched_steady so borrowed shared constants are destroyed after scheduler loaders.
+  // Finalize and scheduler loaders both borrow shared_encoder_constants_; this
+  // declaration order still destroys scheduler loaders before finalize loaders.
   std::unique_ptr<FinalizeBucketLoaderPool> finalize_loaders;
   AudioGeometry audio_geometry;
   int lane_count = 0;
