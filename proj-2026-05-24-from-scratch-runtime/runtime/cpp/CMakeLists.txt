@@ -39,6 +39,7 @@ add_library(nemotron_runtime STATIC
   lib/session/first_encoder.cpp
   lib/session/runtime.cpp
   lib/runtime_io/io.cpp
+  lib/runtime_io/prewarm.cpp
   lib/runtime_io/tmp_hygiene.cpp
   lib/runtime_io/picohttpparser.c
   lib/admission/density_admission.cpp

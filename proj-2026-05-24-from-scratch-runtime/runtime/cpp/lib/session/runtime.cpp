@@ -1,5 +1,6 @@
 #include "lib/session/runtime.h"
 
+#include "lib/runtime_io/prewarm.h"
 #include "lib/runtime_io/tmp_hygiene.h"
 #include "lib/scheduler/batched_steady_scheduler.h"
 #include "lib/session/first_encoder.h"
@@ -72,6 +73,21 @@ bool parse_enabled_env(const char* name, bool fallback) {
   const char* raw = std::getenv(name);
   if (raw == nullptr || raw[0] == '\0') return fallback;
   return std::strcmp(raw, "0") != 0;
+}
+
+bool parse_on_env(const char* name) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr) return false;
+  std::string value(raw);
+  size_t first = 0;
+  while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first]))) ++first;
+  size_t last = value.size();
+  while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1]))) --last;
+  value = value.substr(first, last - first);
+  for (char& ch : value) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return value == "1" || value == "true" || value == "on";
 }
 
 size_t gpu_used_bytes() {
@@ -746,18 +762,6 @@ struct SharedRuntime::Impl {
         finalize_buckets_dir(finalize_buckets_dir_from_config(cfg, artifact_dir)),
         device(torch::kCUDA, cfg.device_index) {
     runtime_io::reclaim_stale_aoti_tmp_dirs();
-    if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
-    background_warmup_enabled =
-        parse_enabled_env("NEMOTRON_WS_BACKGROUND_WARMUP", cfg.background_warmup_enabled);
-    if (background_warmup_enabled && cfg.warm_sync_lanes <= 0) {
-      throw std::runtime_error("warm_sync_lanes must be positive when background warmup is enabled");
-    }
-    if (background_warmup_enabled) {
-      warm_sync_lanes_requested =
-          parse_positive_env_int("NEMOTRON_WS_WARM_SYNC_LANES", cfg.warm_sync_lanes);
-    }
-    torch::NoGradGuard ng;
-    try {
 
     // Cold-start phase timing; aggregate lines intentionally overlap their sub-phases.
     using ColdStartClock = std::chrono::steady_clock;
@@ -783,6 +787,37 @@ struct SharedRuntime::Impl {
       cold_phase_prev = now;
     };
 
+    runtime_io::Prewarmer prewarmer;
+    const bool enc_first_ts = parse_enabled_env("NEMOTRON_WS_ENC_FIRST_TS", true);
+    if (parse_on_env("NEMOTRON_WS_PREWARM")) {
+      std::vector<std::string> prewarm_paths{
+          (fs::path(artifact_dir) / "finalize_shared_weights.ts").string()};
+      if (enc_first_ts) {
+        prewarm_paths.push_back((fs::path(artifact_dir) / "enc_first.ts").string());
+      }
+      prewarmer.start(prewarm_paths);
+      const std::string queued_paths = prewarmer.queued_paths_csv();
+      std::printf("PREWARM kicked files=%zu bytes=%llu paths=%s\n",
+                  prewarmer.queued_file_count(),
+                  static_cast<unsigned long long>(prewarmer.queued_bytes()),
+                  queued_paths.c_str());
+      std::fflush(stdout);
+      cold_phase("prewarm_kickoff");
+    }
+
+    if (cfg.steady_num_runners <= 0) throw std::runtime_error("steady_num_runners must be positive");
+    background_warmup_enabled =
+        parse_enabled_env("NEMOTRON_WS_BACKGROUND_WARMUP", cfg.background_warmup_enabled);
+    if (background_warmup_enabled && cfg.warm_sync_lanes <= 0) {
+      throw std::runtime_error("warm_sync_lanes must be positive when background warmup is enabled");
+    }
+    if (background_warmup_enabled) {
+      warm_sync_lanes_requested =
+          parse_positive_env_int("NEMOTRON_WS_WARM_SYNC_LANES", cfg.warm_sync_lanes);
+    }
+    torch::NoGradGuard ng;
+    try {
+
     bundle = torch::jit::load(bundle_path);
     verify_session_bundle_meta(bundle, false);
     tokenizer_value = tokenizer_from_bundle(bundle);
@@ -799,7 +834,6 @@ struct SharedRuntime::Impl {
     if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
       throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
     }
-    const bool enc_first_ts = parse_enabled_env("NEMOTRON_WS_ENC_FIRST_TS", true);
     shared_encoder_constants_ = std::make_unique<SharedEncoderConstants>(
         (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
         device,
@@ -898,6 +932,7 @@ struct SharedRuntime::Impl {
       std::fflush(stdout);
     }
     warm_inference_lanes();
+    prewarmer.join();
     cold_phase("lane_warmup");
     if (background_warmup_enabled) {
       launch_pending_background_warmup(cold_start_t0);

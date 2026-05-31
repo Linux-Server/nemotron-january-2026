@@ -1,0 +1,137 @@
+TMP_HYGIENE_SUMMARY reclaimed_dirs=0 reclaimed_mib=0.000 skipped_live=0
+PREWARM kicked files=2 bytes=4956681281 paths=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts,/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/enc_first.ts
+COLD_START_PHASE phase=prewarm_kickoff elapsed_ms=0.2 cumulative_ms=0.2
+tokenizer detok selftest PASS: pieces=1024 sequences=6158
+preproc manifest verified: sha256=5725abb4c736ddfafe2289ab4058fed24f1fa92340bfd0570786b499d6403a7a model=nvidia/nemotron-speech-streaming-en-0.6b trace_k=10080 torch=2.8.0+cu128 cuda=12.8
+COLD_START_PHASE phase=bundle_tokenizer_preproc elapsed_ms=2667.4 cumulative_ms=2667.6
+shared encoder constants loaded: entries=637 shared_delta_mib=2366.000 source=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/artifacts/finalize_shared_weights.ts
+COLD_START_PHASE phase=shared_encoder_constants_load elapsed_ms=1170.6 cumulative_ms=3838.2
+shared runtime first encoder ready: adapter=ts env_NEMOTRON_WS_ENC_FIRST_TS=1
+COLD_START_PHASE phase=enc_first_load elapsed_ms=568.6 cumulative_ms=4406.8
+finalize bucket manifest SHA mode: env=NEMOTRON_WS_VERIFY_MANIFEST_SHA mode=startup-cheap shared_weights_sha256=skipped package_verified=32 buckets=32
+runtime finalize manifest verified: buckets=32 weights_sha256=5690023b45bd9ca36a65344a2eac3ca3a77e6c6ebe868faf6c3d47f81f9b2c27 sha_mode=startup-cheap env=NEMOTRON_WS_VERIFY_MANIFEST_SHA num_runners=2 policy=ws_shared_finalize_pool
+COLD_START_PHASE phase=finalize_manifest_verify elapsed_ms=2059.4 cumulative_ms=6466.2
+runtime finalize shared constants ready: entries=637 shared_delta_mib=0.000 source=borrowed policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=34 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=35 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=36 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=37 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=38 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=39 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=40 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=41 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=42 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=43 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=44 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=45 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=46 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=47 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=48 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=0 T=49 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=43 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=44 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=45 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=46 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=47 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=48 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=49 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=50 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=51 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=52 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=53 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=54 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=55 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=56 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=57 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+runtime finalize bucket loaded: drop=2 T=58 constants=637 direct=637 alias=0 num_runners=2 loader_delta_mib=0.000 cumulative_loader_mib=0.000 policy=ws_shared_finalize_pool
+COLD_START_PHASE phase=finalize_bucket_bind_dlopen elapsed_ms=105.2 cumulative_ms=6571.4
+shared finalize loader pool ready: num_runners=2 loaded_buckets=32/32 shared_constants_mib=0.000 loader_mib=0.000 memory={"policy":"ws_shared_finalize_pool","num_runners_per_loaded_bucket":2,"total_manifest_buckets":32,"loaded_buckets":32,"shared_constants_delta_bytes":0,"loader_delta_bytes":0,"projected_all_buckets_same_runner_delta_bytes":0,"records":[{"drop":0,"T":34,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":35,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":36,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":37,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":38,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":39,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":40,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":41,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":42,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":43,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":44,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":45,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":46,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":47,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":48,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":0,"T":49,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":43,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":44,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":45,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":46,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":47,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":48,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":49,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":50,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":51,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":52,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":53,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":54,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":55,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":56,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":57,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0},{"drop":2,"T":58,"num_runners":2,"used_before_bytes":6644367360,"used_after_bytes":6644367360,"delta_bytes":0,"cumulative_delta_bytes":0}]}
+COLD_START_PHASE phase=finalize_preload elapsed_ms=2164.7 cumulative_ms=6571.5 aggregate=1
+inference lane pool built: lanes=64 per_lane_mib=36.062 total_lane_mib=2308.000 no_big_module_duplication=true shared_big_modules=enc_first_ts,finalize_loaders inline_enc_steady=skipped first_encoder=ts
+COLD_START_PHASE phase=lane_build elapsed_ms=737.7 cumulative_ms=7309.3
+COLD_START_PHASE phase=scheduler_preload_setup elapsed_ms=0.0 cumulative_ms=7309.3
+density batched steady manifest verified: buckets=3 package_verified=2 ep_verified=0 ep_skipped=2 shared_weight_sha256=skipped sha_mode=startup-cheap env=NEMOTRON_WS_VERIFY_MANIFEST_SHA borrowed_shared_constants=true
+COLD_START_PHASE phase=scheduler_manifest_verify elapsed_ms=149.3 cumulative_ms=7458.6
+COLD_START_PHASE phase=scheduler_shared_constants_load elapsed_ms=0.0 cumulative_ms=7458.6
+density batched steady shared constants ready: 637 entries policy=shared_runtime_scheduler source=borrowed
+  density batched steady bucket loaded B=1 package=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b1.pt2 constants=637 direct=637 alias=0 num_runners=1 policy=shared_runtime_scheduler
+  density batched steady bucket loaded B=4 package=/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/steady_b_artifacts/enc_steady_aoti_b4.pt2 constants=637 direct=637 alias=0 num_runners=1 policy=shared_runtime_scheduler
+COLD_START_PHASE phase=scheduler_bucket_bind_dlopen elapsed_ms=7.8 cumulative_ms=7466.4
+COLD_START_PHASE phase=scheduler_preload elapsed_ms=157.2 cumulative_ms=7466.5 aggregate=1
+B2_SCHEDULER_CONSTRUCT policy={B_max:4,window_ms:10,lone_timeout_ms:0,queue_capacity:16,use_b2_bucket:false} loaded_buckets=2 dispatcher_stream=0x645ab0e733f0
+B2_SCHEDULER_WARMUP bucket=1 rows=1
+B2_SCHEDULER_WARMUP bucket=4 rows=4
+COLD_START_PHASE phase=scheduler_warmup_start elapsed_ms=545.8 cumulative_ms=8012.3
+shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=1 steady_loader_sets=1 warmup_complete=true dispatcher_started=true
+inference lane warmup dispatch: lanes=64 full_lanes=1 full_iters_per_input=5 tail_iters_per_input=1 full_warmup_inputs=32 tail_warmup_inputs=1 tail_requested_inputs=1 tail_direct_finalize_buckets=15 finalize_buckets=32
+inference lane background warmup enabled: lanes=64 sync_lanes=4 remaining_lanes=60 warmed_lanes=0
+inference lane warmed: lane=0 mode=full iters=160 iters_per_input=5 warmup_inputs=32 direct_finalize_buckets=0 finalize_buckets=32 warmed_lanes=4
+inference lane warmed: lane=1 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=4
+inference lane warmed: lane=2 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=4
+inference lane warmed: lane=3 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=4
+inference lane sync warmup done: sync_lanes=4 total_iters=163 warmed_lanes=4 configured_lanes=64
+COLD_START_PHASE phase=lane_warmup elapsed_ms=8544.9 cumulative_ms=16557.2
+COLD_START_PHASE phase=sync_warm_done elapsed_ms=0.1 cumulative_ms=16557.2
+ws_server listening on 127.0.0.1:8092
+inference lane warmed: lane=4 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=12
+inference lane warmed: lane=5 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=50
+inference lane warmed: lane=6 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=52
+inference lane warmed: lane=7 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=52
+inference lane warmed: lane=8 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=52
+inference lane warmed: lane=9 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=52
+inference lane warmed: lane=10 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=52
+inference lane warmed: lane=11 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=12 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=13 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=14 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=15 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=16 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=17 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=18 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=19 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=20 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=21 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=61
+inference lane warmed: lane=22 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=23 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=24 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=25 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=26 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=27 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=28 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=29 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=30 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=31 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=32 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=33 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=34 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=35 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=36 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=37 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=38 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=39 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=40 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=41 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=42 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=43 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=44 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=45 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=46 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=47 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=48 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=49 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=50 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=51 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=52 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=53 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=54 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=55 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=56 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=57 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=58 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=59 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=60 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=61 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=62 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane warmed: lane=63 mode=tail iters=1 iters_per_input=1 warmup_inputs=1 direct_finalize_buckets=15 finalize_buckets=32 warmed_lanes=64
+inference lane pool warmed: lanes=64 total_iters=223 full_warmup_inputs=32 tail_warmup_inputs=1 tail_requested_inputs=1 tail_direct_finalize_buckets=15 finalize_bucket_coverage=32/32 full_lanes=1 full_iters_per_input=5 tail_iters_per_input=1 per_lane_mib=36.062
+COLD_START_PHASE phase=background_warm_complete elapsed_ms=52467.1 cumulative_ms=69024.3 background=1 warmed_lanes=64 lanes=64

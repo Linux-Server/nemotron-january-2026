@@ -1,0 +1,5 @@
+label	enc_first_ts	prewarm	cache	listen_ms	background_complete_ms	background_elapsed_ms	prewarm_kickoff_ms	bundle_tokenizer_preproc_ms	shared_encoder_constants_load_ms	enc_first_load_ms	lane_warmup_ms	peak_gpu_mib	peak_host_rss_mib	tmp_delta_mb
+prewarm_ts_cold_off	1	0	cold	21270.8	73702.8	52432.1	NA	2554.5	3215.3	3145.1	8757.4	14014	8661	134
+prewarm_ts_cold_on	1	1	cold	16557.2	69024.3	52467.1	0.2	2667.4	1170.6	568.6	8544.9	14014	9037	134
+prewarm_aoti_cold_off	0	0	cold	16543.7	75655.2	59111.6	NA	2532.4	3285.5	12.2	7111.3	11018	7506	138
+prewarm_aoti_cold_on	0	1	cold	14373.0	73320.7	58947.7	0.1	2650.8	1036.8	12.0	7083.6	11018	8344	138
