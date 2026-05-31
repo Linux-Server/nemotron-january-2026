@@ -1,0 +1,235 @@
+Starting Codex task thread.
+Thread ready (019e7d38-3153-7ff1-bfdc-75a62eeec23e).
+Turn started (019e7d38-3193-7f20-83db-3c75d921bfa9).
+Assistant message captured: I’ll first read the plan notes and the current encoder/runtime/session code so the migration ...
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/PLAN.md"
+Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/PLAN.md" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/probe1.md"
+Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/probe1.md" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/RUNBOOK-local-5090.md"
+Command failed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/RUNBOOK-local-5090.md" (exit 2)
+Running command: /bin/bash -lc "sed -n '1,220p' cpp/lib/session/first_encoder.h"
+Command completed: /bin/bash -lc "sed -n '1,220p' cpp/lib/session/first_encoder.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' cpp/lib/session/first_encoder.cpp"
+Command completed: /bin/bash -lc "sed -n '1,260p' cpp/lib/session/first_encoder.cpp" (exit 0)
+Assistant message captured: The plan confirms the key constraint: Step 5 is an adapter migration with `NEMOTRON_WS_ENC_FI...
+Running command: /bin/bash -lc "rg --files -g 'RUNBOOK*' -g '*runbook*'"
+Command completed: /bin/bash -lc "rg --files -g 'RUNBOOK*' -g '*runbook*'" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '1,220p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1320,1485p' cpp/lib/session/runtime.cpp"
+Running command: /bin/bash -lc "sed -n '700,870p' cpp/lib/session/runtime.cpp"
+Running command: /bin/bash -lc "sed -n '1080,1160p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '1320,1485p' cpp/lib/session/runtime.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '700,870p' cpp/lib/session/runtime.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1080,1160p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1120,1345p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '1120,1345p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1520,1645p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '1520,1645p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' RUNBOOK-local-5090.md"
+Running command: /bin/bash -lc "sed -n '320,430p' cpp/lib/session/session.h"
+Running command: /bin/bash -lc "sed -n '1850,1915p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1,260p' RUNBOOK-local-5090.md" (exit 0)
+Command completed: /bin/bash -lc "sed -n '320,430p' cpp/lib/session/session.h" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1850,1915p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "enc_first|run_first_encoder|warm_stream_encoder_artifacts|FirstEncoder"...
+Command completed: /bin/bash -lc 'rg -n "enc_first|run_first_encoder|warm_stream_encoder_artifacts|FirstEncoder"... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/session.h"
+Command completed: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/session.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '2440,2505p' cpp/lib/session/session.cpp"
+Running command: /bin/bash -lc "sed -n '2760,3015p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '2760,3015p' cpp/lib/session/session.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '2440,2505p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '920,985p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '920,985p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '3020,3530p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '3020,3530p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '4420,5060p' cpp/lib/session/session.cpp"
+Running command: /bin/bash -lc "sed -n '5270,5870p' cpp/lib/session/session.cpp"
+Running command: /bin/bash -lc "sed -n '5200,5270p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '4420,5060p' cpp/lib/session/session.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '5200,5270p' cpp/lib/session/session.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '5270,5870p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "class SharedEncoderConstants|struct SharedEncoderConstants|SharedEncode...
+Command completed: /bin/bash -lc 'rg -n "class SharedEncoderConstants|struct SharedEncoderConstants|SharedEncode... (exit 0)
+Running command: /bin/bash -lc "sed -n '330,430p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '330,430p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "run_long_stream_cache_stability_check|run_real_vad_start_cancel_check|r...
+Running command: /bin/bash -lc "rg -n \"session_runtime_append_pcm_and_drain\\(|session_runtime_vad_start\\(\"...
+Command completed: /bin/bash -lc 'rg -n "run_long_stream_cache_stability_check|run_real_vad_start_cancel_check|r... (exit 0)
+Command completed: /bin/bash -lc "rg -n \"session_runtime_append_pcm_and_drain\\(|session_runtime_vad_start\\(\"... (exit 0)
+Assistant message captured: I’ve found the serving path, the replay binary path, and the runtime warmup calls. I’m going ...
+Running command: /bin/bash -lc "perl -0pi -e 's/torch::jit::Module& enc_first/FirstEncoder& enc_first/g' cpp/l...
+Command completed: /bin/bash -lc "perl -0pi -e 's/torch::jit::Module& enc_first/FirstEncoder& enc_first/g' cpp/l... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,30p' cpp/lib/session/session.h"
+Command completed: /bin/bash -lc "sed -n '1,30p' cpp/lib/session/session.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '1878,1912p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1878,1912p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '330,420p' cpp/lib/session/session.h"
+Running command: /bin/bash -lc "sed -n '1,20p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '330,420p' cpp/lib/session/session.h" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1,20p' cpp/lib/session/session.cpp" (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "rg -n \"run_first_encoder\\(enc_first|run_first_encoder\\(["'^*]" cpp/lib/sess...
+Command completed: /bin/bash -lc "rg -n \"run_first_encoder\\(enc_first|run_first_encoder\\(["'^*]" cpp/lib/sess... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "rg -n \"torch::jit::Module& enc_first|FirstEncoder& enc_first|run_first_encode...
+Command completed: /bin/bash -lc "rg -n \"torch::jit::Module& enc_first|FirstEncoder& enc_first|run_first_encode... (exit 0)
+Running command: /bin/bash -lc "sed -n '3318,3495p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '3318,3495p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '2468,2492p' cpp/lib/session/session.cpp"
+Running command: /bin/bash -lc "sed -n '2778,2990p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '2468,2492p' cpp/lib/session/session.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '2778,2990p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/runtime.h"
+Command completed: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/runtime.h" (exit 0)
+Assistant message captured: The session API surface is now typed to `FirstEncoder&`, with the raw `run_first_encoder(torc...
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "rg -n \"\\benc_first\\b|first_encoder_\" cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "rg -n \"\\benc_first\\b|first_encoder_\" cpp/lib/session/runtime.cpp" (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "sed -n '1418,1465p' cpp/lib/session/runtime.cpp && sed -n '780,825p' cpp/lib/s...
+Command completed: /bin/bash -lc "sed -n '1418,1465p' cpp/lib/session/runtime.cpp && sed -n '780,825p' cpp/lib/s... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "rg -n \"first_encoder.cpp|first_encoder\" cpp/CMakeLists.txt cpp -g 'CMakeList...
+Command completed: /bin/bash -lc "rg -n \"first_encoder.cpp|first_encoder\" cpp/CMakeLists.txt cpp -g 'CMakeList... (exit 0)
+Running command: /bin/bash -lc 'git diff -- cpp/lib/session/runtime.cpp cpp/lib/session/session.h cpp/lib/sess...
+Command completed: /bin/bash -lc 'git diff -- cpp/lib/session/runtime.cpp cpp/lib/session/session.h cpp/lib/sess... (exit 0)
+Running command: /bin/bash -lc "rg -n \"torch::jit::Module& enc_first|FirstEncoder& enc_first|run_first_encode...
+Command completed: /bin/bash -lc "rg -n \"torch::jit::Module& enc_first|FirstEncoder& enc_first|run_first_encode... (exit 0)
+Assistant message captured: The runtime now constructs shared constants before building `first_encoder_`; TS mode loads `...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density... (exit 0)
+Assistant message captured: The first compile is green for `ws_server` and `density_main`, so the wide signature migratio...
+Running command: /bin/bash -lc "rg -n \"s\\.enc_first|\\benc_first\\b\" cpp/lib/session/runtime.cpp | head -80"
+Command completed: /bin/bash -lc "rg -n \"s\\.enc_first|\\benc_first\\b\" cpp/lib/session/runtime.cpp | head -80" (exit 0)
+Running command: /bin/bash -lc 'git status --short'
+Command completed: /bin/bash -lc 'git status --short' (exit 0)
+Running command: /bin/bash -lc "rg -n \"torch::jit::Module& enc_first|session_runtime_append_pcm_and_drain\\(|...
+Command completed: /bin/bash -lc "rg -n \"torch::jit::Module& enc_first|session_runtime_append_pcm_and_drain\\(|... (exit 0)
+Assistant message captured: The audit shows runtime no longer has an `enc_first` module member; only the mutex and TS ada...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm... (exit 0)
+Assistant message captured: `runtime-smoke` passed with 0 token and 0 event divergences. It also shows the TS-default pat...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co...
+Assistant message captured: The b2-t1 run is still executing; it tends to stay quiet while it loads and warms artifacts. ...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co... (exit 0)
+Assistant message captured: `b2-t1` passed all 6 cases with 0 token divergences, 0 event divergences, and 0 errors. I’m r...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-...
+Assistant message captured: The parity harness is running the 200-row default and has already confirmed `ENC_FIRST_TS_ADA...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-... (exit 0)
+Assistant message captured: `enc-first-parity` still passes: 200 rows, final token divergences 0, event divergences 1, er...
+Running command: /bin/bash -lc 'proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python tests/server_com...
+Assistant message captured: The compat oracle has launched both servers and is waiting for the C++ server to finish cold ...
+Assistant message captured: The oracle’s 8 utterances all matched event-for-event and final text; it is still doing the p...
+Command completed: /bin/bash -lc 'proj-2026-05-24-from-scratch-runtime/runtime/.venv/bin/python tests/server_com... (exit 0)
+Assistant message captured: Phase 1 compat passed: 8/8 event-for-event, perf-gate PASS with overhead -1.927 ms. I’m readi...
+Running command: /bin/bash -lc 'ls -l artifacts/logs/server_compat_20260531T090021Z'
+Command completed: /bin/bash -lc 'ls -l artifacts/logs/server_compat_20260531T090021Z' (exit 0)
+Running command: /bin/bash -lc 'cat artifacts/logs/server_compat_20260531T090021Z/summary.json'
+Command completed: /bin/bash -lc 'cat artifacts/logs/server_compat_20260531T090021Z/summary.json' (exit 0)
+Running command: /bin/bash -lc 'rg -n "shared runtime first encoder ready|COLD_START_PHASE phase=enc_first_loa...
+Command failed: /bin/bash -lc 'rg -n "shared runtime first encoder ready|COLD_START_PHASE phase=enc_first_loa... (exit 1)
+Running command: /bin/bash -lc "sed -n '1,220p' artifacts/logs/server_compat_20260531T090021Z/cpp_ws_server.log"
+Command completed: /bin/bash -lc "sed -n '1,220p' artifacts/logs/server_compat_20260531T090021Z/cpp_ws_server.log" (exit 0)
+Assistant message captured: Phase 1 is complete and byte/event exact on the serving oracle. I’m starting Phase 2 now with...
+Running command: /bin/bash -lc 'NEMOTRON_WS_ENC_FIRST_TS=0 ./container/enter.sh cpp/build_step10/density_main ...
+Assistant message captured: The full-1000 parity run is in the decode phase. It loaded the AOTI adapter with borrowed con...
+Assistant message captured: The full-1000 shadow is still running and remains quiet between setup and final summary. I’m ...
+Assistant message captured: This full-1000 pass is taking a few minutes, which matches the amount of decode work. No erro...
+Assistant message captured: Still waiting on the 1000-row parity summary. Since this is a single long-running process and...
+Assistant message captured: The 1000-row shadow has now been running several minutes with no failure output. I’m continui...
+Assistant message captured: Still no summary, but the process remains alive. I’m going to keep waiting; after this gate f...
+Running command: /bin/bash -lc "pgrep -af 'density_main artifacts --mode enc-first-parity'"
+Command completed: /bin/bash -lc "pgrep -af 'density_main artifacts --mode enc-first-parity'" (exit 0)
+Running command: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader'
+Command completed: /bin/bash -lc 'nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader' (exit 0)
+Assistant message captured: I checked the process: `density_main ... --correctness-rows 1000` is still active and the GPU...
+Assistant message captured: The full-1000 shadow has started reporting strict interim-event mismatches, while final-token...
+Assistant message captured: The shadow has at least three strict interim-event mismatches reported so far (including rows...
+Assistant message captured: The full-1000 run is still active after printing mismatch samples. I’m staying with it to com...
+Command completed: /bin/bash -lc 'NEMOTRON_WS_ENC_FIRST_TS=0 ./container/enter.sh cpp/build_step10/density_main ... (exit 0)
+Assistant message captured: The full-1000 C++ enc_first shadow finished: final_token_divergences=0, event_divergences=4, ...
+Running command: /bin/bash -lc "sed -n '90,180p' tests/server_compat/run_compat.py"
+Command completed: /bin/bash -lc "sed -n '90,180p' tests/server_compat/run_compat.py" (exit 0)
+Running command: /bin/bash -lc 'rg -n "Popen|create_subprocess|env=|os.environ|NEMOTRON_WS" tests/server_compa...
+Command completed: /bin/bash -lc 'rg -n "Popen|create_subprocess|env=|os.environ|NEMOTRON_WS" tests/server_compa... (exit 0)
+Running command: /bin/bash -lc "sed -n '180,215p' tests/server_compat/run_compat.py && sed -n '680,715p' tests...
+Command completed: /bin/bash -lc "sed -n '180,215p' tests/server_compat/run_compat.py && sed -n '680,715p' tests... (exit 0)
+Assistant message captured: `run_compat.py` builds the process environment from `os.environ.copy()`, so exporting `NEMOTR...
+Running command: /bin/bash -lc 'NEMOTRON_WS_ENC_FIRST_TS=0 proj-2026-05-24-from-scratch-runtime/runtime/.venv/...
+Assistant message captured: The AOTI compat oracle is in server startup. This run should also give the cold remeasure: it...
+Assistant message captured: The AOTI server oracle has matched all 8 utterances event-for-event so far and the WS perf pr...
+Command completed: /bin/bash -lc 'NEMOTRON_WS_ENC_FIRST_TS=0 proj-2026-05-24-from-scratch-runtime/runtime/.venv/... (exit 0)
+Assistant message captured: The AOTI compat oracle passed: 8/8 event-for-event, perf-gate PASS with overhead -3.010 ms. I...
+Running command: /bin/bash -lc "sed -n '1,120p' artifacts/logs/server_compat_20260531T093430Z/cpp_ws_server.log"
+Command completed: /bin/bash -lc "sed -n '1,120p' artifacts/logs/server_compat_20260531T093430Z/cpp_ws_server.log" (exit 0)
+Running command: /bin/bash -lc "python3 - <<'PY' import json from pathlib import Path p=Path('artifacts/logs/s...
+Running command: /bin/bash -lc "python3 - <<'PY' import json from pathlib import Path for name in ['server_com...
+Command completed: /bin/bash -lc "python3 - <<'PY' import json from pathlib import Path for name in ['server_com... (exit 0)
+Command completed: /bin/bash -lc "python3 - <<'PY' import json from pathlib import Path p=Path('artifacts/logs/s... (exit 0)
+Running command: /bin/bash -lc 'rg -n "COLD_START_PHASE phase=(enc_first_load|lane_warmup|sync_warm_done|backg...
+Command completed: /bin/bash -lc 'rg -n "COLD_START_PHASE phase=(enc_first_load|lane_warmup|sync_warm_done|backg... (exit 0)
+Running command: /bin/bash -lc "python3 - <<'PY' from pathlib import Path import re for name in ['server_compa...
+Command completed: /bin/bash -lc "python3 - <<'PY' from pathlib import Path import re for name in ['server_compa... (exit 0)
+Running command: /bin/bash -lc 'rg -n "NEMOTRON_WS_ENC_FIRST_TS|first_encoder_" cpp/lib/session/runtime.cpp cp...
+Command completed: /bin/bash -lc 'rg -n "NEMOTRON_WS_ENC_FIRST_TS|first_encoder_" cpp/lib/session/runtime.cpp cp... (exit 0)
+Running command: /bin/bash -lc 'git diff --check -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cp...
+Command completed: /bin/bash -lc 'git diff --check -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cp... (exit 0)
+Running command: /bin/bash -lc 'git diff --stat -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cpp...
+Command completed: /bin/bash -lc 'git diff --stat -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cpp... (exit 0)
+Assistant message captured: The final audit confirms the default is still `parse_enabled_env("NEMOTRON_WS_ENC_FIRST_TS", ...
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc 'git diff --check -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cp...
+Command completed: /bin/bash -lc 'git diff --check -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cp... (exit 0)
+Running command: /bin/bash -lc "git diff -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cpp/lib/se...
+Command completed: /bin/bash -lc "git diff -- cpp/lib/session/runtime.cpp cpp/lib/session/session.cpp cpp/lib/se... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '334,420p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '334,420p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2476,2492p;2812,2822p;2968,2978p;...
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2476,2492p;2812,2822p;2968,2978p;... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '792,824p;964,994p;1448,1462p;1206...
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '792,824p;964,994p;1448,1462p;1206... (exit 0)
+Running command: /bin/bash -lc 'git status --short -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ses...
+Command completed: /bin/bash -lc 'git status --short -- proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/ses... (exit 0)
+Assistant message captured: Implemented Step 5. No commit made, and `NEMOTRON_WS_ENC_FIRST_TS` still defaults to TS. **Fi...
+Turn completed.
+Implemented Step 5. No commit made, and `NEMOTRON_WS_ENC_FIRST_TS` still defaults to TS.
+
+**Files Changed**
+- [runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:800): `SharedRuntime` now builds `FirstEncoder` after `SharedEncoderConstants`; TS path owns `enc_first_ts_module_`, AOTI path binds `enc_first_aoti.pt2` to borrowed shared constants.
+- [runtime.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1455): member order keeps `first_encoder_` destroyed before the TS module/shared constants it depends on.
+- [session.h](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.h:360), [session.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:2479): append/vad/replay/warmup chains now take `FirstEncoder&`; raw `run_first_encoder(torch::jit::Module&)` stays for `TsFirstEncoder`.
+- [session.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:5227): replay binary keeps TS semantics by wrapping raw loaded TS modules in `TsFirstEncoder`.
+
+**Phase 1 TS Default**
+- Build: PASS, `ws_server` + `density_main`.
+- `runtime-smoke`: PASS, rows=4, token_divergences=0, event_divergences=0, errors=0.
+- `b2-t1 --correctness-rows 4`: PASS, 6 cases, token_divergences=0, event_divergences=0, errors=0.
+- `enc-first-parity`: PASS, rows=200, final_token_divergences=0, event_divergences=1, errors=0, `ts_adapter_byte_exact=PASS`.
+- Compat oracle TS default: `COMPAT PASS`, 8/8 event-for-event, perf-gate PASS: `ws_p95_ms=9.824`, `density_p95_ms=11.751`, `overhead_ms=-1.927`.
+- TS cold-start log: `adapter=ts`, `env_NEMOTRON_WS_ENC_FIRST_TS=1`, `enc_first_load=634.2 ms`.
+
+**Phase 2 AOTI Opt-In**
+- Full-1000 enc_first shadow: PASS verdict, rows=1000, `final_token_divergences=0`, `event_divergences=4`, errors=0.
+- Compat oracle with `NEMOTRON_WS_ENC_FIRST_TS=0`: `COMPAT PASS`, 8/8 event-for-event, perf-gate PASS: `ws_p95_ms=9.708`, `density_p95_ms=12.718`, `overhead_ms=-3.010`.
+- AOTI cold-start log: `adapter=aoti`, `env_NEMOTRON_WS_ENC_FIRST_TS=0`, `enc_first_load=4.5 ms`; big-module log drops `enc_first_ts`.
+- GPU checkpoint before finalize bucket binding: TS `6287.6 MiB`, AOTI `3923.6 MiB`, delta `-2364.0 MiB`, matching removal of the 2.48GB TS enc_first blob.
+
+**Concerns**
+- The full-1000 shadow has 4 strict interim-event divergences despite 0 final-token divergences.
+- `proj-2026-05-30-2202/PLAN.md` is dirty in the worktree, but I did not edit it.
+
+**Recommendation**
+Do not flip the default to AOTI yet. The AOTI serving oracle is clean, but the plan’s stricter full-1000 default-on gate requires 0 token/event divergences, and it currently has 4 event divergences. Keep TS default and leave AOTI opt-in for reviewer evaluation.

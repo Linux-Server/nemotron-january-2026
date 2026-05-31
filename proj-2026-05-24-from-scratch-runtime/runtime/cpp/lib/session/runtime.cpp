@@ -1,6 +1,7 @@
 #include "lib/session/runtime.h"
 
 #include "lib/scheduler/batched_steady_scheduler.h"
+#include "lib/session/first_encoder.h"
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
@@ -790,18 +791,33 @@ struct SharedRuntime::Impl {
     session_runtime_verify_preproc_manifest(artifact_dir, preproc_path, audio_geometry);
     cold_phase("bundle_tokenizer_preproc");
 
-    enc_first = load_module_on_device((fs::path(artifact_dir) / "enc_first.ts").string(), device);
-    cold_phase("enc_first_load");
     // Fail fast on the invalid shadow-without-scheduler config BEFORE doing any
     // expensive inline/finalize loads (shadow compares scheduler vs inline, so it
     // needs the scheduler). Mirrors the upstream ws_server.cpp:706 guard.
     if (cfg.steady_shadow_enabled && !cfg.scheduler_enabled) {
       throw std::runtime_error("NEMOTRON_WS_STEADY_SHADOW requires NEMOTRON_WS_SCHEDULER=1");
     }
+    const bool enc_first_ts = parse_enabled_env("NEMOTRON_WS_ENC_FIRST_TS", true);
     shared_encoder_constants_ = std::make_unique<SharedEncoderConstants>(
         (fs::path(artifact_dir) / "finalize_shared_weights.ts").string(),
         device,
         cold_phase);
+    if (enc_first_ts) {
+      enc_first_ts_module_ =
+          load_module_on_device((fs::path(artifact_dir) / "enc_first.ts").string(), device);
+      first_encoder_ = std::make_unique<TsFirstEncoder>(enc_first_ts_module_);
+    } else {
+      first_encoder_ = std::make_unique<AotiFirstEncoder>(
+          (fs::path(artifact_dir) / "enc_first_aoti.pt2").string(),
+          shared_encoder_constants_->constants(),
+          device,
+          cfg.steady_num_runners);
+    }
+    std::printf("shared runtime first encoder ready: adapter=%s env_NEMOTRON_WS_ENC_FIRST_TS=%s\n",
+                first_encoder_->kind(),
+                enc_first_ts ? "1" : "0");
+    std::fflush(stdout);
+    cold_phase("enc_first_load");
     const bool need_inline_at_startup = !cfg.scheduler_enabled || cfg.steady_shadow_enabled;
     if (need_inline_at_startup) {
       (void)ensure_inline_enc_steady();
@@ -952,16 +968,27 @@ struct SharedRuntime::Impl {
                                std::to_string(bytes_to_mib(lane_delta_per_lane_bytes)));
     }
     const char* inline_status = enc_steady ? "loaded" : "skipped";
-    const char* shared_big_modules = enc_steady
-                                         ? "enc_first,enc_steady,finalize_loaders"
-                                         : "enc_first,finalize_loaders";
+    const bool first_encoder_ts = first_encoder_ != nullptr &&
+                                  std::string(first_encoder_->kind()) == "ts";
+    std::string shared_big_modules;
+    if (first_encoder_ts && enc_steady) {
+      shared_big_modules = "enc_first_ts,enc_steady,finalize_loaders";
+    } else if (first_encoder_ts) {
+      shared_big_modules = "enc_first_ts,finalize_loaders";
+    } else if (enc_steady) {
+      shared_big_modules = "enc_steady,finalize_loaders";
+    } else {
+      shared_big_modules = "finalize_loaders";
+    }
     std::printf("inference lane pool built: lanes=%d per_lane_mib=%.3f total_lane_mib=%.3f "
-                "no_big_module_duplication=true shared_big_modules=%s inline_enc_steady=%s\n",
+                "no_big_module_duplication=true shared_big_modules=%s inline_enc_steady=%s "
+                "first_encoder=%s\n",
                 lane_count,
                 bytes_to_mib(lane_delta_per_lane_bytes),
                 bytes_to_mib(lane_delta_bytes),
-                shared_big_modules,
-                inline_status);
+                shared_big_modules.c_str(),
+                inline_status,
+                first_encoder_ != nullptr ? first_encoder_->kind() : "unset");
     std::fflush(stdout);
   }
 
@@ -1183,7 +1210,7 @@ struct SharedRuntime::Impl {
             (void)session_runtime_append_pcm_and_drain(warm_state,
                                                        warmup_input.audio,
                                                        *warm_audio,
-                                                       enc_first,
+                                                       *first_encoder_,
                                                        inline_enc_steady_ptr(),
                                                        ctx,
                                                        device,
@@ -1425,7 +1452,11 @@ struct SharedRuntime::Impl {
   std::unique_ptr<SharedEncoderConstants> shared_encoder_constants_;
   torch::jit::Module bundle;
   Tokenizer tokenizer_value;
-  torch::jit::Module enc_first;
+  // TsFirstEncoder references enc_first_ts_module_; AotiFirstEncoder borrows
+  // shared_encoder_constants_. Reverse destruction therefore drops
+  // first_encoder_ before either referenced owner.
+  torch::jit::Module enc_first_ts_module_;
+  std::unique_ptr<FirstEncoder> first_encoder_;
   std::mutex enc_first_mutex;
   std::unique_ptr<AOTIModelPackageLoader> enc_steady;
   std::once_flag enc_steady_once;
@@ -1613,7 +1644,7 @@ struct SessionRuntime::Impl {
         session_runtime_append_pcm_and_drain(state,
                                              pcm,
                                              *audio,
-                                             s.enc_first,
+                                             *s.first_encoder_,
                                              s.inline_enc_steady_ptr(),
                                              ctx,
                                              s.device,
@@ -1627,7 +1658,7 @@ struct SessionRuntime::Impl {
         session_runtime_append_pcm_and_drain(state,
                                              pcm,
                                              *audio,
-                                             s.enc_first,
+                                             *s.first_encoder_,
                                              s.inline_enc_steady_ptr(),
                                              ctx,
                                              s.device,
@@ -1666,7 +1697,7 @@ struct SessionRuntime::Impl {
                 std::chrono::steady_clock::now() - enc_first_wait_start).count();
         session_runtime_vad_start(state,
                                   *audio,
-                                  s.enc_first,
+                                  *s.first_encoder_,
                                   s.inline_enc_steady_ptr(),
                                   ctx,
                                   s.device,
@@ -1679,7 +1710,7 @@ struct SessionRuntime::Impl {
       } else {
         session_runtime_vad_start(state,
                                   *audio,
-                                  s.enc_first,
+                                  *s.first_encoder_,
                                   s.inline_enc_steady_ptr(),
                                   ctx,
                                   s.device,

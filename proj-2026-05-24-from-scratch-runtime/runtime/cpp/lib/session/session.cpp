@@ -7,6 +7,7 @@
 // The emitted cumulative tokens must exactly equal finalize_ref gold tokens.
 // The ordered interim/final/suppressed event stream is checked at the same
 // WORD/TEXT level as finalize_ref._continuous_append_only_delta.
+#include "lib/session/first_encoder.h"
 #include "lib/scheduler/batched_steady_scheduler.h"
 
 #include <c10/cuda/CUDAGuard.h>
@@ -2476,13 +2477,15 @@ static void run_steady_shadow_compare_and_commit(SessionState& state,
 }
 
 static void warm_stream_encoder_artifacts(torch::jit::Module& bundle,
-                                          torch::jit::Module& enc_first,
+                                          FirstEncoder& enc_first,
                                           AOTIModelPackageLoader& enc_steady,
                                           torch::Device device) {
   SessionState warm;
   reset_session(warm, bundle, device);
   auto first_chunk = torch::zeros({1, 128, SHIFT}, torch::dtype(torch::kFloat32).device(device));
-  auto first_out = run_first_encoder(enc_first, first_chunk, warm);
+  auto first_out = enc_first.run(first_chunk,
+                                 warm,
+                                 c10::cuda::getCurrentCUDAStream(first_chunk.get_device()));
   warm.clc = first_out[2].clone();
   warm.clt = first_out[3].clone();
   warm.clcl = first_out[4].clone();
@@ -2786,7 +2789,7 @@ static void run_steady_chunk_tensor(SessionState& state,
                                     const std::string& prefix,
                                     int chunk_index,
                                     const torch::Tensor& new_mel_in,
-                                    torch::jit::Module& enc_first,
+                                    FirstEncoder& enc_first,
                                     AOTIModelPackageLoader& enc_steady,
                                     torch::jit::Module& joint,
                                     torch::jit::Module& predict,
@@ -2815,7 +2818,7 @@ static void run_steady_chunk_tensor(SessionState& state,
   if (expected_first) {
     if (drop_extra != 0 || chunk_T != new_mel.size(2)) throw std::runtime_error("first steady geometry mismatch");
     chunk = new_mel;
-    out = run_first_encoder(enc_first, chunk, state);
+    out = enc_first.run(chunk, state, c10::cuda::getCurrentCUDAStream(chunk.get_device()));
     observe_first_chunk_drift(bundle, prefix, chunk_index, out, device, first_chunk_stats);
   } else {
     if (!state.ring.defined()) throw std::runtime_error("steady continuation missing mel ring");
@@ -2856,7 +2859,7 @@ static void run_steady_chunk(SessionState& state,
                              torch::jit::Module& bundle,
                              const std::string& prefix,
                              int chunk_index,
-                             torch::jit::Module& enc_first,
+                             FirstEncoder& enc_first,
                              AOTIModelPackageLoader& enc_steady,
                              torch::jit::Module& joint,
                              torch::jit::Module& predict,
@@ -2881,7 +2884,7 @@ static void run_steady_chunk_from_audio(SessionState& state,
                                         const std::string& prefix,
                                         int chunk_index,
                                         AudioFrontend& audio,
-                                        torch::jit::Module& enc_first,
+                                        FirstEncoder& enc_first,
                                         AOTIModelPackageLoader& enc_steady,
                                         torch::jit::Module& joint,
                                         torch::jit::Module& predict,
@@ -2917,7 +2920,7 @@ static int drain_audio_steady(SessionState& state,
                               torch::jit::Module& bundle,
                               const std::string& prefix,
                               AudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader& enc_steady,
                               torch::jit::Module& joint,
                               torch::jit::Module& predict,
@@ -2947,7 +2950,7 @@ static int drain_audio_steady(SessionState& state,
 
 static void run_steady_chunk_tensor_runtime(SessionState& state,
                                             const torch::Tensor& new_mel_in,
-                                            torch::jit::Module& enc_first,
+                                            FirstEncoder& enc_first,
                                             AOTIModelPackageLoader* enc_steady,
                                             const ExecutionContext& ctx,
                                             torch::Device device,
@@ -2970,7 +2973,7 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
   std::vector<at::Tensor> out;
   if (expected_first) {
     chunk = new_mel;
-    out = run_first_encoder(enc_first, chunk, state, ctx);
+    out = enc_first.run(chunk, state, ctx.stream);
   } else {
     if (!state.ring.defined()) throw std::runtime_error(label + " runtime continuation missing mel ring");
     chunk = torch::cat({state.ring, new_mel}, 2).contiguous();
@@ -3036,7 +3039,7 @@ static void run_steady_chunk_tensor_runtime(SessionState& state,
 
 static int drain_audio_steady_runtime(SessionState& state,
                                       AudioFrontend& audio,
-                                      torch::jit::Module& enc_first,
+                                      FirstEncoder& enc_first,
                                       AOTIModelPackageLoader* enc_steady,
                                       const ExecutionContext& ctx,
                                       torch::Device device,
@@ -3086,7 +3089,7 @@ static int drain_audio_steady_runtime(SessionState& state,
 static int append_pcm_and_drain_runtime(SessionState& state,
                                         const std::vector<float>& pcm,
                                         AudioFrontend& audio,
-                                        torch::jit::Module& enc_first,
+                                        FirstEncoder& enc_first,
                                         AOTIModelPackageLoader* enc_steady,
                                         const ExecutionContext& ctx,
                                         torch::Device device,
@@ -3124,7 +3127,7 @@ static int append_pcm_and_drain_runtime(SessionState& state,
 static int append_pcm_and_drain_runtime(SessionState& state,
                                         const std::vector<float>& pcm,
                                         AudioFrontend& audio,
-                                        torch::jit::Module& enc_first,
+                                        FirstEncoder& enc_first,
                                         AOTIModelPackageLoader* enc_steady,
                                         torch::jit::Module& joint,
                                         torch::jit::Module& predict,
@@ -3151,7 +3154,7 @@ static int append_pcm_and_drain_runtime(SessionState& state,
 
 static int flush_post_stop_audio_runtime(SessionState& state,
                                          AudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
@@ -3186,7 +3189,7 @@ static int flush_post_stop_audio_runtime(SessionState& state,
 
 static int flush_post_stop_audio_runtime(SessionState& state,
                                          AudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
@@ -3217,7 +3220,7 @@ void vad_stop(SessionState& state) {
 
 static int vad_start(SessionState& state,
                      AudioFrontend& audio,
-                     torch::jit::Module& enc_first,
+                     FirstEncoder& enc_first,
                      AOTIModelPackageLoader* enc_steady,
                      const ExecutionContext& ctx,
                      torch::Device device,
@@ -3267,7 +3270,7 @@ static int vad_start(SessionState& state,
 
 static int vad_start(SessionState& state,
                      AudioFrontend& audio,
-                     torch::jit::Module& enc_first,
+                     FirstEncoder& enc_first,
                      AOTIModelPackageLoader* enc_steady,
                      torch::jit::Module& joint,
                      torch::jit::Module& predict,
@@ -3330,7 +3333,7 @@ void reset_session_runtime_audio_front(SessionState& state, RuntimeAudioFrontend
 int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
@@ -3358,7 +3361,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
 int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
@@ -3390,7 +3393,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
 int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
@@ -3413,7 +3416,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
 
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader* enc_steady,
                               const ExecutionContext& ctx,
                               torch::Device device,
@@ -3439,7 +3442,7 @@ int session_runtime_vad_start(SessionState& state,
 
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader* enc_steady,
                               const ExecutionContext& ctx,
                               torch::Device device,
@@ -3469,7 +3472,7 @@ int session_runtime_vad_start(SessionState& state,
 
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader* enc_steady,
                               torch::jit::Module& joint,
                               torch::jit::Module& predict,
@@ -3493,7 +3496,7 @@ static int append_audio_and_drain(SessionState& state,
                                   torch::jit::Module& bundle,
                                   const std::string& prefix,
                                   AudioFrontend& audio,
-                                  torch::jit::Module& enc_first,
+                                  FirstEncoder& enc_first,
                                   AOTIModelPackageLoader& enc_steady,
                                   torch::jit::Module& joint,
                                   torch::jit::Module& predict,
@@ -4443,7 +4446,7 @@ static void print_long_stream_cache_summary(const LongStreamCacheStats& stats) {
 static LongStreamCacheStats run_long_stream_cache_stability_check(
     torch::jit::Module& bundle,
     bool multiturn,
-    torch::jit::Module& enc_first,
+    FirstEncoder& enc_first,
     AOTIModelPackageLoader& enc_steady,
     torch::jit::Module& joint,
     torch::jit::Module& predict,
@@ -4635,7 +4638,7 @@ static bool run_real_vad_start_cancel_check(
     torch::jit::Module& bundle,
     bool multiturn,
     AudioFrontend& audio,
-    torch::jit::Module& enc_first,
+    FirstEncoder& enc_first,
     AOTIModelPackageLoader& enc_steady,
     std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
     torch::jit::Module& joint,
@@ -4786,7 +4789,7 @@ static bool run_real_vad_start_cancel_check(
 
 static bool run_synthetic_coverage_checks(
     torch::jit::Module& bundle,
-    torch::jit::Module& enc_first,
+    FirstEncoder& enc_first,
     std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
     torch::jit::Module& joint,
     torch::jit::Module& predict,
@@ -4833,7 +4836,9 @@ static bool run_synthetic_coverage_checks(
     SessionState one;
     reset_session(one, bundle, device);
     auto first_chunk = torch::zeros({1, 128, SHIFT}, torch::dtype(torch::kFloat32).device(device));
-    auto first_out = run_first_encoder(enc_first, first_chunk, one);
+    auto first_out = enc_first.run(first_chunk,
+                                   one,
+                                   c10::cuda::getCurrentCUDAStream(first_chunk.get_device()));
     apply_encoder_outputs(one, first_out, joint, predict, nullptr, "coverage.one_steady");
     one.ring = first_chunk.slice(2, std::max<int64_t>(0, SHIFT - PRE), SHIFT).contiguous();
     one.emitted = SHIFT;
@@ -4939,7 +4944,7 @@ static bool equal_replay_fingerprint(const ReplayFingerprint& actual,
 static ReplayFingerprint replay_single_row_fingerprint(
     int utt,
     torch::jit::Module& bundle,
-    torch::jit::Module& enc_first,
+    FirstEncoder& enc_first,
     AOTIModelPackageLoader& enc_steady,
     std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
     torch::jit::Module& joint,
@@ -5007,7 +5012,7 @@ static ReplayFingerprint replay_single_row_fingerprint(
 static ReplayFingerprint replay_multiturn_stream_fingerprint(
     int stream,
     torch::jit::Module& bundle,
-    torch::jit::Module& enc_first,
+    FirstEncoder& enc_first,
     AOTIModelPackageLoader& enc_steady,
     std::map<std::pair<int64_t, int64_t>, std::unique_ptr<AOTIModelPackageLoader>>& finalize_loaders,
     torch::jit::Module& joint,
@@ -5219,12 +5224,14 @@ int session_main_entrypoint(int argc, char** argv) {
       verify_preproc_manifest(dir, dir + "/preproc.ts", audio_geometry);
     }
 
-    auto enc_first = torch::jit::load(dir + "/enc_first.ts");
-    enc_first.to(device);
-    enc_first.eval();
-    auto enc_first_long_check = torch::jit::load(dir + "/enc_first.ts");
-    enc_first_long_check.to(device);
-    enc_first_long_check.eval();
+    auto enc_first_module = torch::jit::load(dir + "/enc_first.ts");
+    enc_first_module.to(device);
+    enc_first_module.eval();
+    TsFirstEncoder enc_first(enc_first_module);
+    auto enc_first_long_check_module = torch::jit::load(dir + "/enc_first.ts");
+    enc_first_long_check_module.to(device);
+    enc_first_long_check_module.eval();
+    TsFirstEncoder enc_first_long_check(enc_first_long_check_module);
     AOTIModelPackageLoader enc_steady(dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
     AOTIModelPackageLoader enc_steady_long_check(dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
     auto joint = torch::jit::load(dir + "/joint_step.ts");

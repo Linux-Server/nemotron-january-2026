@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lib/session/first_encoder.h"
+
 #include <c10/cuda/CUDAStream.h>
 #include <torch/script.h>
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
@@ -358,7 +360,7 @@ void reset_session_runtime_audio_front(SessionState& state, RuntimeAudioFrontend
 int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          torch::jit::Module& joint,
                                          torch::jit::Module& predict,
@@ -369,7 +371,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
 int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
@@ -379,7 +381,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
 int session_runtime_append_pcm_and_drain(SessionState& state,
                                          const std::vector<float>& pcm,
                                          RuntimeAudioFrontend& audio,
-                                         torch::jit::Module& enc_first,
+                                         FirstEncoder& enc_first,
                                          AOTIModelPackageLoader* enc_steady,
                                          const ExecutionContext& ctx,
                                          torch::Device device,
@@ -391,7 +393,7 @@ int session_runtime_append_pcm_and_drain(SessionState& state,
                                          RuntimeSteadyTiming* steady_timing = nullptr);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader* enc_steady,
                               torch::jit::Module& joint,
                               torch::jit::Module& predict,
@@ -401,7 +403,7 @@ int session_runtime_vad_start(SessionState& state,
                               const std::string& label);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader* enc_steady,
                               const ExecutionContext& ctx,
                               torch::Device device,
@@ -410,7 +412,7 @@ int session_runtime_vad_start(SessionState& state,
                               const std::string& label);
 int session_runtime_vad_start(SessionState& state,
                               RuntimeAudioFrontend& audio,
-                              torch::jit::Module& enc_first,
+                              FirstEncoder& enc_first,
                               AOTIModelPackageLoader* enc_steady,
                               const ExecutionContext& ctx,
                               torch::Device device,
