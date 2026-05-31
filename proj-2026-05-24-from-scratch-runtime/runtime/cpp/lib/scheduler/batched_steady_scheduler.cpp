@@ -153,7 +153,8 @@ void BatchedSteadyScheduler::cuda_check(cudaError_t err, const char* expr, const
 
 BatchedSteadyScheduler::DispatchTimingMode BatchedSteadyScheduler::dispatch_timing_mode_from_env() {
   const char* raw = std::getenv("NEMOTRON_WS_DISPATCH_TIMING");
-  if (raw == nullptr || raw[0] == '\0' || std::string(raw) == "sync") return DispatchTimingMode::Sync;
+  if (raw == nullptr || raw[0] == '\0') return DispatchTimingMode::Poll;
+  if (std::string(raw) == "sync") return DispatchTimingMode::Sync;
   if (std::string(raw) == "poll") return DispatchTimingMode::Poll;
   if (std::string(raw) == "off") return DispatchTimingMode::Off;
   throw std::runtime_error("NEMOTRON_WS_DISPATCH_TIMING must be one of {sync,poll,off}");
@@ -589,9 +590,9 @@ void BatchedSteadyScheduler::dispatch_batch(std::vector<std::shared_ptr<QueueIte
     if (timing_enabled) {
       B2_CUDA_CHECK(cudaEventRecord(ev_stop, dispatcher_stream_.stream()));
       if (dispatch_timing_mode_ == DispatchTimingMode::Sync) {
-        // This host-sync is only for CUDA elapsed-time telemetry. Step 1a keeps
-        // sync as the default so the default dispatcher path remains behaviorally
-        // identical while poll/off are opt-in measurement modes.
+        // This host-sync is only for CUDA elapsed-time telemetry. It remains
+        // available as an opt-in control mode; the default poll path records
+        // timing without blocking this dispatcher thread.
         B2_CUDA_CHECK(cudaEventSynchronize(ev_stop));
         float elapsed_ms = 0.0f;
         B2_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, ev_start, ev_stop));
