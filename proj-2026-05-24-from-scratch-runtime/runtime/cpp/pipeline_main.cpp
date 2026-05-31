@@ -1,6 +1,8 @@
 // 1.2b-pre — full C++ ASR pipeline: audio -> preproc -> encoder -> greedy decode -> tokens, self-checked BYTE-EXACT vs
 // gold. Proves preproc + encoder + decode COMPOSE byte-exact in C++ on real speech. (Full non-streaming encoder; the
 // streaming cache-aware chunk loop is 1.2b proper.) Build: CMakeLists.txt (manual-link libtorch, no nvcc).
+#include "lib/runtime_io/jit_load.h"
+
 #include <torch/script.h>
 #include <cstdio>
 #include <vector>
@@ -10,12 +12,12 @@ static constexpr int BLANK = 1024, MAX_SYMBOLS = 10;
 int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "../artifacts";
   torch::NoGradGuard ng;
-  auto preproc = torch::jit::load(dir + "/preproc.ts");        preproc.to(torch::kCUDA); preproc.eval();
-  auto encoder = torch::jit::load(dir + "/encoder_full.ts");   encoder.to(torch::kCUDA); encoder.eval();
-  auto joint   = torch::jit::load(dir + "/joint_step.ts");     joint.to(torch::kCUDA);   joint.eval();
-  auto predict = torch::jit::load(dir + "/predict_step.ts");   predict.to(torch::kCUDA); predict.eval();
-  auto bundle  = torch::jit::load(dir + "/pipeline_bundle.ts");bundle.to(torch::kCUDA);
-  auto init    = torch::jit::load(dir + "/cpp_bundle.ts");     init.to(torch::kCUDA);   // reuse sos_g/init_h/init_c
+  auto preproc = load_jit_serialized(dir + "/preproc.ts");        preproc.to(torch::kCUDA); preproc.eval();
+  auto encoder = load_jit_serialized(dir + "/encoder_full.ts");   encoder.to(torch::kCUDA); encoder.eval();
+  auto joint   = load_jit_serialized(dir + "/joint_step.ts");     joint.to(torch::kCUDA);   joint.eval();
+  auto predict = load_jit_serialized(dir + "/predict_step.ts");   predict.to(torch::kCUDA); predict.eval();
+  auto bundle  = load_jit_serialized(dir + "/pipeline_bundle.ts");bundle.to(torch::kCUDA);
+  auto init    = load_jit_serialized(dir + "/cpp_bundle.ts");     init.to(torch::kCUDA);   // reuse sos_g/init_h/init_c
 
   auto audio = bundle.attr("audio").toTensor();                       // [1, N]
   auto alen  = bundle.attr("alen").toTensor();                        // [1]

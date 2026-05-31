@@ -8,6 +8,7 @@
 // The ordered interim/final/suppressed event stream is checked at the same
 // WORD/TEXT level as finalize_ref._continuous_append_only_delta.
 #include "lib/session/first_encoder.h"
+#include "lib/runtime_io/jit_load.h"
 #include "lib/scheduler/batched_steady_scheduler.h"
 
 #include <c10/cuda/CUDAGuard.h>
@@ -1637,7 +1638,7 @@ void verify_bucket_manifest(const BucketManifest& manifest,
 
 std::unordered_map<std::string, at::Tensor> load_shared_constants(const std::string& weights_path,
                                                                          torch::Device device) {
-  auto weights_module = torch::jit::load(weights_path);
+  auto weights_module = load_jit_serialized(weights_path);
   auto weights = weights_module.attr("weights").toGenericDict();
   std::unordered_map<std::string, at::Tensor> constants;
   constants.reserve(weights.size());
@@ -5208,7 +5209,7 @@ int session_main_entrypoint(int argc, char** argv) {
     } else {
       bundle_name = multiturn ? "/session_multiturn_bundle.ts" : "/session_bundle.ts";
     }
-    auto bundle = torch::jit::load(dir + bundle_name);
+    auto bundle = load_jit_serialized(dir + bundle_name);
     verify_session_bundle_meta(bundle, multiturn);
     auto tokenizer = tokenizer_from_bundle(bundle);
     verify_tokenizer_selftest(bundle, tokenizer);
@@ -5224,20 +5225,20 @@ int session_main_entrypoint(int argc, char** argv) {
       verify_preproc_manifest(dir, dir + "/preproc.ts", audio_geometry);
     }
 
-    auto enc_first_module = torch::jit::load(dir + "/enc_first.ts");
+    auto enc_first_module = load_jit_serialized(dir + "/enc_first.ts");
     enc_first_module.to(device);
     enc_first_module.eval();
     TsFirstEncoder enc_first(enc_first_module);
-    auto enc_first_long_check_module = torch::jit::load(dir + "/enc_first.ts");
+    auto enc_first_long_check_module = load_jit_serialized(dir + "/enc_first.ts");
     enc_first_long_check_module.to(device);
     enc_first_long_check_module.eval();
     TsFirstEncoder enc_first_long_check(enc_first_long_check_module);
     AOTIModelPackageLoader enc_steady(dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
     AOTIModelPackageLoader enc_steady_long_check(dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
-    auto joint = torch::jit::load(dir + "/joint_step.ts");
+    auto joint = load_jit_serialized(dir + "/joint_step.ts");
     joint.to(device);
     joint.eval();
-    auto predict = torch::jit::load(dir + "/predict_step.ts");
+    auto predict = load_jit_serialized(dir + "/predict_step.ts");
     predict.to(device);
     predict.eval();
     auto finalize_loaders = load_finalize_bucket_loaders(dir, device);
@@ -5273,7 +5274,7 @@ int session_main_entrypoint(int argc, char** argv) {
       if (!audio_geometry_ready) throw std::runtime_error("internal audio geometry was not initialized");
       auto geometry = audio_geometry;
       std::string preproc_path = dir + "/preproc.ts";
-      preproc = std::make_unique<torch::jit::Module>(torch::jit::load(preproc_path));
+      preproc = std::make_unique<torch::jit::Module>(load_jit_serialized(preproc_path));
       preproc->to(device);
       preproc->eval();
       audio_front = std::make_unique<AudioFrontend>();

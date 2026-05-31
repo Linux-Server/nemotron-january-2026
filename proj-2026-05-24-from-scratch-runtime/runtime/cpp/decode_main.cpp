@@ -3,6 +3,7 @@
 // named buffers), runs the greedy loop, and self-checks BYTE-EXACT vs the gold y_sequence. Proves the decode is
 // byte-exact in C++ (B1b). Build: CMakeLists.txt (manual-link libtorch, no nvcc — same as the 0.1b microbench).
 #include <torch/script.h>
+#include "lib/runtime_io/jit_load.h"
 #include <cstdio>
 #include <vector>
 
@@ -32,9 +33,9 @@ static void decode_range(torch::jit::Module& joint, torch::jit::Module& predict,
 int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "../artifacts";
   torch::NoGradGuard ng;
-  auto joint   = torch::jit::load(dir + "/joint_step.ts");   joint.to(torch::kCUDA);   joint.eval();
-  auto predict = torch::jit::load(dir + "/predict_step.ts"); predict.to(torch::kCUDA); predict.eval();
-  auto bundle  = torch::jit::load(dir + "/cpp_bundle.ts");   bundle.to(torch::kCUDA);
+  auto joint   = load_jit_serialized(dir + "/joint_step.ts");   joint.to(torch::kCUDA);   joint.eval();
+  auto predict = load_jit_serialized(dir + "/predict_step.ts"); predict.to(torch::kCUDA); predict.eval();
+  auto bundle  = load_jit_serialized(dir + "/cpp_bundle.ts");   bundle.to(torch::kCUDA);
 
   auto g    = bundle.attr("sos_g").toTensor();          // [1,1,640]
   auto h    = bundle.attr("init_h").toTensor();         // [2,1,640]

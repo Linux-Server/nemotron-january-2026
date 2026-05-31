@@ -3,6 +3,7 @@
 // The validated session implementation now lives behind lib/session/session.h
 // and libnemotron_runtime.a. The harness glue below only adds concurrency,
 // explicit-stream AOTI calls, timing, and telemetry.
+#include "lib/runtime_io/jit_load.h"
 #include "lib/session/session.h"
 #include "lib/session/first_encoder.h"
 #include "lib/session/runtime.h"
@@ -1065,7 +1066,7 @@ static std::string finalize_phase_stats_json(const TimingBuckets& timings) {
 }
 
 static torch::jit::Module load_module_on_device(const std::string& path, torch::Device device) {
-  auto module = torch::jit::load(path);
+  auto module = load_jit_serialized(path);
   module.to(device);
   module.eval();
   return module;
@@ -1146,7 +1147,7 @@ static std::shared_ptr<SharedEncFirst> load_shared_enc_first_aoti(
 }
 
 static std::shared_ptr<torch::jit::Module> load_shared_session_bundle(const std::string& dir) {
-  auto bundle = std::make_shared<torch::jit::Module>(torch::jit::load(dir + "/session_bundle.ts"));
+  auto bundle = std::make_shared<torch::jit::Module>(load_jit_serialized(dir + "/session_bundle.ts"));
   verify_session_bundle_meta(*bundle, false);
   std::printf("density loaded session_bundle.ts once for process; sharing read-only bundle across contexts\n");
   return bundle;
@@ -6322,7 +6323,7 @@ static std::vector<int16_t> audio_tensor_to_pcm_int16(torch::Tensor tensor) {
 
 static bool run_runtime_smoke(const DensityArgs& args, torch::Device device) {
   std::string bundle_path = (fs::path(args.dir) / "session_audio_bundle.ts").string();
-  auto bundle = torch::jit::load(bundle_path);
+  auto bundle = load_jit_serialized(bundle_path);
   verify_session_bundle_meta(bundle, false);
   int rows_total = static_cast<int>(scalar_i64(attr_tensor(bundle, "num_utts")));
   int rows = std::min(4, rows_total);

@@ -16,6 +16,11 @@ target_link_libraries(ws_tail_microbench_client Threads::Threads OpenSSL::Crypto
 add_executable(ws_framing_selftest ws_framing_selftest.cpp lib/ws/framing.cpp)
 target_include_directories(ws_framing_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+add_custom_target(jit_load_guard
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/check_no_raw_jit_load.sh
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+  COMMENT "Checking serialized JIT load usage")
+
 if(NOT DEFINED TORCH_ROOT)
   message(STATUS "TORCH_ROOT not set; configured standalone ws_tail/ws_framing targets only")
   return()
@@ -39,6 +44,7 @@ add_library(nemotron_runtime STATIC
   lib/session/first_encoder.cpp
   lib/session/runtime.cpp
   lib/runtime_io/io.cpp
+  lib/runtime_io/jit_load.cpp
   lib/runtime_io/prewarm.cpp
   lib/runtime_io/tmp_hygiene.cpp
   lib/runtime_io/picohttpparser.c
@@ -54,12 +60,14 @@ target_include_directories(nemotron_runtime PUBLIC
 target_compile_definitions(nemotron_runtime PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LINK_DIRS})
 target_link_libraries(nemotron_runtime PUBLIC ${NEMOTRON_TORCH_LIBS} OpenSSL::Crypto)
+add_dependencies(nemotron_runtime jit_load_guard)
 
 add_executable(decode decode_main.cpp)
 target_include_directories(decode PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/include/torch/csrc/api/include ${CUDA_ROOT}/targets/x86_64-linux/include)
 target_compile_definitions(decode PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(decode PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(decode torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(decode nemotron_runtime)
 set_target_properties(decode PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 
 add_executable(pipeline pipeline_main.cpp)
@@ -67,6 +75,7 @@ target_include_directories(pipeline PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/
 target_compile_definitions(pipeline PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(pipeline PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(pipeline torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(pipeline nemotron_runtime)
 set_target_properties(pipeline PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 
 add_executable(steady steady_main.cpp)
@@ -74,6 +83,7 @@ target_include_directories(steady PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/in
 target_compile_definitions(steady PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(steady PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(steady torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(steady nemotron_runtime)
 set_target_properties(steady PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 
 # 1.2b-wire-C++: native AOTIModelPackageLoader harness (closes action D). Build+run in the container (needs the AOTI .so).
@@ -82,6 +92,7 @@ target_include_directories(aoti_encoder PRIVATE ${TORCH_ROOT}/include ${TORCH_RO
 target_compile_definitions(aoti_encoder PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(aoti_encoder PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(aoti_encoder torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(aoti_encoder nemotron_runtime)
 set_target_properties(aoti_encoder PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 
 # 1.3b: finalize fork/isolation + decode-continuation harness, with guarded AOTI finalize encoder Phase B.
@@ -90,6 +101,7 @@ target_include_directories(finalize PRIVATE ${TORCH_ROOT}/include ${TORCH_ROOT}/
 target_compile_definitions(finalize PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(finalize PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(finalize torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(finalize nemotron_runtime)
 set_target_properties(finalize PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")
 add_custom_target(aoti_finalize DEPENDS finalize)
 
@@ -114,4 +126,5 @@ target_include_directories(steady_batch_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_compile_definitions(steady_batch_bench PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
 target_link_directories(steady_batch_bench PRIVATE ${TORCH_ROOT}/lib ${CUDA_ROOT}/lib64 ${CUDA_ROOT}/lib64/stubs)
 target_link_libraries(steady_batch_bench torch torch_cpu torch_cuda c10 c10_cuda cudart pthread)
+target_link_libraries(steady_batch_bench nemotron_runtime)
 set_target_properties(steady_batch_bench PROPERTIES BUILD_RPATH "${TORCH_ROOT}/lib;${CUDA_ROOT}/lib64")

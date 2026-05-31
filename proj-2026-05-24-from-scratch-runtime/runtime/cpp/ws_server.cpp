@@ -1,4 +1,5 @@
 #include "lib/admission/density_admission.h"
+#include "lib/runtime_io/jit_load.h"
 #include "lib/runtime_io/json.hpp"
 #include "lib/scheduler/batched_steady_scheduler.h"
 #include "lib/session/runtime.h"
@@ -2504,7 +2505,7 @@ int run_selftest(const ServerConfig& parsed) {
     ScopedEnv env;
     clear_selftest_env(&env);
     ServerConfig cfg = selftest_config(base, false);
-    auto bundle = torch::jit::load((fs::path(cfg.artifact_dir) / "session_audio_bundle.ts").string());
+    auto bundle = load_jit_serialized((fs::path(cfg.artifact_dir) / "session_audio_bundle.ts").string());
     std::vector<int16_t> pcm =
         selftest_audio_tensor_to_pcm_int16(prefix_tensor(bundle, "utt0", "audio"));
     WsServer server(cfg);

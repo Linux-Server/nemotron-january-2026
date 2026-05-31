@@ -6,6 +6,7 @@
 #include <c10/cuda/CUDAStream.h>
 
 #include "lib/runtime_io/io.h"
+#include "lib/runtime_io/jit_load.h"
 
 #include <algorithm>
 #include <array>
@@ -112,7 +113,7 @@ static inline std::vector<ManifestBucket> load_manifest_buckets(const std::strin
 
 static inline std::unordered_map<std::string, at::Tensor> load_shared_constants(const std::string& weights_path,
                                                                                 torch::Device device) {
-  auto weights_module = torch::jit::load(weights_path);
+  auto weights_module = load_jit_serialized(weights_path);
   auto weights = weights_module.attr("weights").toGenericDict();
   std::unordered_map<std::string, at::Tensor> constants;
   constants.reserve(weights.size());

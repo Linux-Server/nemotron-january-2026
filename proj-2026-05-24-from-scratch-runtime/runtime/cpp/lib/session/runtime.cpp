@@ -1,5 +1,6 @@
 #include "lib/session/runtime.h"
 
+#include "lib/runtime_io/jit_load.h"
 #include "lib/runtime_io/prewarm.h"
 #include "lib/runtime_io/tmp_hygiene.h"
 #include "lib/scheduler/batched_steady_scheduler.h"
@@ -347,7 +348,7 @@ std::string finalize_buckets_dir_from_config(const SharedRuntimeConfig& cfg, con
 }
 
 torch::jit::Module load_module_on_device(const std::string& path, torch::Device device) {
-  auto module = torch::jit::load(path);
+  auto module = load_jit_serialized(path);
   module.to(device);
   module.eval();
   return module;
@@ -818,7 +819,7 @@ struct SharedRuntime::Impl {
     torch::NoGradGuard ng;
     try {
 
-    bundle = torch::jit::load(bundle_path);
+    bundle = load_jit_serialized(bundle_path);
     verify_session_bundle_meta(bundle, false);
     tokenizer_value = tokenizer_from_bundle(bundle);
     if (cfg.verify_tokenizer) verify_tokenizer_selftest(bundle, tokenizer_value);

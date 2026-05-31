@@ -5,6 +5,8 @@
 //    (server-faithful: server.py's steady only fires on full shift_frames) -> fixes the partial/short-chunk crash    [Codex#1, Opus#2]
 //  - range checks on encoder enc_len                                            [Codex#6]
 // T1 (token-exact vs NeMo streaming). Encoder byte-exactness (T2a) = the next torch.export/dynamic step.
+#include "lib/runtime_io/jit_load.h"
+
 #include <torch/script.h>
 #include <cstdio>
 #include <vector>
@@ -62,12 +64,12 @@ static void steady_chunk(StreamState& st, const torch::Tensor& new_mel,
 int main(int argc, char** argv) {
   std::string dir = argc > 1 ? argv[1] : "../artifacts";
   torch::NoGradGuard ng; auto CU = torch::kCUDA;
-  auto enc_first  = torch::jit::load(dir + "/enc_first.ts");  enc_first.to(CU);  enc_first.eval();
-  auto enc_steady = torch::jit::load(dir + "/enc_steady.ts"); enc_steady.to(CU); enc_steady.eval();
-  auto joint   = torch::jit::load(dir + "/joint_step.ts");    joint.to(CU);   joint.eval();
-  auto predict = torch::jit::load(dir + "/predict_step.ts");  predict.to(CU); predict.eval();
-  auto init    = torch::jit::load(dir + "/cpp_bundle.ts");    init.to(CU);
-  auto sb      = torch::jit::load(dir + "/stream_bundle.ts"); sb.to(CU);
+  auto enc_first  = load_jit_serialized(dir + "/enc_first.ts");  enc_first.to(CU);  enc_first.eval();
+  auto enc_steady = load_jit_serialized(dir + "/enc_steady.ts"); enc_steady.to(CU); enc_steady.eval();
+  auto joint   = load_jit_serialized(dir + "/joint_step.ts");    joint.to(CU);   joint.eval();
+  auto predict = load_jit_serialized(dir + "/predict_step.ts");  predict.to(CU); predict.eval();
+  auto init    = load_jit_serialized(dir + "/cpp_bundle.ts");    init.to(CU);
+  auto sb      = load_jit_serialized(dir + "/stream_bundle.ts"); sb.to(CU);
 
   // metadata assertion vs compiled constants [Codex#4]
   auto meta = sb.attr("meta").toTensor().to(torch::kCPU);

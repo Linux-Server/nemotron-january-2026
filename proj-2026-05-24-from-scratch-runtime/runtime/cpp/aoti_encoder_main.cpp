@@ -5,6 +5,8 @@
 // device index, output ownership/aliasing across calls, and non-contiguous inputs.
 //
 // Build: in the container, manual-link libtorch (CMakeLists aoti_encoder target). Run: ./aoti_encoder <artifacts_dir>
+#include "lib/runtime_io/jit_load.h"
+
 #include <torch/script.h>
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
 #include <c10/cuda/CUDAStream.h>
@@ -38,7 +40,7 @@ int main(int argc, char** argv) {
   std::string pkg = art + "/enc_steady_aoti.pt2";
 
   // fixture: scripted bundle of the 5 inputs + 5 eager-reference outputs (built by the driver)
-  auto io = torch::jit::load(art + "/t2a_io_bundle.ts");
+  auto io = load_jit_serialized(art + "/t2a_io_bundle.ts");
   std::vector<at::Tensor> inputs = {
       io.attr("chunk").toTensor().to(torch::kCUDA), io.attr("L").toTensor().to(torch::kCUDA),
       io.attr("clc").toTensor().to(torch::kCUDA),   io.attr("clt").toTensor().to(torch::kCUDA),

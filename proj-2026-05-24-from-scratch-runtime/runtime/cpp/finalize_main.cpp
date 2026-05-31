@@ -6,6 +6,8 @@
 //
 // Phase B: if per-exact-T finalize AOTI buckets + shared weights exist, wire one CUDA weight set into every bucket,
 // route each row by (drop_extra, chunk T), run on contiguous cloned inputs, then decode and assert the same gold tokens.
+#include "lib/runtime_io/jit_load.h"
+
 #include <torch/script.h>
 #include <torch/csrc/inductor/aoti_package/model_package_loader.h>
 
@@ -544,7 +546,7 @@ static void verify_bucket_manifest(const BucketManifest& manifest,
 
 static std::unordered_map<std::string, at::Tensor> load_shared_constants(const std::string& weights_path,
                                                                          torch::Device device) {
-  auto weights_module = torch::jit::load(weights_path);
+  auto weights_module = load_jit_serialized(weights_path);
   auto weights = weights_module.attr("weights").toGenericDict();
   std::unordered_map<std::string, at::Tensor> constants;
   constants.reserve(weights.size());
@@ -697,13 +699,13 @@ int main(int argc, char** argv) {
   torch::NoGradGuard ng;
   auto device = torch::Device(torch::kCUDA);
 
-  auto joint = torch::jit::load(dir + "/joint_step.ts");
+  auto joint = load_jit_serialized(dir + "/joint_step.ts");
   joint.to(device);
   joint.eval();
-  auto predict = torch::jit::load(dir + "/predict_step.ts");
+  auto predict = load_jit_serialized(dir + "/predict_step.ts");
   predict.to(device);
   predict.eval();
-  auto bundle = torch::jit::load(dir + "/finalize_bundle.ts");
+  auto bundle = load_jit_serialized(dir + "/finalize_bundle.ts");
 
   auto meta = attr_tensor(bundle, "meta").to(torch::kCPU).to(torch::kLong).contiguous();
   int64_t rows = meta[0].item<int64_t>();
