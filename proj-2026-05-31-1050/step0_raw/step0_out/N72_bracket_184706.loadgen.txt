@@ -1,0 +1,6 @@
+rt_loadgen vs ws://127.0.0.1:8080 | procs=32 window=45.0s | levels=[72]
+  N    procs  completed  errs  TTFSp50 TTFSp95 TTFSp99 TTFSmax  ttfsN  lagp50  lagp95  lagp99  maxjit  keepup
+  72   32     328       0        1195    2540    3286    3822    328    1215   2561   3306      0  no
+
+KNEE (max N: 0-err AND lag-p95<500ms AND TTFS-p95<400ms): 0
+wrote /home/ubuntu/density/step0_out/N72_bracket_184706.loadgen.json

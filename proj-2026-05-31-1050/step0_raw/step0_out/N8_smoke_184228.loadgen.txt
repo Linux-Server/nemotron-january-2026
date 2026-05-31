@@ -1,0 +1,6 @@
+rt_loadgen vs ws://127.0.0.1:8080 | procs=8 window=15.0s | levels=[8]
+  N    procs  completed  errs  TTFSp50 TTFSp95 TTFSp99 TTFSmax  ttfsN  lagp50  lagp95  lagp99  maxjit  keepup
+  8    8      16        0          11      12      13      13     16      31     33     33      0  YES
+
+KNEE (max N: 0-err AND lag-p95<500ms AND TTFS-p95<400ms): 8
+wrote /home/ubuntu/density/step0_out/N8_smoke_184228.loadgen.json

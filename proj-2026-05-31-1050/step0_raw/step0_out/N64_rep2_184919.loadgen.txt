@@ -1,0 +1,6 @@
+rt_loadgen vs ws://127.0.0.1:8080 | procs=32 window=45.0s | levels=[64]
+  N    procs  completed  errs  TTFSp50 TTFSp95 TTFSp99 TTFSmax  ttfsN  lagp50  lagp95  lagp99  maxjit  keepup
+  64   32     313       0         226     482     971    1220    313     247    502    992      0  no
+
+KNEE (max N: 0-err AND lag-p95<500ms AND TTFS-p95<400ms): 0
+wrote /home/ubuntu/density/step0_out/N64_rep2_184919.loadgen.json

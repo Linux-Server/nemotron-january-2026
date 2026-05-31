@@ -1,0 +1,6 @@
+rt_loadgen vs ws://127.0.0.1:8080 | procs=32 window=45.0s | levels=[96]
+  N    procs  completed  errs  TTFSp50 TTFSp95 TTFSp99 TTFSmax  ttfsN  lagp50  lagp95  lagp99  maxjit  keepup
+  96   32     345       0        4840    8247    9656   10641    345    4859   8267   9677      0  no
+
+KNEE (max N: 0-err AND lag-p95<500ms AND TTFS-p95<400ms): 0
+wrote /home/ubuntu/density/step0_out/N96_sweep1_184537.loadgen.json
