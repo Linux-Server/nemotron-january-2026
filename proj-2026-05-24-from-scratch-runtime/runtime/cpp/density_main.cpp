@@ -4,6 +4,7 @@
 // and libnemotron_runtime.a. The harness glue below only adds concurrency,
 // explicit-stream AOTI calls, timing, and telemetry.
 #include "lib/session/session.h"
+#include "lib/session/first_encoder.h"
 #include "lib/session/runtime.h"
 #include "lib/telemetry/stats_collector.h"
 #include "lib/ws/framing.h"
@@ -332,13 +333,14 @@ static DensityArgs parse_density_args(int argc, char** argv) {
     }
   }
   if (args.mode != "step0" && args.mode != "density-sweep" && args.mode != "b1-t1" &&
-      args.mode != "b2-t1" && args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
+      args.mode != "b2-t1" && args.mode != "enc-first-parity" &&
+      args.mode != "admission-smoke" && args.mode != "stalegen-smoke" &&
       args.mode != "stats-smoke" && args.mode != "runtime-smoke" &&
       args.mode != "vad-smoke" && args.mode != "ws-lib-smoke" &&
       args.mode != "ws-lifecycle-smoke" && args.mode != "shutdown-smoke" &&
       args.mode != "backpressure-smoke") {
     throw std::runtime_error(
-        "--mode must be step0, density-sweep, b1-t1, b2-t1, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
+        "--mode must be step0, density-sweep, b1-t1, b2-t1, enc-first-parity, admission-smoke, stalegen-smoke, stats-smoke, runtime-smoke, vad-smoke, ws-lib-smoke, ws-lifecycle-smoke, shutdown-smoke, or backpressure-smoke");
   }
   if (args.mode == "density-sweep" && !args.n_values_set) {
     args.n_values = {1, 2, 4, 8, 16};
@@ -1070,23 +1072,32 @@ static torch::jit::Module load_module_on_device(const std::string& path, torch::
 }
 
 struct SharedEncFirst {
-  torch::jit::Module module;
+  std::unique_ptr<torch::jit::Module> module_owner;
+  std::unique_ptr<FirstEncoder> encoder;
   std::mutex mutex;
   size_t used_before_bytes = 0;
   size_t used_after_bytes = 0;
   size_t delta_bytes = 0;
   std::string policy;
 
-  SharedEncFirst(torch::jit::Module module_in,
+  SharedEncFirst(std::unique_ptr<torch::jit::Module> module_in,
+                 std::unique_ptr<FirstEncoder> encoder_in,
                  size_t used_before,
                  size_t used_after,
                  size_t delta,
                  std::string policy_in)
-      : module(std::move(module_in)),
+      : module_owner(std::move(module_in)),
+        encoder(std::move(encoder_in)),
         used_before_bytes(used_before),
         used_after_bytes(used_after),
         delta_bytes(delta),
-        policy(std::move(policy_in)) {}
+        policy(std::move(policy_in)) {
+    if (!encoder) throw std::runtime_error("SharedEncFirst requires an encoder adapter");
+  }
+
+  const char* kind() const {
+    return encoder->kind();
+  }
 };
 
 static std::shared_ptr<SharedEncFirst> load_shared_enc_first(const std::string& dir,
@@ -1094,16 +1105,44 @@ static std::shared_ptr<SharedEncFirst> load_shared_enc_first(const std::string& 
                                                              const std::string& policy) {
   CUDA_CHECK(cudaDeviceSynchronize());
   size_t before = gpu_used_bytes();
-  auto module = load_module_on_device(dir + "/enc_first.ts", device);
+  auto module = std::make_unique<torch::jit::Module>(load_module_on_device(dir + "/enc_first.ts", device));
+  auto encoder = std::make_unique<TsFirstEncoder>(*module);
   CUDA_CHECK(cudaDeviceSynchronize());
   size_t after = gpu_used_bytes();
   size_t delta = after >= before ? after - before : 0;
-  std::printf("density loaded enc_first.ts policy=%s delta=%.3f GiB used_before=%.3f GiB used_after=%.3f GiB\n",
+  std::printf("density loaded enc_first.ts policy=%s adapter=%s delta=%.3f GiB "
+              "used_before=%.3f GiB used_after=%.3f GiB\n",
               policy.c_str(),
+              encoder->kind(),
               static_cast<double>(delta) / (1024.0 * 1024.0 * 1024.0),
               static_cast<double>(before) / (1024.0 * 1024.0 * 1024.0),
               static_cast<double>(after) / (1024.0 * 1024.0 * 1024.0));
-  return std::make_shared<SharedEncFirst>(std::move(module), before, after, delta, policy);
+  return std::make_shared<SharedEncFirst>(std::move(module), std::move(encoder), before, after, delta, policy);
+}
+
+static std::shared_ptr<SharedEncFirst> load_shared_enc_first_aoti(
+    const std::string& dir,
+    torch::Device device,
+    const std::unordered_map<std::string, at::Tensor>& shared_constants,
+    int num_runners,
+    const std::string& policy) {
+  CUDA_CHECK(cudaDeviceSynchronize());
+  size_t before = gpu_used_bytes();
+  auto encoder = std::make_unique<AotiFirstEncoder>(dir + "/enc_first_aoti.pt2",
+                                                    shared_constants,
+                                                    device,
+                                                    num_runners);
+  CUDA_CHECK(cudaDeviceSynchronize());
+  size_t after = gpu_used_bytes();
+  size_t delta = after >= before ? after - before : 0;
+  std::printf("density loaded enc_first_aoti.pt2 policy=%s adapter=%s delta=%.3f GiB "
+              "used_before=%.3f GiB used_after=%.3f GiB\n",
+              policy.c_str(),
+              encoder->kind(),
+              static_cast<double>(delta) / (1024.0 * 1024.0 * 1024.0),
+              static_cast<double>(before) / (1024.0 * 1024.0 * 1024.0),
+              static_cast<double>(after) / (1024.0 * 1024.0 * 1024.0));
+  return std::make_shared<SharedEncFirst>(nullptr, std::move(encoder), before, after, delta, policy);
 }
 
 static std::shared_ptr<torch::jit::Module> load_shared_session_bundle(const std::string& dir) {
@@ -1486,11 +1525,12 @@ static double apply_encoder_outputs_density(SessionState& state,
 static std::vector<at::Tensor> run_first_encoder_locked_density(SharedEncFirst& enc_first,
                                                                 const torch::Tensor& chunk,
                                                                 SessionState& state,
+                                                                c10::cuda::CUDAStream stream,
                                                                 double* lock_wait_ms) {
   auto wait_start = Clock::now();
   std::unique_lock<std::mutex> lock(enc_first.mutex);
   if (lock_wait_ms != nullptr) *lock_wait_ms += elapsed_ms_since(wait_start);
-  return run_first_encoder(enc_first.module, chunk, state);
+  return enc_first.encoder->run(chunk, state, stream);
 }
 
 static void run_steady_chunk_density(SessionState& state,
@@ -1560,7 +1600,7 @@ static void run_steady_chunk_density(SessionState& state,
     chunk = new_mel;
     double lock_wait_ms = 0.0;
     auto enc_first_start = Clock::now();
-    out = run_first_encoder_locked_density(enc_first, chunk, state, &lock_wait_ms);
+    out = run_first_encoder_locked_density(enc_first, chunk, state, stream, &lock_wait_ms);
     if (timings != nullptr) {
       timings->enc_first_lock_wait_ms.push_back(lock_wait_ms);
       timings->enc_first_total_ms.push_back(elapsed_ms_since(enc_first_start));
@@ -2321,6 +2361,188 @@ static std::vector<RowReplayResult> build_serial_reference(const DensityArgs& ar
               "(finals + steady-cumulative strictly matched gold for ALL utts, else this would have thrown) ===\n",
               (int)refs.size(), gold_event_divergences);
   return refs;
+}
+
+static bool compare_b2_token_vector(const std::vector<int64_t>& got,
+                                    const std::vector<int64_t>& ref,
+                                    const std::string& label,
+                                    int worker,
+                                    int utt);
+
+static bool enc_first_ts_adapter_byte_exact(SharedEncFirst& enc_first,
+                                            torch::jit::Module& bundle,
+                                            torch::Device device,
+                                            c10::cuda::CUDAStream stream,
+                                            int rows) {
+  if (!enc_first.module_owner) {
+    throw std::runtime_error("TS adapter byte-exact selftest requires a TS module owner");
+  }
+  int checked = 0;
+  bool ok = true;
+  for (int utt = 0; utt < rows; ++utt) {
+    if (scalar_i64(utt_tensor(bundle, utt, "num_steady")) <= 0) continue;
+    std::string prefix = "utt" + std::to_string(utt);
+    auto chunk = prefix_chunk_tensor(bundle, prefix, 0, "new_mel").to(device).contiguous();
+    SessionState raw_state;
+    SessionState adapter_state;
+    reset_session(raw_state, bundle, device);
+    reset_session(adapter_state, bundle, device);
+    {
+      std::lock_guard<std::mutex> lock(enc_first.mutex);
+      (void)run_first_encoder(*enc_first.module_owner, chunk, raw_state, stream);
+      (void)enc_first.encoder->run(chunk, adapter_state, stream);
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream.stream()));
+    break;
+  }
+  for (int utt = 0; utt < rows; ++utt) {
+    if (scalar_i64(utt_tensor(bundle, utt, "num_steady")) <= 0) continue;
+    std::string prefix = "utt" + std::to_string(utt);
+    auto chunk = prefix_chunk_tensor(bundle, prefix, 0, "new_mel").to(device).contiguous();
+    SessionState raw_state;
+    SessionState adapter_state;
+    reset_session(raw_state, bundle, device);
+    reset_session(adapter_state, bundle, device);
+
+    std::vector<at::Tensor> raw;
+    std::vector<at::Tensor> adapted;
+    {
+      std::lock_guard<std::mutex> lock(enc_first.mutex);
+      raw = run_first_encoder(*enc_first.module_owner, chunk, raw_state, stream);
+      adapted = enc_first.encoder->run(chunk, adapter_state, stream);
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream.stream()));
+    if (raw.size() != adapted.size()) {
+      std::printf("ENC_FIRST_TS_ADAPTER_BYTE_EXACT utt=%d output_count_mismatch raw=%zu adapter=%zu\n",
+                  utt,
+                  raw.size(),
+                  adapted.size());
+      ok = false;
+      continue;
+    }
+    for (size_t i = 0; i < raw.size(); ++i) {
+      std::string name = "enc_first_ts_adapter.utt" + std::to_string(utt) +
+                         ".out" + std::to_string(i);
+      ok = tensor_equal(name.c_str(), adapted[i], raw[i]) && ok;
+    }
+    ++checked;
+  }
+  std::printf("ENC_FIRST_TS_ADAPTER_BYTE_EXACT checked=%d result=%s\n",
+              checked,
+              ok ? "PASS" : "FAIL");
+  return ok && checked > 0;
+}
+
+static bool run_enc_first_parity(const DensityArgs& args,
+                                 torch::Device device,
+                                 const std::shared_ptr<torch::jit::Module>& shared_bundle) {
+  int rows_total = static_cast<int>(scalar_i64(attr_tensor(*shared_bundle, "num_utts")));
+  int rows = args.correctness_rows > 0 ? std::min(args.correctness_rows, rows_total)
+                                       : std::min(rows_total, 200);
+  if (rows <= 0) throw std::runtime_error("enc-first-parity requires at least one audio fixture row");
+  std::printf("ENC_FIRST_PARITY START rows=%d/%d default_rows=%s\n",
+              rows,
+              rows_total,
+              args.correctness_rows > 0 ? "cli" : "min(rows_total,200)");
+
+  auto stream = stream_for_worker(true, 0);
+  auto ts_first = load_shared_enc_first(args.dir, device, "enc_first_parity_ts_adapter");
+  int ts_selftest_rows = std::min(rows, 4);
+  bool ts_byte_exact = enc_first_ts_adapter_byte_exact(*ts_first,
+                                                      *shared_bundle,
+                                                      device,
+                                                      stream,
+                                                      ts_selftest_rows);
+
+  auto shared_constants = bsteady_detail::load_shared_constants(
+      (fs::path(args.dir) / "finalize_shared_weights.ts").string(),
+      device);
+  std::printf("ENC_FIRST_PARITY shared_constants entries=%zu source=%s\n",
+              shared_constants.size(),
+              (fs::path(args.dir) / "finalize_shared_weights.ts").string().c_str());
+  auto aoti_first = load_shared_enc_first_aoti(args.dir,
+                                               device,
+                                               shared_constants,
+                                               1,
+                                               "enc_first_parity_aoti_adapter");
+
+  auto ctx = make_worker_context(args.dir, device, stream, shared_bundle, ts_first);
+  auto tokenizer = tokenizer_from_bundle(ctx->bundle);
+  verify_tokenizer_selftest(ctx->bundle, tokenizer);
+  AOTIModelPackageLoader enc_steady(args.dir + "/enc_steady_aoti.pt2", "model", false, 1, -1);
+  FinalizeBucketLoaderPool finalize_loaders(args.dir, device, 1, "enc_first_parity_finalize_pool");
+  finalize_loaders.preload_all();
+
+  int final_token_divergences = 0;
+  int event_divergences = 0;
+  int errors = 0;
+  for (int utt = 0; utt < rows; ++utt) {
+    ctx->enc_first = ts_first;
+    auto ts_row = replay_row_density(utt,
+                                     *ctx,
+                                     &enc_steady,
+                                     nullptr,
+                                     finalize_loaders,
+                                     device,
+                                     tokenizer,
+                                     true,
+                                     false,
+                                     nullptr,
+                                     false,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr);
+    ctx->enc_first = aoti_first;
+    auto aoti_row = replay_row_density(utt,
+                                       *ctx,
+                                       &enc_steady,
+                                       nullptr,
+                                       finalize_loaders,
+                                       device,
+                                       tokenizer,
+                                       true,
+                                       false,
+                                       nullptr,
+                                       false,
+                                       nullptr,
+                                       nullptr,
+                                       nullptr,
+                                       nullptr);
+    if (!ts_row.error.empty() || !aoti_row.error.empty() || !ts_row.ok || !aoti_row.ok) {
+      ++errors;
+      std::printf("ENC_FIRST_PARITY_ROW_ERROR utt=%d ts_ok=%s aoti_ok=%s ts_error=%s aoti_error=%s\n",
+                  utt,
+                  ts_row.ok ? "true" : "false",
+                  aoti_row.ok ? "true" : "false",
+                  ts_row.error.empty() ? "(none)" : ts_row.error.c_str(),
+                  aoti_row.error.empty() ? "(none)" : aoti_row.error.c_str());
+      continue;
+    }
+    if (!compare_b2_token_vector(aoti_row.final_tokens,
+                                 ts_row.final_tokens,
+                                 "enc-first-parity.final",
+                                 0,
+                                 utt)) {
+      ++final_token_divergences;
+    }
+    if (!strict_events_equal(aoti_row.events,
+                             ts_row.events,
+                             "enc_first_parity.utt" + std::to_string(utt) + ".events")) {
+      ++event_divergences;
+    }
+  }
+  CUDA_CHECK(cudaDeviceSynchronize());
+  bool pass = ts_byte_exact && errors == 0 && final_token_divergences == 0;
+  std::printf("ENC_FIRST_PARITY rows=%d final_token_divergences=%d event_divergences=%d "
+              "errors=%d ts_adapter_byte_exact=%s verdict=%s\n",
+              rows,
+              final_token_divergences,
+              event_divergences,
+              errors,
+              ts_byte_exact ? "PASS" : "FAIL",
+              pass ? "PASS" : "FAIL");
+  return pass;
 }
 
 static bool steady_batch_dir_has_packages(const std::string& dir) {
@@ -7753,6 +7975,10 @@ int main(int argc, char** argv) {
     }
     if (args.mode == "b2-t1") {
       bool ok = run_b2_t1_gate(args, device, stamp, shared_bundle, rows_total);
+      return ok ? 0 : 1;
+    }
+    if (args.mode == "enc-first-parity") {
+      bool ok = run_enc_first_parity(args, device, shared_bundle);
       return ok ? 0 : 1;
     }
     if (args.mode == "density-sweep") {

@@ -1,0 +1,174 @@
+Starting Codex task thread.
+Thread ready (019e7d28-11c7-7c21-b767-0459e11b5d72).
+Turn started (019e7d28-11f6-7761-ad39-c9aa9a795bca).
+Assistant message captured: I’ll keep this read-only and treat it as a skeptical review. I’m going to inspect the exact d...
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- proj-2026-05-24-from-s...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- proj-2026-05-24-from-s... (exit 0)
+Running command: /bin/bash -lc 'nl -ba cpp/lib/session/first_encoder.h'
+Command completed: /bin/bash -lc 'nl -ba cpp/lib/session/first_encoder.h' (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '1840,1925p'"
+Running command: /bin/bash -lc 'nl -ba cpp/lib/session/first_encoder.cpp'
+Command completed: /bin/bash -lc 'nl -ba cpp/lib/session/first_encoder.cpp' (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '1840,1925p'" (exit 0)
+Assistant message captured: The initial diff shows the TS adapter does call the existing `run_first_encoder`, but I’m che...
+Running command: /bin/bash -lc "rg -n \"enc_first|FirstEncoder|SharedEncFirst|run_first_encoder|run_first_enco...
+Command completed: /bin/bash -lc "rg -n \"enc_first|FirstEncoder|SharedEncFirst|run_first_encoder|run_first_enco... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1040,1125p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1040,1125p'" (exit 0)
+Running command: /bin/bash -lc "rg -n \"constants_for_bucket|load_constants|struct BucketConstants|BucketConst...
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1510,1620p'"
+Running command: /bin/bash -lc "nl -ba cpp/CMakeLists.txt | sed -n '28,52p'"
+Command completed: /bin/bash -lc "nl -ba cpp/CMakeLists.txt | sed -n '28,52p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2350,2565p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1510,1620p'" (exit 0)
+Command completed: /bin/bash -lc "rg -n \"constants_for_bucket|load_constants|struct BucketConstants|BucketConst... (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2350,2565p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/scheduler/steady_batch_primitive.h | sed -n '1,220p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/scheduler/steady_batch_primitive.h | sed -n '1,220p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1120,1205p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1120,1205p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/scheduler/steady_batch_primitive.h | sed -n '420,470p'"
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2190,2285p'"
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2675,2835p'"
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3250,3310p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/scheduler/steady_batch_primitive.h | sed -n '420,470p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2190,2285p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2675,2835p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3250,3310p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3470,3615p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3470,3615p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '5345,5565p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '5345,5565p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2280,2350p'"
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '760,820p'"
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1418,1435p;1598,1688p'"
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1165,1205p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '2280,2350p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '760,820p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1165,1205p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '1418,1435p;1598,1688p'" (exit 0)
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --name-only -- proj-2026-...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --name-only -- proj-2026-... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '330,350p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '330,350p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/ws_server.cpp | sed -n '335,365p'"
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --stat -- proj-2026-05-24...
+Running command: /bin/bash -lc "rg -n \"#include \\\"lib/session/first_encoder.h\\\"|AotiFirstEncoder|TsFirstE...
+Command completed: /bin/bash -lc "nl -ba cpp/ws_server.cpp | sed -n '335,365p'" (exit 0)
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --stat -- proj-2026-05-24... (exit 0)
+Command completed: /bin/bash -lc "rg -n \"#include \\\"lib/session/first_encoder.h\\\"|AotiFirstEncoder|TsFirstE... (exit 0)
+Assistant message captured: One scope issue is already clear from git metadata: the visible tracked diff is only `CMakeLi...
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 status --short -- proj-2026-05... (exit 0)
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 ls-files -- proj-2026-05-24-fr...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 ls-files -- proj-2026-05-24-fr... (exit 0)
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --cached --name-status --...
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --cached --stat -- proj-2...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --cached --stat -- proj-2... (exit 0)
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff --cached --name-status --... (exit 0)
+Running command: /bin/bash -lc "rg -n \"load_constants\\(|class AOTIModelPackageLoader|user_managed\" /home/kh...
+Command completed: /bin/bash -lc "rg -n \"load_constants\\(|class AOTIModelPackageLoader|user_managed\" /home/kh... (exit 0)
+Running command: /bin/bash -lc "rg -n \"load_constants\\(|class AOTIModelPackageLoader|user_managed\" /opt /us...
+Command failed: /bin/bash -lc "rg -n \"load_constants\\(|class AOTIModelPackageLoader|user_managed\" /opt /us... (exit 2)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc... (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc... (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/step1-tor...
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '535,575p'"
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '1710,1750p'"
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1910,1950p'"
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/step1-tor... (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '535,575p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '1710,1750p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1910,1950p'" (exit 0)
+Running command: /bin/bash -lc "rg -n \"update_constant_buffer\\(\" /home/khkramer/src/parakeet/venv/lib/pytho...
+Command completed: /bin/bash -lc "rg -n \"update_constant_buffer\\(\" /home/khkramer/src/parakeet/venv/lib/pytho... (exit 0)
+Running command: /bin/bash -lc "rg -n \"aoti_torch_new_tensor_handle\" /home/khkramer/src/parakeet/venv/lib/py...
+Command completed: /bin/bash -lc "rg -n \"aoti_torch_new_tensor_handle\" /home/khkramer/src/parakeet/venv/lib/py... (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc... (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc... (exit 0)
+Running command: /bin/bash -lc "rg -n \"MaybeOwningAtenTensorHandle|user managed|user_managed|do not steal\" /...
+Command completed: /bin/bash -lc "rg -n \"MaybeOwningAtenTensorHandle|user managed|user_managed|do not steal\" /... (exit 0)
+Running command: /bin/bash -lc "rg -n \"aoti_torch_new_tensor_handle\" /home/khkramer/src -g '*.cpp' -g '*.cc'...
+Command completed: /bin/bash -lc "rg -n \"aoti_torch_new_tensor_handle\" /home/khkramer/src -g '*.cpp' -g '*.cc'... (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/parakeet/venv/lib/python3.12/site-packages/torch/inc... (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/PLAN.md |...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/PLAN.md |... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1820,1905p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1820,1905p'" (exit 0)
+Running command: /bin/bash -lc 'rg -n "SharedEncoderConstants|shared_encoder_constants_|borrow" cpp/lib/sessio...
+Command completed: /bin/bash -lc 'rg -n "SharedEncoderConstants|shared_encoder_constants_|borrow" cpp/lib/sessio... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '185,350p'"
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '7965,7988p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '185,350p'" (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '7965,7988p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1735,1825p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1735,1825p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '368,466p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '368,466p'" (exit 0)
+Running command: /bin/bash -lc "rg -n \"class FinalizeBucketLoaderPool|struct FinalizeBucketLoaderPool|Finaliz...
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '836,862p'"
+Command completed: /bin/bash -lc "rg -n \"class FinalizeBucketLoaderPool|struct FinalizeBucketLoaderPool|Finaliz... (exit 0)
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/runtime.cpp | sed -n '836,862p'" (exit 0)
+Running command: /bin/bash -lc "rg -n \"add_executable\\(|target_link_libraries\\(|density_main|nemotron_runti...
+Command completed: /bin/bash -lc "rg -n \"add_executable\\(|target_link_libraries\\(|density_main|nemotron_runti... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/CMakeLists.txt | sed -n '52,145p'"
+Command completed: /bin/bash -lc "nl -ba cpp/CMakeLists.txt | sed -n '52,145p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/CMakeLists.txt | sed -n '145,230p'"
+Command completed: /bin/bash -lc "nl -ba cpp/CMakeLists.txt | sed -n '145,230p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '1,80p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '1,80p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '1,90p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.h | sed -n '1,90p'" (exit 0)
+Running command: /bin/bash -lc "rg -n \"int64_t scalar_i64|scalar_i64\\(\" cpp/lib/session/session.cpp cpp/lib...
+Command completed: /bin/bash -lc "rg -n \"int64_t scalar_i64|scalar_i64\\(\" cpp/lib/session/session.cpp cpp/lib... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1378,1395p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1378,1395p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '438,455p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '438,455p'" (exit 0)
+Running command: /bin/bash -lc 'rg -n "run_runtime_smoke|runtime-smoke|SharedRuntime" cpp/density_main.cpp cpp...
+Command completed: /bin/bash -lc 'rg -n "run_runtime_smoke|runtime-smoke|SharedRuntime" cpp/density_main.cpp cpp... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '6200,6355p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '6200,6355p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/PLAN.md |...
+Command completed: /bin/bash -lc "nl -ba /home/khkramer/src/nemotron-january-2026/proj-2026-05-30-2202/PLAN.md |... (exit 0)
+Running command: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- proj-2026-05-30-2202/P...
+Command completed: /bin/bash -lc 'git -C /home/khkramer/src/nemotron-january-2026 diff -- proj-2026-05-30-2202/P... (exit 0)
+Running command: /bin/bash -lc "rg -n \"bool tensor_equal|tensor_equal\\(\" cpp/density_main.cpp cpp/lib/sessi...
+Command completed: /bin/bash -lc "rg -n \"bool tensor_equal|tensor_equal\\(\" cpp/density_main.cpp cpp/lib/sessi... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3840,3905p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3840,3905p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '976,1008p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '976,1008p'" (exit 0)
+Running command: /bin/bash -lc 'rg -n "strict_events_equal|compare_b2_token_vector" cpp/density_main.cpp cpp/l...
+Command completed: /bin/bash -lc 'rg -n "strict_events_equal|compare_b2_token_vector" cpp/density_main.cpp cpp/l... (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1245,1295p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1245,1295p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3218,3248p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '3218,3248p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2790,2835p'"
+Command completed: /bin/bash -lc "nl -ba cpp/lib/session/session.cpp | sed -n '2790,2835p'" (exit 0)
+Running command: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1620,1768p'"
+Command completed: /bin/bash -lc "nl -ba cpp/density_main.cpp | sed -n '1620,1768p'" (exit 0)
+Assistant message captured: **Verdict: FIX-NEEDED** Concrete fixes: - Track the new files. `git status --short` shows `??...
+Turn completed.
+**Verdict: FIX-NEEDED**
+
+Concrete fixes:
+- Track the new files. `git status --short` shows `?? cpp/lib/session/first_encoder.{h,cpp}`, while [CMakeLists.txt](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt:39) now builds `lib/session/first_encoder.cpp` and [density_main.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:7) includes the header. A clean checkout of the tracked diff would not contain the adapter files.
+- Tighten ABI validation: [first_encoder.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:66) checks only dtype for `enc_len/cache_ch_len`; [scalar_i64](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:446) flattens and reads element 0, so multi-element invalid length tensors would slip through. Add `numel()==1` for outputs 1 and 4, and preferably cache shape checks.
+
+One-line findings:
+- **ts-byte-exact:** SHIP. `TsFirstEncoder::run` delegates to the exact existing `run_first_encoder` at [first_encoder.cpp:89](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:89), whose TS call is [session.cpp:1882](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/session.cpp:1882); validation uses temporary `.contiguous()` copies and does not mutate forwarded `chunk/state` tensors.
+- **aoti-bind:** SHIP with caller-lifetime caveat. It uses `bsteady_detail::constants_for_bucket` and `load_constants(... user_managed=true)` at [first_encoder.cpp:110](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:110); missing FQNs throw in [steady_batch_primitive.h:173](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/scheduler/steady_batch_primitive.h:173). Parity declares `shared_constants` before `aoti_first` at [density_main.cpp:2457](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:2457), so destruction order is safe.
+- **abi-contract:** FIX-NEEDED. 5 outputs and sliced `enc_out[..., :2]` are asserted at [first_encoder.cpp:48](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:48), `L==chunk.size(2)` and contiguous inputs at [first_encoder.cpp:27](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:27), but scalar length shape is not enforced.
+- **scope-serving:** SHIP. No tracked diff touches `runtime.cpp`, `session.cpp`, or `ws_server.cpp`; serving still loads TS `enc_first.ts` into `torch::jit::Module` at [runtime.cpp:793](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:793) and stores it as `torch::jit::Module enc_first` at [runtime.cpp:1428](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/runtime.cpp:1428).
+- **parity-validity:** SHIP. The harness changes only `ctx->enc_first` between TS and AOTI at [density_main.cpp:2480](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:2480) and [density_main.cpp:2496](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:2496); both arms share the same `enc_steady` and finalize pool at [density_main.cpp:2472](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:2472). Pass gates on `final_token_divergences==0`, not event divergences, at [density_main.cpp:2536](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:2536).
+- **build-lifetime:** FIX-NEEDED for untracked files. CMake wiring itself is correct once files are tracked: `first_encoder.cpp` is in `nemotron_runtime` at [CMakeLists.txt:37](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt:37), and `density_main` links that library at [CMakeLists.txt:101](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt:101).
+
+Anything missed:
+- `validate_first_encoder_inputs` calls `L.item<int64_t>()` on a CUDA tensor at [first_encoder.cpp:40](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:40), adding a host sync to every adapter run. Not a numerics bug, but I would remove that before Step 5 serving wiring.

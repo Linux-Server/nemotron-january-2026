@@ -1,0 +1,246 @@
+Starting Codex task thread.
+Thread ready (019e7d0f-7016-7970-a553-bd9678ab369b).
+Turn started (019e7d0f-7045-7152-bf17-be50262f7409).
+Assistant message captured: I’ll first verify the plan notes and locate the existing encoder and density harness code pat...
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/PLAN.md"
+Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/PLAN.md" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/probe1.md"
+Command completed: /bin/bash -lc "sed -n '1,260p' proj-2026-05-30-2202/probe1.md" (exit 0)
+Running command: /bin/bash -lc 'git status --short'
+Command completed: /bin/bash -lc 'git status --short' (exit 0)
+Assistant message captured: The repo is already dirty, including the plan file the task says not to edit. I’ll leave unre...
+Running command: /bin/bash -lc "sed -n '1850,1915p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1850,1915p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "SharedEncFirst|load_shared_enc_first|run_first_encoder_locked_density|m...
+Command completed: /bin/bash -lc 'rg -n "SharedEncFirst|load_shared_enc_first|run_first_encoder_locked_density|m... (exit 0)
+Running command: /bin/bash -lc "sed -n '530,580p' cpp/lib/session/runtime.cpp"
+Running command: /bin/bash -lc "sed -n '90,190p' cpp/lib/scheduler/steady_batch_primitive.h"
+Command completed: /bin/bash -lc "sed -n '530,580p' cpp/lib/session/runtime.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '90,190p' cpp/lib/scheduler/steady_batch_primitive.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '220,360p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '220,360p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "add_library|target_sources|density_main|runtime|session.cpp|scheduler|l...
+Command failed: /bin/bash -lc 'rg -n "add_library|target_sources|density_main|runtime|session.cpp|scheduler|l... (exit 2)
+Running command: /bin/bash -lc "sed -n '1040,1165p' cpp/density_main.cpp"
+Running command: /bin/bash -lc "sed -n '1460,1585p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1040,1165p' cpp/density_main.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1460,1585p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1580,1680p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1580,1680p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '3000,3315p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '3000,3315p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,120p' cpp/CMakeLists.txt"
+Running command: /bin/bash -lc "sed -n '6060,6150p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1,120p' cpp/CMakeLists.txt" (exit 0)
+Command completed: /bin/bash -lc "sed -n '6060,6150p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '3315,3535p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '3315,3535p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '7720,7770p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '7720,7770p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '300,420p' cpp/density_main.cpp"
+Running command: /bin/bash -lc "sed -n '3535,3740p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '300,420p' cpp/density_main.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '3535,3740p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '110,220p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '110,220p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '130,195p' cpp/lib/scheduler/steady_batch_primitive.h"
+Command completed: /bin/bash -lc "sed -n '130,195p' cpp/lib/scheduler/steady_batch_primitive.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,110p' cpp/density_main.cpp"
+Running command: /bin/bash -lc 'rg -n "FinalizeBucketLoaderPool|class SharedEncoderConstants|SharedEncoderCons...
+Command completed: /bin/bash -lc "sed -n '1,110p' cpp/density_main.cpp" (exit 0)
+Command completed: /bin/bash -lc 'rg -n "FinalizeBucketLoaderPool|class SharedEncoderConstants|SharedEncoderCons... (exit 0)
+Running command: /bin/bash -lc "sed -n '300,370p' cpp/lib/session/session.h"
+Command completed: /bin/bash -lc "sed -n '300,370p' cpp/lib/session/session.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '780,830p' cpp/lib/session/runtime.cpp"
+Command completed: /bin/bash -lc "sed -n '780,830p' cpp/lib/session/runtime.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '360,465p' cpp/lib/session/runtime.cpp"
+Running command: /bin/bash -lc "sed -n '1,90p' cpp/lib/scheduler/steady_batch_primitive.h"
+Command completed: /bin/bash -lc "sed -n '360,465p' cpp/lib/session/runtime.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1,90p' cpp/lib/scheduler/steady_batch_primitive.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '1600,1665p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1600,1665p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "struct BucketConstants|using torch::inductor::AOTIModelPackageLoader|Bu...
+Command completed: /bin/bash -lc 'rg -n "struct BucketConstants|using torch::inductor::AOTIModelPackageLoader|Bu... (exit 0)
+Running command: /bin/bash -lc "rg -n \"load_shared_constants\\(|constants_for_bucket\\(\" cpp/lib/session/ses...
+Running command: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/session.h"
+Command completed: /bin/bash -lc "rg -n \"load_shared_constants\\(|constants_for_bucket\\(\" cpp/lib/session/ses... (exit 0)
+Command completed: /bin/bash -lc "sed -n '1,80p' cpp/lib/session/session.h" (exit 0)
+Running command: /bin/bash -lc "sed -n '360,395p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '360,395p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1670,1708p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1670,1708p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '190,225p' cpp/lib/session/session.h"
+Running command: /bin/bash -lc "sed -n '1708,1745p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '190,225p' cpp/lib/session/session.h" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1708,1745p' cpp/lib/session/session.cpp" (exit 0)
+Assistant message captured: The adapter can live independently: it only needs `SessionState`, the TS module, and the AOTI...
+Running command: /bin/bash -lc "sed -n '1,140p' artifacts/compile_enc_first_manifest.json"
+Command completed: /bin/bash -lc "sed -n '1,140p' artifacts/compile_enc_first_manifest.json" (exit 0)
+Running command: /bin/bash -lc 'sha256sum artifacts/enc_first_aoti.pt2 artifacts/finalize_shared_weights.pt ar...
+Running command: /bin/bash -lc ".venv/bin/python - <<'PY' import json, hashlib, pathlib root=pathlib.Path('art...
+Command completed: /bin/bash -lc ".venv/bin/python - <<'PY' import json, hashlib, pathlib root=pathlib.Path('art... (exit 0)
+Command completed: /bin/bash -lc 'sha256sum artifacts/enc_first_aoti.pt2 artifacts/finalize_shared_weights.pt ar... (exit 0)
+Assistant message captured: The manifest matches the expected stripped package SHA and shared-weight SHA, so there is no ...
+Running command: /bin/bash -lc "rg -n \"RowReplayResult|replay_row_density|reset_session\\(|prefix_chunk_tenso...
+Command completed: /bin/bash -lc "rg -n \"RowReplayResult|replay_row_density|reset_session\\(|prefix_chunk_tenso... (exit 0)
+Running command: /bin/bash -lc "sed -n '1360,1465p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1360,1465p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '2075,2185p' cpp/density_main.cpp"
+Running command: /bin/bash -lc "sed -n '1970,2075p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1970,2075p' cpp/density_main.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '2075,2185p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '2185,2275p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '2185,2275p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1160,1235p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1160,1235p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '2275,2335p' cpp/density_main.cpp"
+Running command: /bin/bash -lc "sed -n '1168,1215p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '2275,2335p' cpp/density_main.cpp" (exit 0)
+Command completed: /bin/bash -lc "sed -n '1168,1215p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc 'rg -n "bool tensor_equal|tensor_close|first_token_diff" cpp/lib/session/sessio...
+Command completed: /bin/bash -lc 'rg -n "bool tensor_equal|tensor_close|first_token_diff" cpp/lib/session/sessio... (exit 0)
+Running command: /bin/bash -lc "sed -n '1055,1105p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1055,1105p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1000,1055p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '1000,1055p' cpp/lib/session/session.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '980,1005p' cpp/lib/session/session.cpp"
+Command completed: /bin/bash -lc "sed -n '980,1005p' cpp/lib/session/session.cpp" (exit 0)
+Assistant message captured: I’m making two scoped changes now: adding `first_encoder.{h,cpp}` with TS and AOTI implementa...
+Applying 3 file change(s).
+File changes completed.
+Running command: /bin/bash -lc "sed -n '1810,1920p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1810,1920p' cpp/density_main.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1725,1810p' cpp/density_main.cpp"
+Command completed: /bin/bash -lc "sed -n '1725,1810p' cpp/density_main.cpp" (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc 'rg -n "enc-first-parity|--mode must" cpp/density_main.cpp'
+Command completed: /bin/bash -lc 'rg -n "enc-first-parity|--mode must" cpp/density_main.cpp' (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Running command: /bin/bash -lc 'rg -n "run_enc_first_parity|compare_b2_token_vector|enc_first_ts_adapter_byte_...
+Command completed: /bin/bash -lc 'rg -n "run_enc_first_parity|compare_b2_token_vector|enc_first_ts_adapter_byte_... (exit 0)
+Running command: /bin/bash -lc "git diff -- cpp/lib/session/first_encoder.h cpp/lib/session/first_encoder.cpp ...
+Command completed: /bin/bash -lc "git diff -- cpp/lib/session/first_encoder.h cpp/lib/session/first_encoder.cpp ... (exit 0)
+Running command: /bin/bash -lc "rg -n \"\\.module|module_owner|run_first_encoder_locked_density|SharedEncFirst...
+Command completed: /bin/bash -lc "rg -n \"\\.module|module_owner|run_first_encoder_locked_density|SharedEncFirst... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: The density path now has a TS adapter holder by default and an AOTI holder only for the new p...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density... (exit 0)
+Assistant message captured: The build is clean for `ws_server` and `density_main`. I’m running the new parity mode next w...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-...
+Assistant message captured: The parity process is still in its startup/load phase. There’s no failure output yet; I’m let...
+Running command: /bin/bash -lc "pgrep -af 'density_main artifacts --mode enc-first-parity'"
+Command completed: /bin/bash -lc "pgrep -af 'density_main artifacts --mode enc-first-parity'" (exit 0)
+Assistant message captured: The first parity run exposed a useful harness issue: the very first raw TS call can differ fr...
+Running command: /bin/bash -lc 'kill -TERM 2667886'
+Command failed: /bin/bash -lc 'kill -TERM 2667886' (exit 1)
+Running command: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'density_main|nemotr...
+Command completed: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'density_main|nemotr... (exit 0)
+Running command: /bin/bash -lc 'docker stop 9828258285ab'
+Command completed: /bin/bash -lc 'docker stop 9828258285ab' (exit 0)
+Command failed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-... (exit 137)
+Applying 1 file change(s).
+File changes completed.
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: I changed the TS adapter to call the existing `run_first_encoder` implementation directly, so...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density... (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-...
+Assistant message captured: The rerun is back in the large module load phase. I’m watching for the `ENC_FIRST_TS_ADAPTER_...
+Assistant message captured: The adapter selftest is passing now. The parity run has finished loading the shared constants...
+Assistant message captured: The 200-row parity loop is still running without divergence output. If it completes cleanly, ...
+Assistant message captured: Still running, with no mismatches printed. The lack of progress output is a harness limitatio...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-... (exit 0)
+Assistant message captured: The new parity mode passed: `rows=200 final_token_divergences=0 event_divergences=1 errors=0 ...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm... (exit 0)
+Assistant message captured: `runtime-smoke` is still clean: `token_divergences=0 event_divergences=0 errors=0`. I’m runni...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co...
+Assistant message captured: The b2-t1 gate is in its startup load; no divergence output yet. This gate builds the serial ...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co... (exit 0)
+Running command: /bin/bash -lc 'git diff --name-only -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/sessio...
+Command completed: /bin/bash -lc 'git diff --name-only -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/sessio... (exit 0)
+Running command: /bin/bash -lc 'git diff --stat -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/fir...
+Running command: /bin/bash -lc ".venv/bin/python - <<'PY' import json, hashlib, pathlib root=pathlib.Path('art...
+Running command: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'nemotron-aoti|densi...
+Command completed: /bin/bash -lc 'git diff --stat -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/fir... (exit 0)
+Command completed: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'nemotron-aoti|densi... (exit 0)
+Command completed: /bin/bash -lc ".venv/bin/python - <<'PY' import json, hashlib, pathlib root=pathlib.Path('art... (exit 0)
+Running command: /bin/bash -lc 'git status --short -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/...
+Command completed: /bin/bash -lc 'git status --short -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/... (exit 0)
+Applying 1 file change(s).
+File changes completed.
+Assistant message captured: I added the explicit ABI input checks to the TS adapter as well, while still delegating the a...
+Running command: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density...
+Command completed: /bin/bash -lc './container/enter.sh cmake --build cpp/build_step10 --target ws_server density... (exit 0)
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-...
+Assistant message captured: The rebuilt parity run is in module load again. I’m rerunning the full 200-row parity mode so...
+Assistant message captured: The final parity rerun has reached the quiet decode loop again. The TS selftest still passes ...
+Assistant message captured: The parity decode loop is still running normally. So far there has been no token-divergence o...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-... (exit 0)
+Assistant message captured: The final parity rerun matches the earlier result: `rows=200 final_token_divergences=0 event_...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode runtime-sm... (exit 0)
+Assistant message captured: `runtime-smoke` is clean again after the final code change: 0 token divergences, 0 event dive...
+Running command: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co...
+Assistant message captured: The final b2-t1 run is loading and building its serial reference. This is the same gate as be...
+Command completed: /bin/bash -lc './container/enter.sh cpp/build_step10/density_main artifacts --mode b2-t1 --co... (exit 0)
+Running command: /bin/bash -lc 'git status --short -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/...
+Command completed: /bin/bash -lc 'git status --short -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/... (exit 0)
+Running command: /bin/bash -lc "git diff -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/first_enco...
+Running command: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'nemotron-aoti|densi...
+Command completed: /bin/bash -lc "git diff -- cpp/CMakeLists.txt cpp/density_main.cpp cpp/lib/session/first_enco... (exit 0)
+Command completed: /bin/bash -lc "docker ps --format '{{.ID}} {{.Image}} {{.Command}}' | rg 'nemotron-aoti|densi... (exit 0)
+Running command: /bin/bash -lc "sed -n '1,280p' cpp/lib/session/first_encoder.cpp"
+Command completed: /bin/bash -lc "sed -n '1,280p' cpp/lib/session/first_encoder.cpp" (exit 0)
+Running command: /bin/bash -lc "sed -n '1,220p' cpp/lib/session/first_encoder.h"
+Command completed: /bin/bash -lc "sed -n '1,220p' cpp/lib/session/first_encoder.h" (exit 0)
+Running command: /bin/bash -lc 'rg -n "class FirstEncoder|TsFirstEncoder::run|AotiFirstEncoder::AotiFirstEncod...
+Command completed: /bin/bash -lc 'rg -n "class FirstEncoder|TsFirstEncoder::run|AotiFirstEncoder::AotiFirstEncod... (exit 0)
+Running command: /bin/bash -lc 'rg -n "enc-first-parity|SharedEncFirst|run_enc_first_parity|ENC_FIRST_PARITY|f...
+Command completed: /bin/bash -lc 'rg -n "enc-first-parity|SharedEncFirst|run_enc_first_parity|ENC_FIRST_PARITY|f... (exit 0)
+Assistant message captured: Implemented Step 4 without wiring AOTI into the serving path. **Changed** - Created [first_en...
+Turn completed.
+Implemented Step 4 without wiring AOTI into the serving path.
+
+**Changed**
+- Created [first_encoder.h](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.h:17) and [first_encoder.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/lib/session/first_encoder.cpp:76).
+- Added `FirstEncoder`, `TsFirstEncoder`, and `AotiFirstEncoder`.
+- `TsFirstEncoder` delegates the actual TS forward to the existing `run_first_encoder`.
+- `AotiFirstEncoder` binds borrowed shared constants with `bsteady_detail::constants_for_bucket(...)` and `load_constants(..., user_managed=true)`.
+- Added ABI checks for contiguous inputs, `L == chunk.size(2)`, exactly 5 outputs, sliced `enc_out[..., :2]`, and int64 length outputs.
+- Added `first_encoder.cpp` to [CMakeLists.txt](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/CMakeLists.txt:39).
+- Added `density_main --mode enc-first-parity` in [density_main.cpp](/home/khkramer/src/nemotron-january-2026/proj-2026-05-24-from-scratch-runtime/runtime/cpp/density_main.cpp:2436). Serving `SharedRuntime` remains untouched.
+
+**Artifact Confirmed**
+- `enc_first_aoti.pt2`: `a4d2a7fc83e104b66b95cb26832fc56f2e5401d7c90ab62dfc60d806d05b996a`
+- manifest `package_sha256`: same
+- `finalize_shared_weights.pt`: `5690023b45bd9ca36a65344a2eac3ca3a77e6c6ebe868faf6c3d47f81f9b2c27`
+- manifest `shared_weights_sha256`: same
+- manifest: `compute_capability=[12,0]`, 5 outputs, `max_abs=0.003963470458984375`
+
+**Validation**
+- Build: `./container/enter.sh cmake --build cpp/build_step10 --target ws_server density_main -j8` passed.
+- Parity: `./container/enter.sh cpp/build_step10/density_main artifacts --mode enc-first-parity`
+  - `ENC_FIRST_PARITY rows=200 final_token_divergences=0 event_divergences=1 errors=0 ts_adapter_byte_exact=PASS verdict=PASS`
+- Runtime smoke:
+  - `RUNTIME_SMOKE PASS rows=4 token_divergences=0 event_divergences=0 errors=0`
+- b2-t1:
+  - `B2_T1_RESULT PASS rows_reference=4 cases=6 token_divergences=0 event_divergences=0 errors=0`
+  - telemetry included `dispatcher_exceptions=0`
+
+No blockers. The one parity event divergence is an interim timing/text-prefix difference, not a final-token divergence, matching the Step-1 noise-floor expectation.
+
+Suggested next step: Step 5, wire `SharedRuntime` through this adapter behind the TS-default opt-in gate, then run the full Step-5 server oracle before any default-on flip.
