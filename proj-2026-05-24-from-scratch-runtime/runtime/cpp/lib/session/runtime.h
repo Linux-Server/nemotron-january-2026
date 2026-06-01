@@ -42,6 +42,7 @@ struct SharedRuntimeConfig {
   std::string bundle_path;
   std::string finalize_buckets_dir;
   std::string steady_artifacts_dir;
+  std::string steady_batch_artifacts_dir;
   bool scheduler_enabled = false;
   bool steady_shadow_enabled = false;
   int b_max = 4;

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import torch
+import torch._inductor.codecache  # noqa: F401
 
 
 EP_RE = re.compile(r"^enc_finalize_d(?P<drop>\d+)_T(?P<T>\d+)_ep\.pt2$")
@@ -220,13 +221,28 @@ def self_check_package(ep_path: str, pkg_path: str, shared: SharedWeights, atol:
 def compile_one_child(ep_path: str, pkg_path: str) -> int:
     fired = _force_noexecstack_on_link()
     ep = torch.export.load(ep_path)
+    requested_configs = {
+        "aot_inductor.package_constants_in_so": False,
+        "aot_inductor.package_constants_on_disk": True,
+        "max_autotune": False,
+        "max_autotune_gemm": False,
+        "max_autotune_pointwise": False,
+        "coordinate_descent_tuning": False,
+    }
+    import torch._inductor.config as cfg
+
+    inductor_configs = {}
+    for key, value in requested_configs.items():
+        try:
+            cfg.__getattr__(key)
+        except AttributeError:
+            print(f"skipping unsupported Inductor config: {key}", flush=True)
+            continue
+        inductor_configs[key] = value
     torch._inductor.aoti_compile_and_package(
         ep,
         package_path=pkg_path,
-        inductor_configs={
-            "aot_inductor.package_constants_in_so": False,
-            "aot_inductor.package_constants_on_disk": True,
-        },
+        inductor_configs=inductor_configs,
     )
     if not fired["ok"]:
         raise RuntimeError("noexecstack shim never fired on a shared-lib link")

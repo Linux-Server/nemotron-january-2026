@@ -44,6 +44,63 @@ uv run pipecat_bots/bot_interleaved_streaming.py
 
 Open `http://localhost:7860/client` in your browser.
 
+### DGX Spark Python ASR server configuration
+
+On DGX Spark / GB10, run the Python Nemotron Speech server with a single model
+lane. Two Python model lanes can work on larger discrete-GPU systems, but on
+DGX Spark the second lane has been observed to create host-side backlog before
+the GPU is saturated. The symptom is low GPU utilization, growing websocket
+queue depth, and benchmark timeouts at moderate concurrency. Use the settings
+below as the local runbook baseline.
+
+```bash
+PYTHONPATH=src \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+NEMOTRON_MODEL_NAME=english \
+NEMOTRON_CONTINUOUS=1 \
+NEMOTRON_FINALIZE_SILENCE_MS=0 \
+NEMOTRON_WARMUP_MS=200 \
+NEMOTRON_SCHEDULER_B1=1 \
+NEMOTRON_BATCH_SCHED=1 \
+NEMOTRON_BATCH_MAX_SIZE=32 \
+NEMOTRON_BATCH_MAX_WAIT_MS=8 \
+NEMOTRON_MODEL_LANES=1 \
+NEMOTRON_BATCH_BARRIER_DRAIN=1 \
+NEMOTRON_BATCH_FINALIZE=1 \
+NEMOTRON_ENCODER_CUDAGRAPH=1 \
+NEMOTRON_ENCODER_CUDAGRAPH_MAX_B=8 \
+NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE=1 \
+NEMOTRON_ENCODER_CUDAGRAPH_FINALIZE_PADDED=1 \
+NEMOTRON_SYNC_COMPRESS=1 \
+NEMOTRON_FINALIZE_PRIORITY=1 \
+uv run python src/nemotron_speech/server.py \
+  --model nvidia/nemotron-speech-streaming-en-0.6b \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --right-context 1
+```
+
+For `stt-benchmark`, point the benchmark at the local websocket endpoint and use
+the standard realtime harness:
+
+```bash
+cd stt-benchmark
+NEMOTRON_LOCAL_URL=ws://127.0.0.1:8080 \
+NEMOTRON_LOCAL_MODEL_NAME=english \
+uv run stt-benchmark run \
+  --services nemotron_local \
+  --model dgx_spark_python_n2 \
+  --limit 1000 \
+  --concurrency 2 \
+  --no-skip-existing
+```
+
+When comparing with the C++ websocket server, keep the client behavior aligned:
+clients should finalize with `reset(finalize=true)`. The C++ server's `vad_stop`
+websocket branch is intentionally side-effect free so it matches the Python
+server and the Pipecat service used by this repo.
+
 ## Quick start - Deploy to Cloud with Modal and Pipecat Cloud
 
 ### Modal (Services)
@@ -326,4 +383,3 @@ For detailed architecture documentation including frame flow, protocols, and tim
 
 **vLLM DNS resolution issues**:
 - The container uses `--network=host` in vLLM mode to avoid DNS issues with HuggingFace
-

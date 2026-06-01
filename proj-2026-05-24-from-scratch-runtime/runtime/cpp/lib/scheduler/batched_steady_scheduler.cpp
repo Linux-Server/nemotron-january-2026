@@ -67,6 +67,7 @@ BatchedSteadyScheduler::BatchedSteadyScheduler(BatchedSteadyLoaderSet& loader_se
               policy_.use_b2_bucket ? "true" : "false",
               loader_set_.loaded_bucket_count(),
               reinterpret_cast<void*>(dispatcher_stream_.stream()));
+  std::fflush(stdout);
 }
 
 BatchedSteadyScheduler::~BatchedSteadyScheduler() {
@@ -175,6 +176,8 @@ void BatchedSteadyScheduler::warmup_buckets() {
   c10::cuda::CUDAStreamGuard stream_guard(dispatcher_stream_);
   torch::NoGradGuard no_grad;
   for (int bucket : required_buckets()) {
+    std::printf("B2_SCHEDULER_WARMUP_BEGIN bucket=%d\n", bucket);
+    std::fflush(stdout);
     std::vector<BatchedSteadyInput> ready;
     ready.reserve(static_cast<size_t>(bucket));
     auto chunk = torch::zeros({1, 128, 25}, torch::TensorOptions().dtype(torch::kFloat32).device(device_));
@@ -195,6 +198,7 @@ void BatchedSteadyScheduler::warmup_buckets() {
       ++telemetry_.warmup_runs;
     }
     std::printf("B2_SCHEDULER_WARMUP bucket=%d rows=%zu\n", bucket, ready.size());
+    std::fflush(stdout);
   }
 }
 

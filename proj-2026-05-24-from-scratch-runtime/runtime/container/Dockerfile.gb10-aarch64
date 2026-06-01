@@ -1,0 +1,22 @@
+# GB10 / aarch64 proof-of-concept build image for the native C++ runtime.
+#
+# This intentionally lives beside, rather than replacing, Dockerfile. The
+# existing CUDA 12.8 x86_64-oriented recipe remains the reproducible legacy path.
+#
+# Build:
+#   docker build -f runtime/container/Dockerfile.gb10-aarch64 \
+#     -t nemotron-aoti:gb10-aarch64 runtime/container/
+FROM nvcr.io/nvidia/pytorch:25.12-py3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      cmake g++ git libssl-dev libsndfile1 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# AOTInductor/Triton compile helper code with `gcc -lcuda`; the devel image
+# ships the stub libcuda.so. The real driver library is provided at runtime by
+# Docker's NVIDIA runtime.
+RUN if [ -e /usr/local/cuda/lib64/stubs/libcuda.so ]; then \
+      ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/aarch64-linux-gnu/libcuda.so; \
+    fi
+
+WORKDIR /work/proj-2026-05-24-from-scratch-runtime/runtime

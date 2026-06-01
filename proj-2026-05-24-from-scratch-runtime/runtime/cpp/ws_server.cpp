@@ -1377,13 +1377,11 @@ bool process_text_control(const ws_framing::Frame& frame,
   }
 
   if (type == "vad_stop") {
-    uint64_t finalize_gen = session.generation();
-    auto events = session.handle_vad_stop();
-    enqueue_finalize_output(pending,
-                            std::move(events),
-                            finalize_gen,
-                            session,
-                            last_enqueued_finalize_seq);
+    // Current clients finalize with reset(finalize=true). Keep vad_stop
+    // side-effect free at the websocket API so the server matches the Python
+    // service and the YC Pipecat service. The lower-level vad_stop runtime hook
+    // remains available here for future endpointing/debounce optimizations if a
+    // client starts relying on server-side VAD finalization.
     return true;
   }
 
@@ -1802,6 +1800,7 @@ class WsServer {
     SharedRuntimeConfig shared_cfg;
     shared_cfg.bundle_path = (fs::path(state_->cfg.artifact_dir) / "session_audio_bundle.ts").string();
     shared_cfg.steady_artifacts_dir = state_->cfg.artifact_dir;
+    shared_cfg.steady_batch_artifacts_dir = state_->cfg.effective_steady_batch_dir;
     std::string stripped = (fs::path(state_->cfg.artifact_dir) / "stripped_finalize_buckets").string();
     shared_cfg.finalize_buckets_dir = dir_exists(stripped)
                                           ? stripped
@@ -2423,7 +2422,7 @@ int run_selftest(const ServerConfig& parsed) {
     }
   }));
 
-  results.push_back(run_case(8, "Bound port health + stats + WS lifecycle PCM+vad_stop", [&](SelftestResult* r) {
+  results.push_back(run_case(8, "Bound port health + stats + WS lifecycle PCM+vad_stop+reset", [&](SelftestResult* r) {
     ScopedEnv env;
     clear_selftest_env(&env);
     ServerConfig cfg = selftest_config(base, false);
@@ -2439,7 +2438,8 @@ int run_selftest(const ServerConfig& parsed) {
     ClientFrame ready = read_server_frame_timeout(ws.get(), 5000);
     if (!send_client_text(ws.get(), "{\"type\":\"vad_start\"}") ||
         !send_client_binary(ws.get(), pcm) ||
-        !send_client_text(ws.get(), "{\"type\":\"vad_stop\"}")) {
+        !send_client_text(ws.get(), "{\"type\":\"vad_stop\"}") ||
+        !send_client_text(ws.get(), "{\"type\":\"reset\",\"finalize\":true}")) {
       throw std::runtime_error("failed to send lifecycle websocket frames");
     }
 
@@ -2597,6 +2597,7 @@ int main(int argc, char** argv) {
     validate_config(&cfg, true);
 	    if (cfg.print_config) {
 	      std::cout << config_table(cfg);
+	      std::cout.flush();
 	    }
 	    install_sigterm_handler();
 

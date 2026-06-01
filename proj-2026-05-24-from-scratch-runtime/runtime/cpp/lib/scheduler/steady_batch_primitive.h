@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -39,6 +40,9 @@ struct ManifestBucket {
   std::string package_sha256;
   std::string ep_sha256;
   std::string shared_weight_sha256;
+  int64_t package_bytes = 0;
+  int64_t ep_bytes = 0;
+  int64_t shared_weight_bytes = 0;
 };
 
 using runtime_io::directory_exists;
@@ -50,6 +54,16 @@ using runtime_io::json_value_for_key;
 using runtime_io::read_text_file;
 using runtime_io::sha256_file;
 using runtime_io::skip_ws;
+
+static inline int64_t file_size_bytes(const std::string& path) {
+  std::error_code ec;
+  auto size = fs::file_size(path, ec);
+  if (ec) throw std::runtime_error("could not stat file size: " + path);
+  if (size > static_cast<uintmax_t>(std::numeric_limits<int64_t>::max())) {
+    throw std::runtime_error("file too large to validate size: " + path);
+  }
+  return static_cast<int64_t>(size);
+}
 
 static inline std::vector<ManifestBucket> load_manifest_buckets(const std::string& manifest_path) {
   std::string text = read_text_file(manifest_path);
@@ -75,6 +89,12 @@ static inline std::vector<ManifestBucket> load_manifest_buckets(const std::strin
     b.package_sha256 = json_string_field(obj, "package_sha256");
     b.ep_sha256 = json_string_field(obj, "ep_sha256", false);
     b.shared_weight_sha256 = json_string_field(obj, "shared_weight_sha256");
+    std::string byte_sizes = json_value_for_key(obj, "byte_sizes", false);
+    if (!byte_sizes.empty()) {
+      b.package_bytes = json_int_field(byte_sizes, "package");
+      b.ep_bytes = json_int_field(byte_sizes, "ep");
+      b.shared_weight_bytes = json_int_field(byte_sizes, "shared_weight");
+    }
     buckets.push_back(std::move(b));
     pos = end + 1;
   }
@@ -294,6 +314,7 @@ class BatchedSteadyLoaderSet {
     }
     auto buckets = bsteady_detail::load_manifest_buckets(manifest_path);
     std::set<int> seen;
+    int64_t shared_size = bsteady_detail::file_size_bytes(shared_weights_ts_);
     std::string shared_sha = bsteady_detail::sha256_file(shared_weights_ts_);
     size_t ep_verified = 0;
     for (const auto& entry : buckets) {
@@ -308,15 +329,22 @@ class BatchedSteadyLoaderSet {
       std::string expected_ep = "enc_steady_t2a_b" + std::to_string(entry.B) + ".pt2";
       std::string path = (bsteady_detail::fs::path(package_dir_) / entry.package).string();
       if (!bsteady_detail::file_exists(path)) throw std::runtime_error("batched steady package missing: " + path);
-      std::string actual = bsteady_detail::sha256_file(path);
-      if (actual != entry.package_sha256) {
-        throw std::runtime_error("batched steady package sha256 mismatch for " + entry.package +
-                                 ": manifest=" + entry.package_sha256 + " actual=" + actual);
+      if (entry.package_bytes > 0 && bsteady_detail::file_size_bytes(path) != entry.package_bytes) {
+        throw std::runtime_error("batched steady package size mismatch for " + entry.package);
       }
-      if (entry.shared_weight_sha256 != shared_sha) {
+      if (entry.shared_weight_bytes > 0 && shared_size != entry.shared_weight_bytes) {
+        throw std::runtime_error("batched steady shared weight size mismatch for B=" +
+                                 std::to_string(entry.B));
+      }
+      std::string package_sha = bsteady_detail::sha256_file(path);
+      if (package_sha != entry.package_sha256) {
+        throw std::runtime_error("batched steady package sha256 mismatch for " + entry.package +
+                                 ": manifest=" + entry.package_sha256 + " actual=" + package_sha);
+      }
+      if (shared_sha != entry.shared_weight_sha256) {
         throw std::runtime_error("batched steady shared weight sha256 mismatch for B=" +
-                                 std::to_string(entry.B) + ": manifest=" + entry.shared_weight_sha256 +
-                                 " actual=" + shared_sha);
+                                 std::to_string(entry.B) + ": manifest=" +
+                                 entry.shared_weight_sha256 + " actual=" + shared_sha);
       }
       std::string ep_path = (bsteady_detail::fs::path(package_dir_) / expected_ep).string();
       if (!bsteady_detail::file_exists(ep_path)) {
@@ -327,10 +355,13 @@ class BatchedSteadyLoaderSet {
         if (entry.ep_sha256.empty()) {
           throw std::runtime_error("batched steady manifest missing ep_sha256 for B=" + std::to_string(entry.B));
         }
-        std::string actual_ep = bsteady_detail::sha256_file(ep_path);
-        if (actual_ep != entry.ep_sha256) {
+        if (entry.ep_bytes > 0 && bsteady_detail::file_size_bytes(ep_path) != entry.ep_bytes) {
+          throw std::runtime_error("batched steady EP size mismatch for " + expected_ep);
+        }
+        std::string ep_sha = bsteady_detail::sha256_file(ep_path);
+        if (ep_sha != entry.ep_sha256) {
           throw std::runtime_error("batched steady EP sha256 mismatch for " + expected_ep +
-                                   ": manifest=" + entry.ep_sha256 + " actual=" + actual_ep);
+                                   ": manifest=" + entry.ep_sha256 + " actual=" + ep_sha);
         }
         ++ep_verified;
       }
@@ -343,7 +374,8 @@ class BatchedSteadyLoaderSet {
     std::printf("density batched steady manifest verified: buckets=%zu ep_verified=%zu shared_weight_sha256=%s\n",
                 buckets.size(),
                 ep_verified,
-                shared_sha.c_str());
+                buckets.empty() ? "" : buckets.front().shared_weight_sha256.c_str());
+    std::fflush(stdout);
   }
 
   AOTIModelPackageLoader& load_bucket(int bucket) {
@@ -351,6 +383,11 @@ class BatchedSteadyLoaderSet {
     if (existing != loaders_.end()) return *existing->second;
     auto path = package_path(bucket);
     if (!bsteady_detail::file_exists(path)) throw std::runtime_error("missing batched steady package: " + path);
+    std::printf("  density batched steady bucket load begin B=%d package=%s policy=%s\n",
+                bucket,
+                path.c_str(),
+                policy_.c_str());
+    std::fflush(stdout);
     auto loader = std::make_unique<AOTIModelPackageLoader>(
         path, "model", /*run_single_threaded=*/false, num_runners_, device_.index());
     auto bucket_constants = bsteady_detail::constants_for_bucket(shared_constants_, *loader, path);
@@ -364,6 +401,7 @@ class BatchedSteadyLoaderSet {
                 bucket_constants.alias_fallbacks,
                 num_runners_,
                 policy_.c_str());
+    std::fflush(stdout);
     auto inserted = loaders_.emplace(bucket, std::move(loader));
     return *inserted.first->second;
   }

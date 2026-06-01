@@ -65,6 +65,7 @@ def build_cmap(*, reuse_existing: bool = False) -> Dict[str, torch.Tensor]:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--out", default=ART)
     parser.add_argument(
         "--reuse-existing",
         action="store_true",
@@ -72,7 +73,10 @@ def main():
     )
     args = parser.parse_args()
 
-    os.makedirs(ART, exist_ok=True)
+    os.makedirs(args.out, exist_ok=True)
+    global PT, TS
+    PT = os.path.join(args.out, "finalize_shared_weights.pt")
+    TS = os.path.join(args.out, "finalize_shared_weights.ts")
     cmap = build_cmap(reuse_existing=args.reuse_existing)
     torch.save(cmap, PT)
     sm = torch.jit.script(SharedWeights(dict(cmap)))

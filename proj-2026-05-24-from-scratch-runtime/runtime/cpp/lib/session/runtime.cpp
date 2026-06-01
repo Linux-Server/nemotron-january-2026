@@ -704,7 +704,16 @@ struct SharedRuntime::Impl {
     warm_inference_lanes();
 
     if (cfg.scheduler_enabled) {
-      std::string batch_dir = resolve_steady_batch_dir(artifact_dir, cfg.steady_artifacts_dir);
+      std::string batch_dir = resolve_steady_batch_dir(artifact_dir, cfg.steady_batch_artifacts_dir);
+      std::printf("shared runtime scheduler init begin: batch_dir=%s B_max=%d steady_runners=%d "
+                  "window_ms=%d lone_timeout_ms=%d queue_capacity=%d\n",
+                  batch_dir.c_str(),
+                  cfg.b_max,
+                  cfg.steady_num_runners,
+                  cfg.batch_window_ms,
+                  cfg.batch_lone_timeout_ms,
+                  cfg.batch_queue_capacity);
+      std::fflush(stdout);
       scheduler_ownership.register_loader_set();
       BatchedSteadySchedulerPolicy policy;
       policy.B_max = cfg.b_max;
@@ -717,10 +726,19 @@ struct SharedRuntime::Impl {
           device,
           cfg.steady_num_runners,
           "shared_runtime_scheduler");
+      std::printf("shared runtime scheduler loader set constructed\n");
+      std::fflush(stdout);
       batched_steady->preload_all();
+      std::printf("shared runtime scheduler preload_all complete: loaded_buckets=%d\n",
+                  batched_steady->loaded_bucket_count());
+      std::fflush(stdout);
       scheduler_ownership.register_scheduler();
       scheduler = std::make_unique<BatchedSteadyScheduler>(*batched_steady, device, policy);
+      std::printf("shared runtime scheduler constructed; warmup begin\n");
+      std::fflush(stdout);
       scheduler->warmup_buckets();
+      std::printf("shared runtime scheduler warmup complete; dispatcher start begin\n");
+      std::fflush(stdout);
       scheduler->start();
       std::printf("shared runtime scheduler owner ready: owner=SharedRuntime scheduler_instances=%d "
                   "steady_loader_sets=%d warmup_complete=true dispatcher_started=true\n",

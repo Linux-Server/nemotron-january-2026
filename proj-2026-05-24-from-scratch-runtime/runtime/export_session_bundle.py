@@ -34,6 +34,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch._inductor.codecache  # noqa: F401 - required by torch 2.10 aoti_load_package path
 from omegaconf import OmegaConf
 
 from finalize_ref import (
