@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 import os
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 import re
 import threading
@@ -465,7 +465,35 @@ PROMPTED_FALLBACK_ATT_CONTEXT_SIZES = [[56, 0], [56, 3], [56, 6], [56, 13]]
 PROMPTED_DEFAULT_RIGHT_CONTEXT = 3
 PROMPTED_DEFAULT_TARGET_LANG = "auto"
 LANG_TAG_RE = re.compile(r"\s*<[a-z]{2}-[A-Z]{2}>")
+LANG_TAG_CAPTURE_RE = re.compile(r"<([a-z]{2}(?:-[A-Z]{2})?)>")
 PARTIAL_LANG_TAG_RE = re.compile(r"\s*<[a-z]{0,2}(?:-[A-Z]{0,2})?$")
+
+
+@dataclass
+class TranscriptResult:
+    text: str
+    language: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class StreamingPlan:
+    route: str
+    att_context_size: list[int]
+    right_context: int
+    hop_samples: int
+    window_size_samples: int
+    shift_frames: int
+    pre_encode_cache_size: int
+    drop_extra: int
+    final_padding_frames: int
+    preprocess_align_pad_samples: int
+    raw_audio_ring_samples: int
+    preprocess_new_audio_samples: int
+    stream_preprocess_valid_samples: int
+    first_preprocess_mel_frame: int
+    constant_preprocess_frames: int
+    constant_preprocess_samples: int
+    overlap_samples: int
 
 
 @dataclass
@@ -475,6 +503,12 @@ class ASRSession:
     id: str
     websocket: Any
     target_lang: Optional[str] = None
+    model_route: str = "default"
+    last_language: Optional[str] = None
+    stats_language: Optional[str] = None
+    stats_model_route: Optional[str] = None
+    vad_gated_audio: bool = False
+    accepting_vad_audio: bool = True
 
     # Legacy/debug audio buffer name. Step 6b keeps this bounded to pending
     # audio only; the preprocessor must never see a growing full-stream buffer.
@@ -602,15 +636,26 @@ class ASRServer:
     def __init__(
         self,
         model: str,
+        multilingual_model: Optional[str] = None,
         host: str = "0.0.0.0",
         port: int = 8080,
         right_context: Optional[int] = None,
     ):
         self.model_name_or_path = model
+        self.multilingual_model_name_or_path = multilingual_model
+        self.dual_model_enabled = bool(multilingual_model)
         self.host = host
         self.port = port
         self.right_context = right_context
         self.model = None
+        self.models: dict[str, Any] = {}
+        self.model_prompted: dict[str, bool] = {}
+        self.model_prompt_dictionaries: dict[str, dict[str, Any]] = {}
+        self.model_routes: dict[str, str] = {"default": model, "en": model}
+        self.streaming_plans: dict[str, StreamingPlan] = {}
+        if self.dual_model_enabled:
+            self.model_routes["multilingual"] = multilingual_model or ""
+        self._inference_tls = threading.local()
         self._decoding_cfg_for_lane_models = None
         self.prompted_model = False
         self.prompt_dictionary: dict[str, Any] = {}
@@ -650,6 +695,13 @@ class ASRServer:
         if self.model_lanes_requested <= 0:
             raise ValueError("NEMOTRON_MODEL_LANES must be >= 1")
         self.model_lanes = self.model_lanes_requested
+        if self.dual_model_enabled and (
+            self.scheduler_enabled or self.batch_enabled or self.model_lanes_requested > 1
+        ):
+            raise ValueError(
+                "Dual-checkpoint language routing currently supports the serial websocket "
+                "path only; disable scheduler/batch/model-lane options."
+            )
         self.requested_decoder_strategy = (
             os.environ.get("NEMOTRON_DECODING", "greedy").strip().lower() or "greedy"
         )
@@ -844,6 +896,16 @@ class ASRServer:
         self.encoder_cudagraph_finalize_drop_extra = 2
         self._encoder_cudagraph_finalize_config_error: Optional[str] = None
         self._encoder_cudagraph_finalize_padded_canary_failed: Optional[str] = None
+        if self.dual_model_enabled and (
+            self.encoder_compile_requested
+            or self.encoder_cudagraph_requested
+            or self.encoder_cudagraph_finalize_requested
+            or self.encoder_cudagraph_finalize_padded_requested
+        ):
+            raise ValueError(
+                "Dual-checkpoint language routing currently supports only plain "
+                "serial inference; disable encoder compile/cudagraph options."
+            )
         if self.encoder_cudagraph_finalize_requested:
             try:
                 self.encoder_cudagraph_finalize_t_min = _env_int(
@@ -971,6 +1033,14 @@ class ASRServer:
         self._stats_samples: deque = deque(maxlen=self.stats_window_size)
         self._stats_emitted_count = 0
         self._stats_suppressed_count = 0
+        self._stats_request_language_counts: Counter[str] = Counter()
+        self._stats_request_route_counts: Counter[str] = Counter()
+        self._stats_active_language_counts: Counter[str] = Counter()
+        self._stats_active_route_counts: Counter[str] = Counter()
+        self._stats_routing_event_language_counts: Counter[str] = Counter()
+        self._stats_routing_event_route_counts: Counter[str] = Counter()
+        self._stats_request_count = 0
+        self._stats_routing_event_count = 0
         if self.stats_enabled:
             logger.info(
                 "stats_endpoint_enabled "
@@ -1407,10 +1477,13 @@ class ASRServer:
         return session.target_lang
 
     def _apply_inference_prompt(self, session: ASRSession) -> None:
-        if self.prompted_model:
-            self._current_inference_model().set_inference_prompt(
-                self._ensure_session_target_lang(session)
-            )
+        route = getattr(self._inference_tls, "model_route", None) or session.model_route
+        if self.model_prompted.get(route, self.prompted_model):
+            prompt = self._ensure_session_target_lang(session)
+            prompt_dict = self.model_prompt_dictionaries.get(route) or self.prompt_dictionary
+            if prompt not in prompt_dict and "auto" in prompt_dict:
+                prompt = "auto"
+            self._current_inference_model().set_inference_prompt(prompt)
 
     def _read_prompt_dictionary(self) -> dict[str, Any]:
         prompt_dictionary_paths = (
@@ -1419,7 +1492,8 @@ class ASRServer:
             ("validation_ds", "prompt_dictionary"),
             ("test_ds", "prompt_dictionary"),
         )
-        for cfg in (getattr(self.model, "cfg", None), getattr(self.model, "_cfg", None)):
+        model = self._current_inference_model()
+        for cfg in (getattr(model, "cfg", None), getattr(model, "_cfg", None)):
             for path in prompt_dictionary_paths:
                 prompt_dict = self._to_plain(self._cfg_get(cfg, *path))
                 if isinstance(prompt_dict, dict):
@@ -1469,6 +1543,9 @@ class ASRServer:
             )
 
     def _validate_session_target_lang(self, requested_language: Optional[str]) -> str:
+        if self.dual_model_enabled:
+            return (requested_language or self.target_lang or "en").strip() or "en"
+
         if requested_language:
             if not self.prompted_model:
                 raise ValueError("this model does not accept a language argument")
@@ -1505,7 +1582,7 @@ class ASRServer:
         stripped = PARTIAL_LANG_TAG_RE.sub("", stripped)
         return re.sub(r"\s+", " ", stripped).strip()
 
-    def _extract_hypothesis_text(self, hyp: Any) -> str:
+    def _extract_hypothesis_result(self, hyp: Any) -> TranscriptResult:
         if hasattr(hyp, 'text'):
             text = hyp.text
         elif isinstance(hyp, str):
@@ -1513,31 +1590,215 @@ class ASRServer:
         else:
             text = str(hyp)
 
-        if self.prompted_model:
-            text = self._strip_lang_tags(text)
-        return text
+        raw_text = text
+        matches = LANG_TAG_CAPTURE_RE.findall(raw_text)
+        language = matches[-1] if matches else None
+        text = self._strip_lang_tags(text)
+        if os.environ.get("NEMOTRON_DEBUG_RAW_HYP_TEXT", "") == "1":
+            logger.info(
+                "debug_raw_hyp_text "
+                f"target_lang={self.target_lang!r} "
+                f"language={language!r} "
+                f"raw={raw_text!r} "
+                f"stripped={text!r}"
+            )
+        return TranscriptResult(text=text, language=language)
+
+    def _extract_hypothesis_text(self, hyp: Any) -> str:
+        return self._extract_hypothesis_result(hyp).text
+
+    def _transcript_payload(
+        self,
+        session: ASRSession,
+        *,
+        text: str,
+        is_final: bool,
+        finalize: Optional[bool] = None,
+        language: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if language:
+            session.last_language = language
+        language_tag = language or session.last_language or session.target_lang
+        payload: dict[str, Any] = {
+            "type": "transcript",
+            "text": text,
+            "is_final": is_final,
+            "language": language_tag,
+            "language_tag": language_tag,
+            "model_route": session.model_route,
+        }
+        if finalize is not None:
+            payload["finalize"] = finalize
+        return payload
+
+    def _model_key_for_language(self, language: Optional[str]) -> str:
+        if not self.dual_model_enabled:
+            return "default"
+        lang = (language or self.target_lang or "").strip().lower()
+        if lang == "en" or lang.startswith("en-"):
+            return "en"
+        return "multilingual"
+
+    def _set_session_language_route(self, session: ASRSession, language: Optional[str]) -> None:
+        if language:
+            session.target_lang = language
+        self._ensure_session_target_lang(session)
+        session.model_route = self._model_key_for_language(session.target_lang)
+
+    def _restore_asr_model(self, model_name_or_path: str, *, label: str):
+        import nemo.collections.asr as nemo_asr
+
+        is_local_file = (
+            model_name_or_path.endswith('.nemo') or
+            os.path.exists(model_name_or_path)
+        )
+        if is_local_file:
+            logger.info(f"Loading {label} model from local file: {model_name_or_path}")
+            return nemo_asr.models.ASRModel.restore_from(
+                model_name_or_path, map_location='cpu'
+            )
+        logger.info(f"Loading {label} model from HuggingFace: {model_name_or_path}")
+        return nemo_asr.models.ASRModel.from_pretrained(
+            model_name_or_path, map_location='cpu'
+        )
+
+    def _register_model_route(self, route: str, model: Any) -> None:
+        self.models[route] = model
+        prompted = hasattr(model, "set_inference_prompt")
+        self.model_prompted[route] = prompted
+        previous_route = getattr(self._inference_tls, "model_route", None)
+        self._inference_tls.model_route = route
+        try:
+            self.model_prompt_dictionaries[route] = (
+                self._read_prompt_dictionary() if prompted else {}
+            )
+        finally:
+            self._inference_tls.model_route = previous_route
+
+    def _build_streaming_plan(
+        self,
+        route: str,
+        model: Any,
+        att_context_size: list[int],
+    ) -> StreamingPlan:
+        scfg = model.encoder.streaming_cfg
+        preprocessor_cfg = model.cfg.preprocessor
+        hop_length_sec = preprocessor_cfg.get('window_stride', 0.01)
+        window_size_sec = preprocessor_cfg.get('window_size', 0.025)
+        featurizer = model.preprocessor.featurizer
+        hop_samples = int(
+            getattr(featurizer, "hop_length", int(hop_length_sec * self.sample_rate))
+        )
+        window_size_samples = int(
+            getattr(featurizer, "win_length", int(window_size_sec * self.sample_rate))
+        )
+        shift_frames = scfg.shift_size[1] if isinstance(scfg.shift_size, list) else scfg.shift_size
+        pre_cache = scfg.pre_encode_cache_size
+        pre_encode_cache_size = pre_cache[1] if isinstance(pre_cache, list) else pre_cache
+        drop_extra = scfg.drop_extra_pre_encoded
+        right_context = int(att_context_size[-1]) if att_context_size else int(self.right_context or 1)
+        final_padding_frames = (right_context + 1) * shift_frames
+        raw_audio_ring_samples = window_size_samples - hop_samples
+        preprocess_align_pad_samples = (
+            hop_samples - (raw_audio_ring_samples % hop_samples)
+        ) % hop_samples
+        preprocess_new_audio_samples = (shift_frames + 1) * hop_samples
+        stream_preprocess_valid_samples = (
+            preprocess_align_pad_samples
+            + raw_audio_ring_samples
+            + preprocess_new_audio_samples
+        )
+        prefix_samples = preprocess_align_pad_samples + raw_audio_ring_samples
+        if prefix_samples % hop_samples != 0:
+            raise RuntimeError(
+                "Constant preprocessor prefix must align to mel frame hops: "
+                f"prefix={prefix_samples}, hop={hop_samples}"
+            )
+        first_preprocess_mel_frame = prefix_samples // hop_samples
+        min_plan_frames = (
+            first_preprocess_mel_frame
+            + pre_encode_cache_size
+            + shift_frames
+            + final_padding_frames
+            + 1
+        )
+        constant_preprocess_frames = 1 << (min_plan_frames - 1).bit_length()
+        constant_preprocess_samples = (constant_preprocess_frames - 1) * hop_samples
+        overlap_samples = pre_encode_cache_size * hop_samples
+        return StreamingPlan(
+            route=route,
+            att_context_size=att_context_size.copy(),
+            right_context=right_context,
+            hop_samples=int(hop_samples),
+            window_size_samples=int(window_size_samples),
+            shift_frames=int(shift_frames),
+            pre_encode_cache_size=int(pre_encode_cache_size),
+            drop_extra=int(drop_extra),
+            final_padding_frames=int(final_padding_frames),
+            preprocess_align_pad_samples=int(preprocess_align_pad_samples),
+            raw_audio_ring_samples=int(raw_audio_ring_samples),
+            preprocess_new_audio_samples=int(preprocess_new_audio_samples),
+            stream_preprocess_valid_samples=int(stream_preprocess_valid_samples),
+            first_preprocess_mel_frame=int(first_preprocess_mel_frame),
+            constant_preprocess_frames=int(constant_preprocess_frames),
+            constant_preprocess_samples=int(constant_preprocess_samples),
+            overlap_samples=int(overlap_samples),
+        )
+
+    def _apply_default_streaming_plan(self, plan: StreamingPlan) -> None:
+        self.att_context_size = plan.att_context_size.copy()
+        self.shift_frames = plan.shift_frames
+        self.pre_encode_cache_size = plan.pre_encode_cache_size
+        self.hop_samples = plan.hop_samples
+        self.window_size_samples = plan.window_size_samples
+        self.raw_audio_ring_samples = plan.raw_audio_ring_samples
+        self.preprocess_align_pad_samples = plan.preprocess_align_pad_samples
+        self.preprocess_new_audio_samples = plan.preprocess_new_audio_samples
+        self.stream_preprocess_valid_samples = plan.stream_preprocess_valid_samples
+        self.constant_preprocess_frames = plan.constant_preprocess_frames
+        self.constant_preprocess_samples = plan.constant_preprocess_samples
+        self.first_preprocess_mel_frame = plan.first_preprocess_mel_frame
+        self.drop_extra = plan.drop_extra
+        self.final_padding_frames = plan.final_padding_frames
+        self.overlap_samples = plan.overlap_samples
+
+    def _log_streaming_plan(self, plan: StreamingPlan, model: Any) -> None:
+        scfg = model.encoder.streaming_cfg
+        hop_length_sec = model.cfg.preprocessor.get('window_stride', 0.01)
+        shift_ms = plan.shift_frames * hop_length_sec * 1000
+        padding_ms = plan.final_padding_frames * hop_length_sec * 1000
+        overlap_ms = plan.overlap_samples * 1000 / self.sample_rate
+        logger.info(
+            f"Streaming plan[{plan.route}]: chunk_size={scfg.chunk_size}, "
+            f"shift_size={scfg.shift_size}, att_context={plan.att_context_size}"
+        )
+        logger.info(
+            f"Streaming plan[{plan.route}]: shift={shift_ms:.0f}ms "
+            f"({plan.shift_frames} frames), pre_encode_cache={plan.pre_encode_cache_size} "
+            f"frames, drop_extra={plan.drop_extra}"
+        )
+        logger.info(
+            f"Streaming plan[{plan.route}]: K={plan.constant_preprocess_samples} samples "
+            f"({plan.constant_preprocess_frames} STFT frames), "
+            f"align={plan.preprocess_align_pad_samples}, "
+            f"raw_ring={plan.raw_audio_ring_samples}, "
+            f"new_audio={plan.preprocess_new_audio_samples}, "
+            f"final_padding={padding_ms:.0f}ms ({plan.final_padding_frames} frames), "
+            f"overlap={overlap_ms:.0f}ms ({plan.overlap_samples} samples)"
+        )
+
+    def _plan_for_route(self, route: str) -> StreamingPlan:
+        return self.streaming_plans.get(route) or self.streaming_plans["default"]
+
+    def _plan_for_session(self, session: ASRSession) -> StreamingPlan:
+        return self._plan_for_route(session.model_route)
 
     def load_model(self):
         """Load the NeMo ASR model with streaming configuration."""
         import nemo.collections.asr as nemo_asr
         from omegaconf import OmegaConf
 
-        # Detect if model is a local .nemo file or HuggingFace model name
-        is_local_file = (
-            self.model_name_or_path.endswith('.nemo') or
-            os.path.exists(self.model_name_or_path)
-        )
-
-        if is_local_file:
-            logger.info(f"Loading model from local file: {self.model_name_or_path}")
-            self.model = nemo_asr.models.ASRModel.restore_from(
-                self.model_name_or_path, map_location='cpu'
-            )
-        else:
-            logger.info(f"Loading model from HuggingFace: {self.model_name_or_path}")
-            self.model = nemo_asr.models.ASRModel.from_pretrained(
-                self.model_name_or_path, map_location='cpu'
-            )
+        self.model = self._restore_asr_model(self.model_name_or_path, label="primary")
         self.model = self.model.cuda()
         logger.info("ASR model loaded on CUDA")
         self.prompted_model = hasattr(self.model, "set_inference_prompt")
@@ -1629,89 +1890,48 @@ class ASRServer:
 
         # Disable dither for deterministic preprocessing
         self.model.preprocessor.featurizer.dither = 0.0
+        self._register_model_route("default", self.model)
+        self.models["en"] = self.model
+        self.model_prompted["en"] = self.model_prompted["default"]
+        self.model_prompt_dictionaries["en"] = self.model_prompt_dictionaries["default"]
+        default_plan = self._build_streaming_plan("default", self.model, self.att_context_size)
+        self.streaming_plans["default"] = default_plan
+        self.streaming_plans["en"] = default_plan
+        self._apply_default_streaming_plan(default_plan)
 
-        # Get streaming config
-        scfg = self.model.encoder.streaming_cfg
-        logger.info(f"Streaming config: chunk_size={scfg.chunk_size}, shift_size={scfg.shift_size}")
-
-        # Calculate parameters
-        preprocessor_cfg = self.model.cfg.preprocessor
-        hop_length_sec = preprocessor_cfg.get('window_stride', 0.01)
-        window_size_sec = preprocessor_cfg.get('window_size', 0.025)
-        featurizer = self.model.preprocessor.featurizer
-        self.hop_samples = int(getattr(featurizer, "hop_length", int(hop_length_sec * self.sample_rate)))
-        self.window_size_samples = int(
-            getattr(featurizer, "win_length", int(window_size_sec * self.sample_rate))
-        )
-
-        # shift_size[1] = 16 frames for 160ms chunks
-        self.shift_frames = scfg.shift_size[1] if isinstance(scfg.shift_size, list) else scfg.shift_size
-
-        # pre_encode_cache_size[1] = 9 frames
-        pre_cache = scfg.pre_encode_cache_size
-        self.pre_encode_cache_size = pre_cache[1] if isinstance(pre_cache, list) else pre_cache
-
-        # drop_extra_pre_encoded for non-first chunks
-        self.drop_extra = scfg.drop_extra_pre_encoded
-
-        # Calculate silence padding for final chunk:
-        # - right_context chunks for encoder lookahead
-        # - 1 additional chunk for decoder finalization
-        # With right_context=1, this is (1+1)*160ms = 320ms
-        self.final_padding_frames = (self.right_context + 1) * self.shift_frames
-        padding_ms = self.final_padding_frames * hop_length_sec * 1000
-
-        # Constant-plan incremental preprocessor:
-        # - raw ring is only STFT boundary context (window - hop)
-        # - mel ring below is the cache-aware pre-encode context
-        # - one hop of right-edge guard matches the current streaming gate
-        self.raw_audio_ring_samples = self.window_size_samples - self.hop_samples
-        self.preprocess_align_pad_samples = (
-            self.hop_samples - (self.raw_audio_ring_samples % self.hop_samples)
-        ) % self.hop_samples
-        self.preprocess_new_audio_samples = (self.shift_frames + 1) * self.hop_samples
-        self.stream_preprocess_valid_samples = (
-            self.preprocess_align_pad_samples
-            + self.raw_audio_ring_samples
-            + self.preprocess_new_audio_samples
-        )
-        prefix_samples = self.preprocess_align_pad_samples + self.raw_audio_ring_samples
-        if prefix_samples % self.hop_samples != 0:
-            raise RuntimeError(
-                "Constant preprocessor prefix must align to mel frame hops: "
-                f"prefix={prefix_samples}, hop={self.hop_samples}"
+        if self.dual_model_enabled:
+            multilingual_model = self._restore_asr_model(
+                self.multilingual_model_name_or_path or "",
+                label="multilingual",
+            ).cuda()
+            multilingual_model.change_decoding_strategy(decoding_cfg=copy.deepcopy(_decoding_cfg))
+            multilingual_model.eval()
+            try:
+                multilingual_model.preprocessor.featurizer.dither = 0.0
+            except Exception:
+                pass
+            multilingual_att_context_size = [56, PROMPTED_DEFAULT_RIGHT_CONTEXT]
+            if hasattr(multilingual_model, "encoder"):
+                multilingual_model.encoder.set_default_att_context_size(
+                    multilingual_att_context_size
+                )
+            self._register_model_route("multilingual", multilingual_model)
+            self.streaming_plans["multilingual"] = self._build_streaming_plan(
+                "multilingual",
+                multilingual_model,
+                multilingual_att_context_size,
             )
-        self.first_preprocess_mel_frame = prefix_samples // self.hop_samples
-        min_plan_frames = (
-            self.first_preprocess_mel_frame
-            + self.pre_encode_cache_size
-            + self.shift_frames
-            + self.final_padding_frames
-            + 1
-        )
-        self.constant_preprocess_frames = 1 << (min_plan_frames - 1).bit_length()
-        self.constant_preprocess_samples = (self.constant_preprocess_frames - 1) * self.hop_samples
+            logger.info(
+                "dual_model_routing_enabled "
+                f"en={self.model_name_or_path} "
+                f"multilingual={self.multilingual_model_name_or_path}"
+            )
 
-        # Calculate audio overlap for mid-utterance reset continuity
-        # Use pre_encode_cache_size frames = 90ms of left-context
-        # This allows the encoder to have proper context when starting a new segment
-        self.overlap_samples = self.pre_encode_cache_size * self.hop_samples
-        overlap_ms = self.overlap_samples * 1000 / self.sample_rate
-
-        shift_ms = self.shift_frames * hop_length_sec * 1000
         logger.info(f"Model loaded: {type(self.model).__name__}")
-        logger.info(f"Shift size: {shift_ms:.0f}ms ({self.shift_frames} frames)")
-        logger.info(f"Pre-encode cache: {self.pre_encode_cache_size} frames")
-        logger.info(
-            "Constant preprocessor plan: "
-            f"K={self.constant_preprocess_samples} samples "
-            f"({self.constant_preprocess_frames} STFT frames, min={min_plan_frames}) "
-            f"(align={self.preprocess_align_pad_samples}, "
-            f"raw_ring={self.raw_audio_ring_samples}, "
-            f"new_audio={self.preprocess_new_audio_samples})"
-        )
-        logger.info(f"Final chunk padding: {padding_ms:.0f}ms ({self.final_padding_frames} frames)")
-        logger.info(f"Audio overlap for resets: {overlap_ms:.0f}ms ({self.overlap_samples} samples)")
+        for route, plan in self.streaming_plans.items():
+            if route == "en":
+                continue
+            self._log_streaming_plan(plan, self.models[route])
 
         self._configure_encoder_compile()
         logger.info(
@@ -3927,14 +4147,36 @@ class ASRServer:
             if self.encoder_compile_enabled
             else None
         )
-        return await asyncio.get_event_loop().run_in_executor(executor, fn, *args)
+        return await asyncio.get_event_loop().run_in_executor(
+            executor, self._run_inference_call_sync, fn, args
+        )
+
+    def _run_inference_call_sync(self, fn, args: tuple):
+        previous_route = getattr(self._inference_tls, "model_route", None)
+        route = None
+        if args and isinstance(args[0], ASRSession):
+            route = args[0].model_route
+        self._inference_tls.model_route = route or "default"
+        try:
+            return fn(*args)
+        finally:
+            self._inference_tls.model_route = previous_route
 
     def _current_inference_model(self):
         if self.model_lanes > 1:
             lane_model = getattr(self._scheduler_model_lane_tls, "model", None)
             if lane_model is not None:
                 return lane_model
+        route = getattr(self._inference_tls, "model_route", None)
+        if route and route in self.models:
+            return self.models[route]
         return self.model
+
+    def _current_model_is_prompted(self) -> bool:
+        route = getattr(self._inference_tls, "model_route", None)
+        if route and route in self.model_prompted:
+            return self.model_prompted[route]
+        return self.prompted_model
 
     def _scheduler_model_lane_condition_obj(self) -> asyncio.Condition:
         if self._scheduler_model_lane_condition is None:
@@ -4381,22 +4623,28 @@ class ASRServer:
         )
 
     def _init_session_without_synthetic_warmup(self, session: ASRSession) -> None:
-        self._ensure_session_target_lang(session)
-        cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
-        session.cache_last_channel = cache[0]
-        session.cache_last_time = cache[1]
-        session.cache_last_channel_len = cache[2]
-        session.pending_audio = np.array([], dtype=np.float32)
-        session.accumulated_audio = session.pending_audio
-        session.total_audio_samples = 0
-        session.raw_audio_ring = np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
-        session.mel_frame_ring = None
-        session.emitted_frames = 0
-        session.previous_hypotheses = None
-        session.pred_out_stream = None
-        session.current_text = ""
-        session.eou_probe_chunk_index = 0
-        session.synthetic_prefix_samples = 0
+        self._set_session_language_route(session, session.target_lang)
+        previous_route = getattr(self._inference_tls, "model_route", None)
+        self._inference_tls.model_route = session.model_route
+        try:
+            plan = self._plan_for_session(session)
+            cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
+            session.cache_last_channel = cache[0]
+            session.cache_last_time = cache[1]
+            session.cache_last_channel_len = cache[2]
+            session.pending_audio = np.array([], dtype=np.float32)
+            session.accumulated_audio = session.pending_audio
+            session.total_audio_samples = 0
+            session.raw_audio_ring = np.zeros(plan.raw_audio_ring_samples, dtype=np.float32)
+            session.mel_frame_ring = None
+            session.emitted_frames = 0
+            session.previous_hypotheses = None
+            session.pred_out_stream = None
+            session.current_text = ""
+            session.eou_probe_chunk_index = 0
+            session.synthetic_prefix_samples = 0
+        finally:
+            self._inference_tls.model_route = previous_route
 
     def _queue_silent_compile_chunk(self, session: ASRSession) -> None:
         session.pending_audio = np.zeros(self.preprocess_new_audio_samples, dtype=np.float32)
@@ -4432,7 +4680,7 @@ class ASRServer:
             )
 
             # Run streaming step (processes entire mel as one chunk)
-            if self.prompted_model:
+            if self._current_model_is_prompted():
                 self._apply_inference_prompt(warmup_session)
             _ = self._conformer_stream_step(
                 processed_signal=mel,
@@ -4458,73 +4706,81 @@ class ASRServer:
         prepended to the accumulated audio to provide encoder left-context.
         This enables seamless transcription across mid-utterance resets.
         """
-        self._ensure_session_target_lang(session)
+        self._set_session_language_route(session, session.target_lang)
+        previous_route = getattr(self._inference_tls, "model_route", None)
+        self._inference_tls.model_route = session.model_route
+        try:
+            plan = self._plan_for_session(session)
 
-        # Initialize encoder cache
-        cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
-        session.cache_last_channel = cache[0]
-        session.cache_last_time = cache[1]
-        session.cache_last_channel_len = cache[2]
+            # Initialize encoder cache
+            cache = self._current_inference_model().encoder.get_initial_cache_state(batch_size=1)
+            session.cache_last_channel = cache[0]
+            session.cache_last_time = cache[1]
+            session.cache_last_channel_len = cache[2]
 
-        # Reset audio buffer and frame counter
-        # If overlap buffer exists, use it as the starting audio
-        if session.overlap_buffer is not None and len(session.overlap_buffer) > 0:
-            session.pending_audio = session.overlap_buffer.copy()
-            session.accumulated_audio = session.pending_audio
-            session.total_audio_samples = len(session.pending_audio)
-            overlap_ms = len(session.overlap_buffer) * 1000 / self.sample_rate
-            logger.debug(
-                f"Session {session.id}: prepending {len(session.overlap_buffer)} samples "
-                f"({overlap_ms:.0f}ms) of overlap audio"
-            )
-            session.overlap_buffer = None  # Clear after use
-        else:
-            session.pending_audio = np.array([], dtype=np.float32)
-            session.accumulated_audio = session.pending_audio
-            session.total_audio_samples = 0
+            # Reset audio buffer and frame counter
+            # If overlap buffer exists, use it as the starting audio
+            if session.overlap_buffer is not None and len(session.overlap_buffer) > 0:
+                session.pending_audio = session.overlap_buffer.copy()
+                session.accumulated_audio = session.pending_audio
+                session.total_audio_samples = len(session.pending_audio)
+                overlap_ms = len(session.overlap_buffer) * 1000 / self.sample_rate
+                logger.debug(
+                    f"Session {session.id}: prepending {len(session.overlap_buffer)} samples "
+                    f"({overlap_ms:.0f}ms) of overlap audio"
+                )
+                session.overlap_buffer = None  # Clear after use
+            else:
+                session.pending_audio = np.array([], dtype=np.float32)
+                session.accumulated_audio = session.pending_audio
+                session.total_audio_samples = 0
 
-        session.raw_audio_ring = np.zeros(self.raw_audio_ring_samples, dtype=np.float32)
-        session.mel_frame_ring = None
+            session.raw_audio_ring = np.zeros(plan.raw_audio_ring_samples, dtype=np.float32)
+            session.mel_frame_ring = None
 
-        # (Removed 2026-05-18 baseline hardening: the NEMOTRON_ONSET_WARMUP_MS
-        # buffer-prepend was an ineffective + buggy onset warm-up. PLAN Step 8
-        # implements the correct conformer_stream_step warm-up from scratch.)
-        session.emitted_frames = 0
+            # (Removed 2026-05-18 baseline hardening: the NEMOTRON_ONSET_WARMUP_MS
+            # buffer-prepend was an ineffective + buggy onset warm-up. PLAN Step 8
+            # implements the correct conformer_stream_step warm-up from scratch.)
+            session.emitted_frames = 0
 
-        # Reset decoder state
-        session.previous_hypotheses = None
-        session.pred_out_stream = None
-        session.current_text = ""
-        session.eou_probe_chunk_index = 0
+            # Reset decoder state
+            session.previous_hypotheses = None
+            session.pred_out_stream = None
+            session.current_text = ""
+            session.eou_probe_chunk_index = 0
 
-        session.synthetic_prefix_samples = 0
-        if self.session_warmup_ms > 0:
-            self._run_session_warmup(session)
+            session.synthetic_prefix_samples = 0
+            if self.session_warmup_ms > 0:
+                self._run_session_warmup(session)
+        finally:
+            self._inference_tls.model_route = previous_route
 
     def _run_session_warmup(self, session: ASRSession) -> None:
         """Prime one fresh session with synthetic silence without seeding text."""
         warmup_frames = self._session_warmup_frames()
         if warmup_frames is None:
             return
-        warmup_samples = warmup_frames * self.hop_samples
-        preprocess_samples = warmup_samples + self.hop_samples
+        plan = self._plan_for_session(session)
+        warmup_samples = warmup_frames * plan.hop_samples
+        preprocess_samples = warmup_samples + plan.hop_samples
 
         warmup_audio = np.zeros(preprocess_samples, dtype=np.float32)
         fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
             session.raw_audio_ring,
             warmup_audio,
+            plan,
         )
 
         with torch.inference_mode():
-            mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+            mel, _mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples, plan)
             warmup_mel = mel[
                 :,
                 :,
-                self.first_preprocess_mel_frame : self.first_preprocess_mel_frame + warmup_frames,
+                plan.first_preprocess_mel_frame : plan.first_preprocess_mel_frame + warmup_frames,
             ]
             chunk_len = torch.tensor([warmup_mel.shape[-1]], device='cuda')
 
-            if self.prompted_model:
+            if self._current_model_is_prompted():
                 self._apply_inference_prompt(session)
             (
                 session.pred_out_stream,
@@ -4547,14 +4803,14 @@ class ASRServer:
             )
 
         consumed_audio = warmup_audio[:warmup_samples]
-        if len(consumed_audio) >= self.raw_audio_ring_samples:
-            session.raw_audio_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+        if len(consumed_audio) >= plan.raw_audio_ring_samples:
+            session.raw_audio_ring = consumed_audio[-plan.raw_audio_ring_samples :].copy()
         else:
-            keep = self.raw_audio_ring_samples - len(consumed_audio)
+            keep = plan.raw_audio_ring_samples - len(consumed_audio)
             session.raw_audio_ring = np.concatenate(
                 [session.raw_audio_ring[-keep:], consumed_audio]
             ).astype(np.float32, copy=False)
-        self._update_mel_frame_ring(session, warmup_mel)
+        self._update_mel_frame_ring(session, warmup_mel, plan)
         session.emitted_frames = warmup_frames
         session.synthetic_prefix_samples = warmup_samples
 
@@ -4577,15 +4833,17 @@ class ASRServer:
         self,
         audio: np.ndarray,
         valid_samples: int,
+        plan: Optional[StreamingPlan] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the preprocessor with an invariant input shape.
 
         `valid_samples` may be shorter for final partial chunks; the tensor
         shape stays fixed so CUDA uses the same STFT/cuFFT plan every call.
         """
-        if len(audio) != self.constant_preprocess_samples:
+        plan = plan or self._plan_for_route(getattr(self._inference_tls, "model_route", None) or "default")
+        if len(audio) != plan.constant_preprocess_samples:
             raise ValueError(
-                f"Expected fixed preprocessor input of {self.constant_preprocess_samples} samples, "
+                f"Expected fixed preprocessor input of {plan.constant_preprocess_samples} samples, "
                 f"got {len(audio)}"
             )
         audio_tensor = torch.from_numpy(np.ascontiguousarray(audio)).unsqueeze(0).cuda()
@@ -4603,34 +4861,42 @@ class ASRServer:
         self,
         raw_audio_ring: np.ndarray,
         new_audio: np.ndarray,
+        plan: Optional[StreamingPlan] = None,
     ) -> tuple[np.ndarray, int]:
         """Assemble align-pad + raw ring + new audio and zero-pad to K."""
-        if len(raw_audio_ring) != self.raw_audio_ring_samples:
+        plan = plan or self._plan_for_route(getattr(self._inference_tls, "model_route", None) or "default")
+        if len(raw_audio_ring) != plan.raw_audio_ring_samples:
             raise ValueError(
-                f"Expected raw ring of {self.raw_audio_ring_samples} samples, "
+                f"Expected raw ring of {plan.raw_audio_ring_samples} samples, "
                 f"got {len(raw_audio_ring)}"
             )
-        prefix_len = self.preprocess_align_pad_samples + self.raw_audio_ring_samples
+        prefix_len = plan.preprocess_align_pad_samples + plan.raw_audio_ring_samples
         valid_samples = prefix_len + len(new_audio)
-        if valid_samples > self.constant_preprocess_samples:
+        if valid_samples > plan.constant_preprocess_samples:
             raise ValueError(
-                f"Fixed preprocessor valid span {valid_samples} exceeds K={self.constant_preprocess_samples}"
+                f"Fixed preprocessor valid span {valid_samples} exceeds K={plan.constant_preprocess_samples}"
             )
 
-        audio = np.zeros(self.constant_preprocess_samples, dtype=np.float32)
-        cursor = self.preprocess_align_pad_samples
-        audio[cursor : cursor + self.raw_audio_ring_samples] = raw_audio_ring
-        cursor += self.raw_audio_ring_samples
+        audio = np.zeros(plan.constant_preprocess_samples, dtype=np.float32)
+        cursor = plan.preprocess_align_pad_samples
+        audio[cursor : cursor + plan.raw_audio_ring_samples] = raw_audio_ring
+        cursor += plan.raw_audio_ring_samples
         audio[cursor : cursor + len(new_audio)] = new_audio
         return audio, valid_samples
 
-    def _update_mel_frame_ring(self, session: ASRSession, new_mel: torch.Tensor) -> None:
+    def _update_mel_frame_ring(
+        self,
+        session: ASRSession,
+        new_mel: torch.Tensor,
+        plan: Optional[StreamingPlan] = None,
+    ) -> None:
         """Retain the mel pre-encode cache separately from raw STFT context."""
+        plan = plan or self._plan_for_session(session)
         if session.mel_frame_ring is None:
             combined = new_mel.detach()
         else:
             combined = torch.cat((session.mel_frame_ring, new_mel.detach()), dim=-1)
-        session.mel_frame_ring = combined[:, :, -self.pre_encode_cache_size :].detach()
+        session.mel_frame_ring = combined[:, :, -plan.pre_encode_cache_size :].detach()
 
     @staticmethod
     def _probe_scalar(value: Any) -> Any:
@@ -5083,6 +5349,81 @@ class ASRServer:
             "signal": self._admission_backlog_signal(),
         }
 
+    @staticmethod
+    def _stats_key(value: Optional[str]) -> str:
+        normalized = (value or "unknown").strip().lower()
+        return normalized or "unknown"
+
+    @staticmethod
+    def _stats_counter_snapshot(counter: Counter[str], total: Optional[int] = None) -> dict[str, Any]:
+        denominator = sum(counter.values()) if total is None else total
+        values = {
+            key: {
+                "count": count,
+                "pct": (float(count) / float(denominator) * 100.0) if denominator else 0.0,
+            }
+            for key, count in sorted(counter.items())
+            if count
+        }
+        return {
+            "total": denominator,
+            "values": values,
+        }
+
+    @staticmethod
+    def _stats_counter_decrement(counter: Counter[str], key: Optional[str]) -> None:
+        if not key:
+            return
+        counter[key] -= 1
+        if counter[key] <= 0:
+            del counter[key]
+
+    def _record_stats_session_start(self, session: ASRSession) -> None:
+        if not self.stats_enabled:
+            return
+        language = self._stats_key(session.target_lang)
+        route = self._stats_key(session.model_route)
+        session.stats_language = language
+        session.stats_model_route = route
+        self._stats_request_count += 1
+        self._stats_request_language_counts[language] += 1
+        self._stats_request_route_counts[route] += 1
+        self._stats_active_language_counts[language] += 1
+        self._stats_active_route_counts[route] += 1
+
+    def _record_stats_session_route_update(self, session: ASRSession) -> None:
+        if not self.stats_enabled:
+            return
+        old_language = session.stats_language
+        old_route = session.stats_model_route
+        new_language = self._stats_key(session.target_lang)
+        new_route = self._stats_key(session.model_route)
+        if old_language != new_language:
+            self._stats_counter_decrement(self._stats_active_language_counts, old_language)
+            self._stats_active_language_counts[new_language] += 1
+            session.stats_language = new_language
+        if old_route != new_route:
+            self._stats_counter_decrement(self._stats_active_route_counts, old_route)
+            self._stats_active_route_counts[new_route] += 1
+            session.stats_model_route = new_route
+        self._stats_routing_event_count += 1
+        self._stats_routing_event_language_counts[new_language] += 1
+        self._stats_routing_event_route_counts[new_route] += 1
+
+    def _record_stats_session_end(self, session: ASRSession) -> None:
+        if not self.stats_enabled:
+            return
+        self._stats_counter_decrement(
+            self._stats_active_language_counts,
+            session.stats_language,
+        )
+        self._stats_counter_decrement(
+            self._stats_active_route_counts,
+            session.stats_model_route,
+        )
+        session.stats_language = None
+        session.stats_model_route = None
+
     def _record_stats_sample(
         self,
         timing: Optional[dict[str, Any]],
@@ -5172,6 +5513,39 @@ class ASRServer:
                 "vad_stop_to_finalize_start_ms": _compute_quantile_summary(collect(5)),
             },
             "active_sessions_at_emit": _compute_quantile_summary(active_sess),
+            "requests": {
+                "total": self._stats_request_count,
+                "by_language": self._stats_counter_snapshot(
+                    self._stats_request_language_counts,
+                    self._stats_request_count,
+                ),
+                "by_model_route": self._stats_counter_snapshot(
+                    self._stats_request_route_counts,
+                    self._stats_request_count,
+                ),
+            },
+            "active_sessions": {
+                "total": len(self.sessions),
+                "by_language": self._stats_counter_snapshot(
+                    self._stats_active_language_counts,
+                    len(self.sessions),
+                ),
+                "by_model_route": self._stats_counter_snapshot(
+                    self._stats_active_route_counts,
+                    len(self.sessions),
+                ),
+            },
+            "routing_events": {
+                "total": self._stats_routing_event_count,
+                "by_language": self._stats_counter_snapshot(
+                    self._stats_routing_event_language_counts,
+                    self._stats_routing_event_count,
+                ),
+                "by_model_route": self._stats_counter_snapshot(
+                    self._stats_routing_event_route_counts,
+                    self._stats_routing_event_count,
+                ),
+            },
             "admission": self._admission_status_snapshot(),
         }
 
@@ -5234,8 +5608,10 @@ class ASRServer:
             websocket=ws,
             target_lang=session_target_lang,
         )
+        self._set_session_language_route(session, session_target_lang)
         self.sessions[session_id] = session
         self.admission_admitted += 1
+        self._record_stats_session_start(session)
         session_model_lane = self._scheduler_assign_session_model_lane(session)
 
         logger.info(f"Client {session_id} connected")
@@ -5274,12 +5650,31 @@ class ASRServer:
                         data = json.loads(msg.data)
                         msg_type = data.get("type")
 
-                        if msg_type == "reset" or msg_type == "end":
+                        if msg_type in ("settings", "set_language", "transcription_session.update"):
+                            language = (
+                                data.get("language")
+                                or (data.get("settings") or {}).get("language")
+                                or ((data.get("session") or {}).get("input_audio_transcription") or {}).get("language")
+                            )
+                            if language:
+                                async with self.inference_lock:
+                                    self._set_session_language_route(session, str(language))
+                                    self._record_stats_session_route_update(session)
+                                    await self._run_inference_call(self._init_session, session)
+                                await ws.send_str(json.dumps({
+                                    "type": "settings.updated",
+                                    "language": session.target_lang,
+                                    "model_route": session.model_route,
+                                }))
+                        elif msg_type == "reset" or msg_type == "end":
                             # finalize=True (default): hard reset with padding + keep_all_outputs
                             # finalize=False: soft reset, just return current text
                             finalize = data.get("finalize", True)
                             await self._reset_session(session, finalize=finalize)
                         elif msg_type == "vad_start" or msg_type == "vad_stop":
+                            session.vad_gated_audio = True
+                            if msg_type == "vad_start":
+                                session.accepting_vad_audio = True
                             logger.debug(
                                 f"Client {session_id}: received {msg_type} (no-op)"
                             )
@@ -5309,6 +5704,7 @@ class ASRServer:
             if self.continuous_context:
                 await self._close_continuous_session(session)
             self._flush_eou_snapshot_audio(session)
+            self._record_stats_session_end(session)
             if session_id in self.sessions:
                 del self.sessions[session_id]
             self._scheduler_session_model_lane_affinity.pop(session_id, None)
@@ -6289,11 +6685,7 @@ class ASRServer:
                     )
                     await self._send_json_locked(
                         session,
-                        {
-                            "type": "transcript",
-                            "text": text,
-                            "is_final": False,
-                        },
+                        self._transcript_payload(session, text=text, is_final=False),
                         tolerate_closed=True,
                         description="scheduler batch interim transcript",
                     )
@@ -6498,11 +6890,7 @@ class ASRServer:
                         )
                         await self._send_json_locked(
                             session,
-                            {
-                                "type": "transcript",
-                                "text": text,
-                                "is_final": False,
-                            },
+                            self._transcript_payload(session, text=text, is_final=False),
                             tolerate_closed=True,
                             description="scheduler batch interim transcript",
                         )
@@ -6620,11 +7008,7 @@ class ASRServer:
             if generation == session.scheduler_generation and not session.scheduler_closed:
                 await self._send_json_locked(
                     session,
-                    {
-                        "type": "transcript",
-                        "text": text,
-                        "is_final": False,
-                    },
+                    self._transcript_payload(session, text=text, is_final=False),
                     tolerate_closed=True,
                     description="scheduler interim transcript",
                 )
@@ -7054,12 +7438,9 @@ class ASRServer:
             text = session.current_text
             await self._send_json_locked(
                 session,
-                {
-                    "type": "transcript",
-                    "text": text,
-                    "is_final": True,
-                    "finalize": False,
-                },
+                self._transcript_payload(
+                    session, text=text, is_final=True, finalize=False
+                ),
                 tolerate_closed=False,
                 description="continuous soft reset",
             )
@@ -7535,12 +7916,11 @@ class ASRServer:
     ) -> None:
         if not finalize:
             text = session.current_text
-            await session.websocket.send_str(json.dumps({
-                "type": "transcript",
-                "text": text,
-                "is_final": True,
-                "finalize": False
-            }))
+            await session.websocket.send_str(json.dumps(
+                self._transcript_payload(
+                    session, text=text, is_final=True, finalize=False
+                )
+            ))
             logger.debug(
                 f"Session {session.id}: continuous soft reset: "
                 f"'{text[-50:] if len(text) > 50 else text}'"
@@ -8117,15 +8497,13 @@ class ASRServer:
 
         if delta_text:
             timing["final_sent"] = time.time()
+            payload = self._transcript_payload(
+                session, text=delta_text, is_final=True, finalize=True
+            )
+            payload["finalize_timing"] = timing
             sent = await self._send_json_locked(
                 session,
-                {
-                    "type": "transcript",
-                    "text": delta_text,
-                    "is_final": True,
-                    "finalize": True,
-                    "finalize_timing": timing,
-                },
+                payload,
                 tolerate_closed=(
                     reason == "close" or getattr(session.websocket, "closed", False)
                 ),
@@ -9130,15 +9508,13 @@ class ASRServer:
 
         if delta_text:
             timing["final_sent"] = time.time()
+            payload = self._transcript_payload(
+                session, text=delta_text, is_final=True, finalize=True
+            )
+            payload["finalize_timing"] = timing
             sent = await self._send_json_locked(
                 session,
-                {
-                    "type": "transcript",
-                    "text": delta_text,
-                    "is_final": True,
-                    "finalize": True,
-                    "finalize_timing": timing,
-                },
+                payload,
                 tolerate_closed=(
                     reason == "close" or getattr(session.websocket, "closed", False)
                 ),
@@ -9309,6 +9685,13 @@ class ASRServer:
         tolerate_closed_send: bool = False,
     ):
         """Accumulate audio and process when enough frames available."""
+        if session.vad_gated_audio and not session.accepting_vad_audio:
+            logger.debug(
+                f"Session {session.id}: ignored {len(audio_bytes)}B post-final audio "
+                "while waiting for next vad_start"
+            )
+            return
+
         audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
         if DEBUG_ASR:
@@ -9320,10 +9703,11 @@ class ASRServer:
         session.pending_audio = np.concatenate([session.pending_audio, audio_np])
         session.accumulated_audio = session.pending_audio
         session.total_audio_samples += len(audio_np)
+        plan = self._plan_for_session(session)
 
         # Process if we have enough audio for new frames
         # We need shift_frames worth of new mel frames (after skipping edge frame)
-        min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
+        min_audio_for_chunk = (session.emitted_frames + plan.shift_frames + 1) * plan.hop_samples
 
         while self._session_timeline_samples(session) >= min_audio_for_chunk:
             async with self.inference_lock:
@@ -9334,17 +9718,13 @@ class ASRServer:
                 logger.debug(f"Session {session.id} interim: {text[-50:] if len(text) > 50 else text}")
                 await self._send_json_locked(
                     session,
-                    {
-                        "type": "transcript",
-                        "text": text,
-                        "is_final": False,
-                    },
+                    self._transcript_payload(session, text=text, is_final=False),
                     tolerate_closed=tolerate_closed_send,
                     description="interim transcript",
                 )
 
             # Update minimum for next iteration
-            min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
+            min_audio_for_chunk = (session.emitted_frames + plan.shift_frames + 1) * plan.hop_samples
 
     def _prepare_scheduler_fixed_preprocess_audio(
         self,
@@ -9636,7 +10016,7 @@ class ASRServer:
                         )
                     raise
 
-                if self.prompted_model:
+                if self._current_model_is_prompted():
                     self._apply_inference_prompt(rows[0].session)
 
                 model_start = time.perf_counter()
@@ -9779,7 +10159,8 @@ class ASRServer:
             inference_lock_wait_ms=gil_lock_wait_ms,
         )
         try:
-            if len(session.pending_audio) < self.preprocess_new_audio_samples:
+            plan = self._plan_for_session(session)
+            if len(session.pending_audio) < plan.preprocess_new_audio_samples:
                 return session.current_text
 
             if DEBUG_ASR:
@@ -9789,17 +10170,18 @@ class ASRServer:
                     f"total={session.total_audio_samples} hash={audio_hash}"
                 )
 
-            new_audio = session.pending_audio[: self.preprocess_new_audio_samples]
+            new_audio = session.pending_audio[: plan.preprocess_new_audio_samples]
             fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
                 session.raw_audio_ring,
                 new_audio,
+                plan,
             )
 
             with torch.inference_mode():
                 if self.profile_chunk:
                     torch.cuda.synchronize()
                     _prof_t0 = time.perf_counter()
-                mel, mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples)
+                mel, mel_len = self._preprocess_fixed_audio(fixed_audio, valid_samples, plan)
                 if self.profile_chunk:
                     torch.cuda.synchronize()
                     self._prof_pre_ms += (time.perf_counter() - _prof_t0) * 1000.0
@@ -9811,7 +10193,7 @@ class ASRServer:
                 valid_new_mel = mel[
                     :,
                     :,
-                    self.first_preprocess_mel_frame : self.first_preprocess_mel_frame + self.shift_frames,
+                    plan.first_preprocess_mel_frame : plan.first_preprocess_mel_frame + plan.shift_frames,
                 ]
 
                 # Extract chunk with pre-encode cache
@@ -9822,13 +10204,13 @@ class ASRServer:
                 else:
                     # Subsequent chunks: prepend retained mel pre-encode cache
                     chunk_mel = torch.cat((session.mel_frame_ring, valid_new_mel), dim=-1)
-                    drop_extra = self.drop_extra
+                    drop_extra = plan.drop_extra
 
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
                 eou_probe_snapshot = self._eou_probe_snapshot(session)
 
                 # Run streaming inference
-                if self.prompted_model:
+                if self._current_model_is_prompted():
                     self._apply_inference_prompt(session)
                 if self.profile_chunk:
                     torch.cuda.synchronize()
@@ -9866,24 +10248,27 @@ class ASRServer:
                         )
 
                 # Update emitted frame count
-                consumed_audio = session.pending_audio[: self.shift_frames * self.hop_samples]
-                if len(consumed_audio) >= self.raw_audio_ring_samples:
-                    session.raw_audio_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+                consumed_audio = session.pending_audio[: plan.shift_frames * plan.hop_samples]
+                if len(consumed_audio) >= plan.raw_audio_ring_samples:
+                    session.raw_audio_ring = consumed_audio[-plan.raw_audio_ring_samples :].copy()
                 else:
-                    keep = self.raw_audio_ring_samples - len(consumed_audio)
+                    keep = plan.raw_audio_ring_samples - len(consumed_audio)
                     session.raw_audio_ring = np.concatenate(
                         [session.raw_audio_ring[-keep:], consumed_audio]
                     ).astype(np.float32, copy=False)
-                session.pending_audio = session.pending_audio[self.shift_frames * self.hop_samples :]
+                session.pending_audio = session.pending_audio[plan.shift_frames * plan.hop_samples :]
                 session.accumulated_audio = session.pending_audio
-                self._update_mel_frame_ring(session, valid_new_mel)
-                session.emitted_frames += self.shift_frames
+                self._update_mel_frame_ring(session, valid_new_mel, plan)
+                session.emitted_frames += plan.shift_frames
                 self._write_eou_probe_chunk(session, eou_probe_snapshot)
                 self._write_eou_snapshot_chunk(session, eou_probe_snapshot)
 
                 # Extract text
                 if transcribed_texts and transcribed_texts[0]:
-                    return self._extract_hypothesis_text(transcribed_texts[0])
+                    result = self._extract_hypothesis_result(transcribed_texts[0])
+                    if result.language:
+                        session.last_language = result.language
+                    return result.text
 
                 return session.current_text
 
@@ -9937,12 +10322,11 @@ class ASRServer:
             # We don't concatenate with cumulative_text to avoid duplication.
             text = session.current_text
 
-            await session.websocket.send_str(json.dumps({
-                "type": "transcript",
-                "text": text,
-                "is_final": True,
-                "finalize": False  # Tell client this was soft reset
-            }))
+            await session.websocket.send_str(json.dumps(
+                self._transcript_payload(
+                    session, text=text, is_final=True, finalize=False
+                )
+            ))
 
             logger.debug(f"Session {session.id} soft reset: '{text[-50:] if len(text) > 50 else text}'")
             # Keep all state intact - decoder, encoder, audio buffer
@@ -9951,11 +10335,12 @@ class ASRServer:
         # HARD RESET: Full finalization with padding
         # Save original audio length before adding padding
         original_audio_length = session.total_audio_samples
+        plan = self._plan_for_session(session)
 
         # Pad with silence to ensure the model has enough trailing context
         # to finalize the last word. Padding = (right_context + 1) * shift_frames.
         if original_audio_length > 0:
-            padding_samples = self.final_padding_frames * self.hop_samples
+            padding_samples = plan.final_padding_frames * plan.hop_samples
             silence_padding = np.zeros(padding_samples, dtype=np.float32)
             session.pending_audio = np.concatenate([session.pending_audio, silence_padding])
             session.accumulated_audio = session.pending_audio
@@ -9989,12 +10374,11 @@ class ASRServer:
         session.last_emitted_text = final_text
 
         # Send only the delta to client
-        await session.websocket.send_str(json.dumps({
-            "type": "transcript",
-            "text": delta_text,
-            "is_final": True,
-            "finalize": True  # Tell client this was hard reset
-        }))
+        await session.websocket.send_str(json.dumps(
+            self._transcript_payload(
+                session, text=delta_text, is_final=True, finalize=True
+            )
+        ))
 
         logger.debug(
             f"Session {session.id} hard reset: delta='{delta_text}' "
@@ -10018,6 +10402,8 @@ class ASRServer:
                 await self._run_inference_call(self._init_session, session)
         else:
             self._init_session(session)
+        if session.vad_gated_audio:
+            session.accepting_vad_audio = False
 
         logger.debug(
             f"Session {session.id} hard reset complete, state fully reset for next turn"
@@ -10042,13 +10428,14 @@ class ASRServer:
                 if finalize_profile is not None:
                     finalize_profile["model_skipped_reason"] = "no_pending_audio"
                 return session.current_text
+            plan = self._plan_for_session(session)
 
             with torch.inference_mode():
                 # For final chunk, use ALL remaining frames (including edge)
                 padded_total_samples = (
-                    session.emitted_frames * self.hop_samples + len(session.pending_audio)
+                    session.emitted_frames * plan.hop_samples + len(session.pending_audio)
                 )
-                total_mel_frames = (padded_total_samples // self.hop_samples) + 1
+                total_mel_frames = (padded_total_samples // plan.hop_samples) + 1
                 remaining_frames = total_mel_frames - session.emitted_frames
 
                 logger.debug(
@@ -10068,15 +10455,16 @@ class ASRServer:
                 new_mels: list[torch.Tensor] = []
                 frames_collected = 0
                 while frames_collected < remaining_frames:
-                    frames_this_call = min(self.shift_frames, remaining_frames - frames_collected)
+                    frames_this_call = min(plan.shift_frames, remaining_frames - frames_collected)
                     needed_new_samples = min(
                         len(pending),
-                        self.preprocess_new_audio_samples,
+                        plan.preprocess_new_audio_samples,
                     )
                     new_audio = pending[:needed_new_samples]
                     fixed_audio, valid_samples = self._build_fixed_preprocess_audio(
                         raw_ring,
                         new_audio,
+                        plan,
                     )
                     if finalize_profile is not None:
                         self._finalize_profile_cuda_synchronize(finalize_profile)
@@ -10084,6 +10472,7 @@ class ASRServer:
                         mel, _mel_len = self._preprocess_fixed_audio(
                             fixed_audio,
                             valid_samples,
+                            plan,
                         )
                         self._finalize_profile_cuda_synchronize(finalize_profile)
                         self._finalize_profile_add_preproc(
@@ -10094,17 +10483,18 @@ class ASRServer:
                         mel, _mel_len = self._preprocess_fixed_audio(
                             fixed_audio,
                             valid_samples,
+                            plan,
                         )
-                    start = self.first_preprocess_mel_frame
+                    start = plan.first_preprocess_mel_frame
                     new_mels.append(mel[:, :, start : start + frames_this_call])
 
-                    if frames_this_call == self.shift_frames:
-                        consumed_samples = min(self.shift_frames * self.hop_samples, len(pending))
+                    if frames_this_call == plan.shift_frames:
+                        consumed_samples = min(plan.shift_frames * plan.hop_samples, len(pending))
                         consumed_audio = pending[:consumed_samples]
-                        if len(consumed_audio) >= self.raw_audio_ring_samples:
-                            raw_ring = consumed_audio[-self.raw_audio_ring_samples :].copy()
+                        if len(consumed_audio) >= plan.raw_audio_ring_samples:
+                            raw_ring = consumed_audio[-plan.raw_audio_ring_samples :].copy()
                         elif len(consumed_audio) > 0:
-                            keep = self.raw_audio_ring_samples - len(consumed_audio)
+                            keep = plan.raw_audio_ring_samples - len(consumed_audio)
                             raw_ring = np.concatenate([raw_ring[-keep:], consumed_audio]).astype(
                                 np.float32,
                                 copy=False,
@@ -10120,11 +10510,11 @@ class ASRServer:
                     drop_extra = 0
                 else:
                     chunk_mel = torch.cat((session.mel_frame_ring, new_mel), dim=-1)
-                    drop_extra = self.drop_extra
+                    drop_extra = plan.drop_extra
 
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
 
-                if self.prompted_model:
+                if self._current_model_is_prompted():
                     self._apply_inference_prompt(session)
                 if finalize_profile is not None:
                     input_cache_last_channel = session.cache_last_channel
@@ -10181,7 +10571,10 @@ class ASRServer:
                     )
 
                 if transcribed_texts and transcribed_texts[0]:
-                    final_text = self._extract_hypothesis_text(transcribed_texts[0])
+                    result = self._extract_hypothesis_result(transcribed_texts[0])
+                    if result.language:
+                        session.last_language = result.language
+                    final_text = result.text
                     logger.debug(
                         f"Session {session.id} final chunk output: '{final_text[-50:] if len(final_text) > 50 else final_text}' "
                         f"(was: '{session.current_text[-30:] if len(session.current_text) > 30 else session.current_text}')"
@@ -10271,6 +10664,15 @@ def main():
         help="HuggingFace model name or path to local .nemo file"
     )
     parser.add_argument(
+        "--multilingual-model",
+        default=None,
+        help=(
+            "Optional HuggingFace model name or local .nemo path for multilingual "
+            "routing. When set, language=en uses --model and all other languages "
+            "use this checkpoint."
+        ),
+    )
+    parser.add_argument(
         "--right-context",
         type=int,
         default=None,
@@ -10284,6 +10686,7 @@ def main():
 
     server = ASRServer(
         model=args.model,
+        multilingual_model=args.multilingual_model,
         host=args.host,
         port=args.port,
         right_context=args.right_context,
