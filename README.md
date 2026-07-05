@@ -217,7 +217,7 @@ All bots support multiple transport backends via the `-t` flag:
 |----------|---------|-------------|
 | `NVIDIA_ASR_URL` | `ws://localhost:8080` | ASR WebSocket endpoint |
 | `NVIDIA_LLM_URL` | `http://localhost:8000/v1` | vLLM OpenAI-compatible endpoint |
-| `NVIDIA_LLM_MODEL` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16` | Model name/path |
+| `NVIDIA_LLM_MODEL` | `nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16` | Model name/path |
 | `NVIDIA_LLM_API_KEY` | `not-needed` | API key (if required) |
 | `NVIDIA_TTS_URL` | `http://localhost:8001` | Magpie TTS endpoint |
 
@@ -298,7 +298,7 @@ The build compiles from source for CUDA 13.1 / Blackwell (sm_121):
 | Nemotron Speech ASR | HuggingFace `nvidia/nemotron-speech-streaming-en-0.6b` (auto-downloaded) | ~2.4GB | All configurations |
 | Nemotron-3-Nano Q8 | HuggingFace `unsloth/Nemotron-3-Nano-30B-A3B-GGUF` | ~32GB | llama.cpp on DGX Spark |
 | Nemotron-3-Nano Q4 | HuggingFace `unsloth/Nemotron-3-Nano-30B-A3B-GGUF` | ~16GB | llama.cpp on RTX 5090 |
-| Nemotron-3-Nano BF16 | HuggingFace `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16` | ~72GB | vLLM (cloud/multi-GPU) |
+| Nemotron-3-Nano BF16 | HuggingFace `nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16` | ~72GB | vLLM (cloud/multi-GPU) |
 | Magpie TTS | HuggingFace `nvidia/magpie_tts_multilingual_357m` (auto-downloaded) | ~1.4GB | All configurations |
 
 Download LLM models (ASR and TTS are auto-downloaded on first run):
@@ -308,7 +308,7 @@ Download LLM models (ASR and TTS are auto-downloaded on first run):
 huggingface-cli download unsloth/Nemotron-3-Nano-30B-A3B-GGUF
 
 # BF16 full precision (for vLLM)
-huggingface-cli download nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+huggingface-cli download nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16
 ```
 
 ## Architecture

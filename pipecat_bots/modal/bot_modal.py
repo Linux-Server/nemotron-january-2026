@@ -6,7 +6,7 @@
 # Optional nvironment variables. URLs default to querying Modal deployments for endpoints.
 #   NVIDIA_ASR_URL        ASR WebSocket URL 
 #   NVIDIA_LLM_URL        vLLM API URL 
-#   NVIDIA_LLM_MODEL      Model name/path (default: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16)
+#   NVIDIA_LLM_MODEL      Model name/path (default: nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16)
 #   NVIDIA_LLM_API_KEY    API key for vLLM (default: not-needed)
 #   NVIDIA_TTS_URL        Magpie TTS server URL 
 #
@@ -57,7 +57,7 @@ llm_instance = modal.Function.from_name("nemotron-nano-vllm", "serve")
 NVIDIA_LLM_URL = os.getenv("NVIDIA_LLM_URL", llm_instance.get_web_url() + "/v1")
 NVIDIA_LLM_MODEL = os.getenv(
     "NVIDIA_LLM_MODEL",
-    "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16"
 )
 NVIDIA_LLM_API_KEY = os.getenv("NVIDIA_LLM_API_KEY", "not-needed")
 tts_instance = modal.Cls.from_name("magpie-tts-server", "MagpieTTSServer")()
@@ -141,8 +141,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         {
             "role": "system",
             "content": (
-                "You are a helpful AI assistant running on an NVIDIA DGX Spark. "
-                "You are built with Nemotron Three Nano, a large language model developed by NVIDIA. "
+                "You are a helpful AI assistant named Stella. "
+                "You are built by Hire Stella, a Dubai based AI solution company. "
                 "Your goal is to have a natural conversation with the user. "
                 "Keep your responses concise and conversational since they will be spoken aloud. "
                 "Avoid special characters. Use only simple, plain text sentences. "
@@ -152,7 +152,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         },
         {
             "role": "user",
-            "content": "Say hello and ask how you can help.",
+            "content": "Say hello and introduce yourself and ask how you can help.",
         },
     ]
 

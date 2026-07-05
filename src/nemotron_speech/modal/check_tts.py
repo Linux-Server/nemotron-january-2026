@@ -48,8 +48,9 @@ image = (
         "numpy<2.0.0",
         "omegaconf",
         "hydra-core",
+        "kaldialign"
     ).uv_pip_install(
-        "nemo_toolkit[tts]@git+https://github.com/NVIDIA/NeMo.git@644201898480ec8c8d0a637f0c773825509ac4dc",
+        "nemo_toolkit[tts]",
         extra_options="--no-cache",
     )
 )
@@ -63,7 +64,7 @@ SPEAKERS = {
     "jason": 3,
     "leo": 4,
 }
-LANGUAGES = ["en", "es", "de", "fr", "vi", "it", "zh"]
+LANGUAGES = ["en", "es", "de", "fr", "vi", "it", "zh", "hi", "ja"]
 
 # Emoji pattern for text normalization
 _EMOJI_PATTERN = re.compile(
@@ -324,18 +325,21 @@ class MagpieTTSServer:
         model_id = "nvidia/magpie_tts_multilingual_357m"
 
         # Load model
-        from huggingface_hub import snapshot_download
+        # from huggingface_hub import snapshot_download
 
-        model_dir = snapshot_download(
-            repo_id="nvidia/magpie_tts_multilingual_357m",
-            revision="v2512",
-        )
+        # model_dir = snapshot_download(
+        #     repo_id="nvidia/magpie_tts_multilingual_357m",
+        #     revision="v2512",
+        # )
+        self.model = MagpieTTSModel.from_pretrained(model_id)
 
-        self.model = MagpieTTSModel.restore_from(restore_path=f"{model_dir}/magpie_tts_multilingual_357m.nemo")
+        # self.model = MagpieTTSModel.restore_from(restore_path=f"{model_dir}/magpie_tts_multilingual_357m.nemo")
         self.model = self.model.cuda()
         self.model.eval()
         logger.info("Model loaded successfully")
+        import inspect
 
+       
         # Warm up both batch and streaming paths to JIT compile CUDA kernels
         logger.info("Warming up TTS model (batch + streaming paths)...")
 

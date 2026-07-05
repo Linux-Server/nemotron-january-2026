@@ -6,34 +6,31 @@ import aiohttp
 
 import modal
 
-MODEL_NAME = "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16"
-
+MODEL_NAME = "Qwen/Qwen3-8B-AWQ"
 vllm_image = (
-    modal.Image.from_registry("nvidia/cuda:12.8.0-devel-ubuntu22.04", add_python="3.12")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.9.0-devel-ubuntu22.04",
+        add_python="3.12",
+    )
     .entrypoint([])
     .uv_pip_install(
-        "vllm>=0.13.0",
-        "huggingface-hub==0.36.0",
-        "flashinfer-cubin",
-        "cuda-python==12.8.0",
+        "vllm==0.21.0",
+        "flashinfer-python"
     )
-    .env({
-        "HF_XET_HIGH_PERFORMANCE": "1",
-        "HF_HOME": "/root/.cache/huggingface",
-        "VLLM_CACHE_ROOT": "/root/.cache/vllm",
-        "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
-        "VLLM_LOGGING_LEVEL": "DEBUG",
-        "FLASHINFER_DISABLE_VERSION_CHECK": "1"
-
-    }) 
+    .env(
+        {
+            "HF_XET_HIGH_PERFORMANCE": "1",
+            "VLLM_LOG_STATS_INTERVAL": "1",
+        }
+    )
 )
-
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 
 FAST_BOOT = False
 
-app = modal.App("nemotron-nano-vllm")
+
+app = modal.App("qwen-8B-awq-vllm")
 
 N_GPU = 1
 MINUTES = 60  # seconds
@@ -47,7 +44,7 @@ with vllm_image.imports():
     image=vllm_image,
     gpu=f"L40S:{N_GPU}",
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
-    timeout=60 * MINUTES,  # how long should we wait for container start?
+    timeout=10 * MINUTES,  # how long should we wait for container start?
     volumes={
         "/root/.cache/huggingface": hf_cache_vol,
         "/root/.cache/vllm": vllm_cache_vol,
@@ -63,24 +60,26 @@ def serve():
     torch.set_float32_matmul_precision('high')
 
     cmd = [
-        "vllm",
-        "serve",
-        "--uvicorn-log-level=debug",
-        MODEL_NAME,
-        "--host",
-        "0.0.0.0",
-        "--port",
-        str(VLLM_PORT),
-        "--dtype",
-        "bfloat16",
-        "--max-num-seqs",
-        "1",
-        "--max-model-len",
-        "100000",
-        "--enable-prefix-caching",
-        "--trust-remote-code"
-        
-    ]
+    "vllm",
+    "serve",
+    MODEL_NAME,
+    "--host", "0.0.0.0",
+    "--port", str(VLLM_PORT),
+
+    "--max-model-len", "8192",
+
+    "--gpu-memory-utilization", "0.95",
+
+    "--enable-prefix-caching",
+
+    "--enable-chunked-prefill",
+
+    "--kv-cache-dtype", "fp8",
+
+    "--async-scheduling",
+
+    "--trust-remote-code",
+]
 
     # enforce-eager disables both Torch compilation and CUDA graph capture
     # default is no-enforce-eager. see the --compilation-config flag for tighter control
@@ -98,7 +97,7 @@ if __name__ == "__main__":
 
     import asyncio
 
-    serve_fn = modal.Function.from_name("nemotron-nano-vllm", "serve")
+    serve_fn = modal.Function.from_name("qwen-8B-awq-vllm", "serve")
     url = serve_fn.get_web_url()
 
     system_prompt = {

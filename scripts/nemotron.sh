@@ -50,7 +50,7 @@ DETACH="true"
 # Default model paths (auto-detected from HuggingFace cache)
 DEFAULT_Q8_MODEL="$(find "$HOME/.cache/huggingface/hub/models--unsloth--Nemotron-3-Nano-30B-A3B-GGUF" -name "*Q8*.gguf" 2>/dev/null | head -1)"
 DEFAULT_Q4_MODEL="$(find "$HOME/.cache/huggingface/hub/models--unsloth--Nemotron-3-Nano-30B-A3B-GGUF" -name "*Q4*.gguf" 2>/dev/null | head -1)"
-DEFAULT_VLLM_MODEL="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+DEFAULT_VLLM_MODEL="nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16"
 DEFAULT_VLLM_FP8_MODEL="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8"
 
 # HuggingFace model cache paths for ASR and TTS (auto-downloaded on first run)

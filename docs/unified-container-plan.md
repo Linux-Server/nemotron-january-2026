@@ -434,7 +434,7 @@ The `scripts/nemotron.sh` wrapper manages the container lifecycle from the host.
 # Start with llama.cpp Q4 - auto-detects model
 ./scripts/nemotron.sh start --mode llamacpp-q4
 
-# Start with vLLM - uses nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 by default
+# Start with vLLM - uses nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16 by default
 ./scripts/nemotron.sh start --mode vllm
 
 # Start ASR + TTS only (no LLM)

@@ -50,13 +50,13 @@ class StreamingConfig:
 
     # Number of frames to accumulate before decoding
     # 1 frame = 1024 samples = ~46.4ms at 22kHz
-    chunk_size_frames: int = 10  # ~465ms chunks
+    chunk_size_frames: int = 12  # ~465ms chunks
 
     # Overlap frames for smooth boundaries with non-causal decoder
-    overlap_frames: int = 2  # ~93ms overlap
+    overlap_frames: int = 3  # ~93ms overlap
 
     # Minimum frames before first audio output (aggressive for low TTFB)
-    min_first_chunk_frames: int = 4  # ~185ms TTFB target
+    min_first_chunk_frames: int = 8  # ~185ms TTFB target
 
     # Enable crossfade at chunk boundaries
     use_crossfade: bool = True

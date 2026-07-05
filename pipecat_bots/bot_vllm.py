@@ -8,7 +8,7 @@
 # Environment variables:
 #   NVIDIA_ASR_URL        ASR WebSocket URL (default: ws://localhost:8080)
 #   NVIDIA_LLM_URL        vLLM API URL (default: http://localhost:8000/v1)
-#   NVIDIA_LLM_MODEL      Model name/path (default: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16)
+#   NVIDIA_LLM_MODEL      Model name/path (default: nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16)
 #   NVIDIA_LLM_API_KEY    API key for vLLM (default: not-needed)
 #   NVIDIA_TTS_URL        Magpie TTS server URL (default: http://localhost:8001)
 #
@@ -55,7 +55,7 @@ NVIDIA_ASR_URL = os.getenv("NVIDIA_ASR_URL", "ws://localhost:8080")
 NVIDIA_LLM_URL = os.getenv("NVIDIA_LLM_URL", "http://localhost:8000/v1")
 NVIDIA_LLM_MODEL = os.getenv(
     "NVIDIA_LLM_MODEL",
-    "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16"
 )
 NVIDIA_LLM_API_KEY = os.getenv("NVIDIA_LLM_API_KEY", "not-needed")
 NVIDIA_TTS_URL = os.getenv("NVIDIA_TTS_URL", "http://localhost:8001")
