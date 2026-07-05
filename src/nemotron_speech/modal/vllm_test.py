@@ -6,7 +6,7 @@ import aiohttp
 
 import modal
 
-MODEL_NAME = "Qwen/Qwen3-8B-AWQ"
+MODEL_NAME = "Qwen/Qwen3-8B-FP8"
 vllm_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.9.0-devel-ubuntu22.04",
@@ -30,7 +30,7 @@ vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 FAST_BOOT = False
 
 
-app = modal.App("qwen-8B-awq-vllm")
+app = modal.App("qwen-4B-awq-vllm")
 
 N_GPU = 1
 MINUTES = 60  # seconds
@@ -41,6 +41,7 @@ with vllm_image.imports():
     import torch
 
 @app.function(
+    region="ap", routing_region="ap-south",
     image=vllm_image,
     gpu=f"L40S:{N_GPU}",
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
@@ -60,26 +61,24 @@ def serve():
     torch.set_float32_matmul_precision('high')
 
     cmd = [
-    "vllm",
-    "serve",
-    MODEL_NAME,
-    "--host", "0.0.0.0",
-    "--port", str(VLLM_PORT),
-
-    "--max-model-len", "8192",
-
-    "--gpu-memory-utilization", "0.95",
-
-    "--enable-prefix-caching",
-
-    "--enable-chunked-prefill",
-
-    "--kv-cache-dtype", "fp8",
-
-    "--async-scheduling",
-
-    "--trust-remote-code",
-]
+        "vllm",
+        "serve",
+        "--uvicorn-log-level=debug",
+        MODEL_NAME,
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(VLLM_PORT),
+        "--dtype",
+        "bfloat16",
+        "--max-num-seqs",
+        "10",
+        "--max-model-len",
+        "10000",
+        "--enable-prefix-caching",
+        "--trust-remote-code"
+        
+    ]
 
     # enforce-eager disables both Torch compilation and CUDA graph capture
     # default is no-enforce-eager. see the --compilation-config flag for tighter control
@@ -97,7 +96,7 @@ if __name__ == "__main__":
 
     import asyncio
 
-    serve_fn = modal.Function.from_name("qwen-8B-awq-vllm", "serve")
+    serve_fn = modal.Function.from_name("qwen-4B-awq-vllm", "serve")
     url = serve_fn.get_web_url()
 
     system_prompt = {
