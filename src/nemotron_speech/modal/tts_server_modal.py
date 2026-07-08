@@ -10,6 +10,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import re
 import threading
 import time
@@ -48,14 +49,25 @@ image = (
         "numpy<2.0.0",
         "omegaconf",
         "hydra-core",
+        "kaldialign",
     ).uv_pip_install(
-        "nemo_toolkit[tts]@git+https://github.com/NVIDIA/NeMo.git@644201898480ec8c8d0a637f0c773825509ac4dc",
+        # v2602 (Hindi + Japanese) needs the hi/ja tokenizers added in nemo-toolkit 2.7.0
+        # (now developed in github.com/NVIDIA-NeMo/Speech — the old NVIDIA/NeMo main no
+        # longer carries TTS updates and builds a 2317-token vocab vs the checkpoint's 2362).
+        "nemo_toolkit[tts]==2.7.3",
         extra_options="--no-cache",
     )
 )
 
 # Constants
 MAGPIE_SAMPLE_RATE = 22000
+
+# Classifier-free guidance doubles every decoder forward (batch of 2). With it
+# on, generation runs slower than realtime (RTF ~1.3 on A100) and live playback
+# starves mid-utterance. Off, RTF drops well below 1 at some quality cost.
+# Set MAGPIE_USE_CFG=1 on the Modal app to re-enable.
+USE_CFG = os.getenv("MAGPIE_USE_CFG", "0") == "1"
+
 SPEAKERS = {
     "john": 0,
     "sofia": 1,
@@ -63,7 +75,7 @@ SPEAKERS = {
     "jason": 3,
     "leo": 4,
 }
-LANGUAGES = ["en", "es", "de", "fr", "vi", "it", "zh"]
+LANGUAGES = ["en", "es", "de", "fr", "vi", "it", "zh", "hi", "ja"]
 
 # Emoji pattern for text normalization
 _EMOJI_PATTERN = re.compile(
@@ -305,11 +317,20 @@ with image.imports():
 
 # Modal class for TTS inference
 @app.cls(
+    # Fast ingress near the agent (ap-south input plane), but keep the worker in
+    # the US pool: the ap-region node gave an H200 whose *CPU* ran the AR loop at
+    # RTF ~1.2 (per-step Python overhead dominates, not GPU), reintroducing
+    # playback starvation. US nodes measured RTF ~0.85.
+    region="us",
+    routing_region="ap-south",
     image=image,
     volumes = {
         CACHE_PATH: model_cache,
     },
-    gpu="A100",  # Use A100 GPU for fast inference
+    # H100: the 357M AR decoder runs RTF ~0.95-1.37 on A100 — right at the
+    # realtime edge, so playback breaks whenever a run lands above 1.0. H100's
+    # ~1.5-2x per-step speed buys the margin that keeps streaming gap-free.
+    gpu="H100",
     timeout=3600,  # 1 hour timeout for long-running requests
     min_containers = 1,
 )
@@ -328,13 +349,21 @@ class MagpieTTSServer:
 
         model_dir = snapshot_download(
             repo_id="nvidia/magpie_tts_multilingual_357m",
-            revision="v2512",
+            revision="v2602",
         )
 
         self.model = MagpieTTSModel.restore_from(restore_path=f"{model_dir}/magpie_tts_multilingual_357m.nemo")
         self.model = self.model.cuda()
         self.model.eval()
         logger.info("Model loaded successfully")
+
+        # The checkpoint config leaves use_kv_cache_for_inference=False, which makes
+        # every decoder step re-attend over the entire generated sequence (O(n^2)
+        # per utterance -> RTF > 1 even on A100). With the cache enabled,
+        # transformer_2501 processes only the new position per step.
+        prev_kv = getattr(self.model, "use_kv_cache_for_inference", None)
+        self.model.use_kv_cache_for_inference = True
+        logger.info(f"KV-cache decoding enabled (checkpoint had: {prev_kv})")
 
         # Warm up both batch and streaming paths to JIT compile CUDA kernels
         logger.info("Warming up TTS model (batch + streaming paths)...")
@@ -348,19 +377,21 @@ class MagpieTTSServer:
             "Tell me more about the evolution of computer hardware."
         )
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
             # Warm up batch path with long text to allocate peak memory
             logger.info(f"  Warming up batch inference ({len(warmup_text)} chars)...")
-            _, _ = self.model.do_tts(warmup_text, language="en", speaker_index=2, apply_TN=False)
+            _, _ = self.model.do_tts(
+                warmup_text, language="en", speaker_index=2, apply_TN=False, use_cfg=USE_CFG
+            )
             torch.cuda.synchronize()
 
-            # Warm up streaming path (with CFG enabled for quality)
-            logger.info("  Warming up streaming inference...")
+            # Warm up streaming path (same CFG setting as serving)
+            logger.info(f"  Warming up streaming inference (use_cfg={USE_CFG})...")
             config = StreamingConfig(
                 min_first_chunk_frames=8,
                 chunk_size_frames=16,
                 overlap_frames=12,
-                use_cfg=True,
+                use_cfg=USE_CFG,
             )
             streamer = StreamingMagpieTTS(self.model, config)
             for _ in streamer.synthesize_streaming(warmup_text, language="en", speaker_index=2):
@@ -381,12 +412,14 @@ class MagpieTTSServer:
         text = normalize_text(text)
         speaker_idx = SPEAKERS.get(voice.lower(), 2)
 
-        with torch.no_grad():
+        # bf16 autocast matches the streaming path; output is cast back via .float().
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
             audio, audio_len = self.model.do_tts(
                 text,
                 language=language,
                 speaker_index=speaker_idx,
                 apply_TN=False,
+                use_cfg=USE_CFG,
             )
 
         # Convert to bytes
@@ -444,7 +477,7 @@ class MagpieTTSServer:
         # Get preset config
         base_config = STREAMING_PRESETS.get(preset, STREAMING_PRESETS["conservative"])
         config = replace(base_config,
-            use_cfg=True,       # Enable CFG for quality
+            use_cfg=USE_CFG,    # CFG doubles decoder compute; see USE_CFG above
             use_crossfade=False # Crossfade handled here in post-vocoder audio buffer
         )
 

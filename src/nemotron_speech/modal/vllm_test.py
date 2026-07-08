@@ -6,7 +6,7 @@ import aiohttp
 
 import modal
 
-MODEL_NAME = "Qwen/Qwen3-8B-FP8"
+MODEL_NAME = "Qwen/Qwen3-4B-FP8"
 vllm_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.9.0-devel-ubuntu22.04",

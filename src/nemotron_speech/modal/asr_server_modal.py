@@ -131,11 +131,13 @@ with image.imports():
 
 # Modal class for ASR inference
 @app.cls(
+    region="ap",
+    routing_region="ap-south",
     image=image,
     volumes={
         CACHE_PATH: model_cache,
     },
-    gpu="L40S",  
+    gpu="L4",  
     timeout=3600,
     min_containers=1,  # Keep warm for low latency
 )

@@ -36,6 +36,7 @@ Performance:
     - No audio gaps between chunks
 """
 
+import inspect
 from dataclasses import dataclass
 from typing import Generator, Optional
 
@@ -70,6 +71,10 @@ class StreamingConfig:
     topk: int = 80
     use_cfg: bool = True
     cfg_scale: float = 2.5
+
+    # Run decoder + codec under bf16 autocast (A100 tensor cores; ~2x over fp32).
+    # Set False to roll back to full fp32 if quality regresses.
+    use_bf16: bool = True
 
 
 # Preset configurations for different use cases
@@ -148,7 +153,11 @@ class StreamingMagpieTTS:
         cfg = self.config
         model = self.model
 
-        with torch.no_grad():
+        # bf16 autocast covers the AR decoder loop and codes_to_audio; audio is
+        # converted back via .float() in _audio_to_bytes.
+        autocast_ctx = torch.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16)
+
+        with torch.no_grad(), autocast_ctx:
             # Prepare batch (same as do_tts)
             batch = self._prepare_batch(text, language, speaker_index, apply_tn)
 
@@ -186,10 +195,22 @@ class StreamingMagpieTTS:
             end_indices = {}
             first_chunk_yielded = False
 
+            # nemo-toolkit >= 2.7.0 changed embed_audio_tokens to take raw-frame lengths
+            # and return (embedding, embedding_lens); older versions take only the tokens.
+            embed_takes_lens = (
+                "audio_tokens_lens" in inspect.signature(model.embed_audio_tokens).parameters
+            )
+
             # Main generation loop
             for idx in range(cfg.max_decoder_steps // model.frame_stacking_factor):
                 # Generate next token(s)
-                audio_codes_embedded = model.embed_audio_tokens(audio_codes_input)
+                if embed_takes_lens:
+                    # audio_codes_lens counts embedded frames; the new API wants raw frames
+                    audio_codes_embedded, _ = model.embed_audio_tokens(
+                        audio_codes_input, audio_codes_lens * model.frame_stacking_factor
+                    )
+                else:
+                    audio_codes_embedded = model.embed_audio_tokens(audio_codes_input)
 
                 if context_tensors.additional_decoder_input is not None:
                     _audio_codes_embedded = torch.cat(
@@ -329,7 +350,8 @@ class StreamingMagpieTTS:
                     else:
                         decode_lens = torch.tensor([decode_codes.size(-1)], device=decode_codes.device).long()
 
-                    audio, audio_len = model.codes_to_audio(decode_codes, decode_lens)
+                    # nemo-toolkit >= 2.7.0 returns (audio, audio_len, codes); older (audio, audio_len)
+                    audio = model.codes_to_audio(decode_codes, decode_lens)[0]
 
                     # Extract new audio (skip overlap region, but preserve some for server-side blending)
                     # The preserved overlap represents the same time period as the previous chunk's tail,
@@ -387,7 +409,7 @@ class StreamingMagpieTTS:
                 else:
                     decode_lens = torch.tensor([decode_codes.size(-1)], device=decode_codes.device).long()
 
-                audio, _ = model.codes_to_audio(decode_codes, decode_lens)
+                audio = model.codes_to_audio(decode_codes, decode_lens)[0]
 
                 # Preserve overlap for server-side blending (same as main loop)
                 if overlap_samples > 0:
@@ -425,6 +447,8 @@ class StreamingMagpieTTS:
             "it": ["italian_phoneme", "italian"],
             "vi": ["vietnamese_phoneme", "vietnamese"],
             "zh": ["mandarin_phoneme", "mandarin", "chinese"],
+            "hi": ["hindi_phoneme", "hindi", "hi"],
+            "ja": ["japanese_phoneme", "japanese", "ja"],
         }
 
         if language in language_tokenizer_map:
