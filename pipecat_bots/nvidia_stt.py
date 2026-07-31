@@ -8,6 +8,7 @@
 
 import asyncio
 import json
+import os
 import time
 from typing import AsyncGenerator, Optional
 
@@ -64,6 +65,10 @@ class NVidiaWebSocketSTTService(WebsocketSTTService):
             **kwargs: Additional arguments passed to the parent WebsocketSTTService.
         """
         super().__init__(sample_rate=sample_rate, **kwargs)
+        # If the server was deployed with ASR_AUTH_TOKEN, send it on connect
+        token = os.getenv("ASR_AUTH_TOKEN")
+        if token:
+            url = f"{url}{'&' if '?' in url else '?'}token={token}"
         self._url = url
         self._websocket = None
         self._receive_task: Optional[asyncio.Task] = None

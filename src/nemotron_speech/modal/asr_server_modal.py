@@ -12,8 +12,11 @@ Usage:
 """
 
 import asyncio
+import copy
 import hashlib
+import hmac
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional, Any
@@ -53,8 +56,11 @@ image = (
         "fastapi[standard]",
         "websockets",
     ).uv_pip_install(
-        "nemo_toolkit[asr]@git+https://github.com/NVIDIA/NeMo.git@644201898480ec8c8d0a637f0c773825509ac4dc",
-        extra_options="--no-cache",
+        # Stable release from the post-split speech repo (NVIDIA-NeMo/Speech).
+        # Previously pinned to a git commit on NVIDIA/NeMo@main, which is now
+        # stale for speech. Fallback if a regression appears:
+        # "nemo_toolkit[asr]@git+https://github.com/NVIDIA/NeMo.git@644201898480ec8c8d0a637f0c773825509ac4dc"
+        "nemo-toolkit[asr]==2.7.3",
     ).env({
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "HF_HOME": CACHE_PATH,
@@ -63,7 +69,7 @@ image = (
 )
 
 # Enable debug logging with DEBUG_ASR=1
-DEBUG_ASR = False
+DEBUG_ASR = os.environ.get("DEBUG_ASR", "0") == "1"
 
 # Right context options for att_context_size=[70, X]
 RIGHT_CONTEXT_OPTIONS = {
@@ -105,17 +111,38 @@ class ASRSession:
     
     # Current transcription (model's cumulative output)
     current_text: str = ""
-    
-    # Last text emitted to client on hard reset (for server-side deduplication)
-    # We only send the delta (new portion) to avoid downstream duplication
-    last_emitted_text: str = ""
-    
-    # Audio overlap buffer for mid-utterance reset continuity
-    # This preserves the last N ms of audio to provide encoder left-context
-    # when a new segment starts after a reset
-    overlap_buffer: Optional[np.ndarray] = None
 
-RIGHT_CONTEXT = 1
+    # Mel frames dropped from the front of accumulated_audio by buffer trimming.
+    # Global frame index = local index into the current buffer + frame_offset.
+    frame_offset: int = 0
+
+    # Trailing odd byte from a binary message (an int16 sample can be split
+    # across two WebSocket messages; the leftover byte joins the next message)
+    pending_bytes: bytes = b""
+
+    # Consecutive chunk-processing failures; connection closes past a threshold
+    error_count: int = 0
+
+# Encoder lookahead: 1 (160ms, default) balances latency/WER; 0 (80ms) is the
+# lowest-latency mode (~+0.8 avg WER per the model card) and also halves the
+# hard-reset padding, cutting finalization compute. See RIGHT_CONTEXT_OPTIONS.
+RIGHT_CONTEXT = int(os.environ.get("ASR_RIGHT_CONTEXT", "1"))
+
+# Inference precision: "bf16" (default) mirrors NVIDIA's cache-aware streaming
+# reference (autocast around the streaming loop) and roughly halves encoder
+# time on Ada/Hopper GPUs. Set ASR_PRECISION=fp32 to opt out.
+ASR_PRECISION = os.environ.get("ASR_PRECISION", "bf16")
+
+# Audio buffer trimming: keep at most this much audio per session. Turns shorter
+# than this are processed identically to the untrimmed behavior; longer turns get
+# a sliding window so per-chunk and finalization cost stay flat instead of
+# growing with utterance length (which would blow the voice-to-voice budget).
+TRIM_KEEP_SECONDS = 5.0
+# Extra mel frames kept ahead of the pre-encode cache so STFT windows at the
+# buffer edge see real audio rather than padding.
+CONTEXT_MARGIN_FRAMES = 8
+# Close the connection after this many consecutive chunk-processing failures
+MAX_CONSECUTIVE_ERRORS = 3
 
 with image.imports():
     import time
@@ -137,10 +164,21 @@ with image.imports():
     volumes={
         CACHE_PATH: model_cache,
     },
-    gpu="L4",  
-    timeout=3600,
+    gpu="L4",
+    # The Modal input timeout applies to the WebSocket's whole lifetime; the old
+    # 3600 hard-killed any call at exactly 1 hour.
+    timeout=24 * 60 * 60,
     min_containers=1,  # Keep warm for low latency
+    max_containers=10,  # Bound autoscale cost
+    # Deploy with ASR_AUTH_TOKEN set locally to require ?token=... on connect;
+    # deploy without it to keep the endpoint open (previous behavior).
+    secrets=[modal.Secret.from_dict({"ASR_AUTH_TOKEN": os.environ.get("ASR_AUTH_TOKEN", "")})],
 )
+# Without this, a WebSocket connection occupies the container's only input slot
+# for its entire life, so every additional caller hits a multi-minute cold start.
+# Kept low because sessions share one GPU and one inference lock: another
+# session's turn-finalization sits directly in your voice-to-voice latency.
+@modal.concurrent(max_inputs=4)
 class NemotronASRModel:
     """Modal class for Nemotron ASR inference."""
     
@@ -150,7 +188,16 @@ class NemotronASRModel:
         
         
         logger.info(f"Loading ASR model from {MODEL_NAME}...")
-        
+
+        # TF32 for any matmuls that stay fp32 (free speedup on Ampere+)
+        torch.set_float32_matmul_precision("high")
+
+        # bf16 autocast around the streaming loop, matching NVIDIA's
+        # cache-aware streaming reference script. The CUDA-graph greedy decoder
+        # stays OFF: it has known crashes with streaming partial hypotheses.
+        self.amp_dtype = torch.bfloat16 if ASR_PRECISION == "bf16" else None
+        logger.info(f"Inference precision: {'bf16 autocast' if self.amp_dtype else 'fp32'}")
+
         self.model = nemo_asr.models.ASRModel.from_pretrained(
             MODEL_NAME
         )
@@ -196,6 +243,16 @@ class NemotronASRModel:
         
         # drop_extra_pre_encoded for non-first chunks
         self.drop_extra = scfg.drop_extra_pre_encoded
+
+        # The first chunk must emit at least pre_encode_cache_size frames
+        # (rounded up to whole chunks), or the second chunk's start index
+        # (emitted - pre_encode_cache_size) goes negative. With right_context=0
+        # the shift is 8 mel frames < 9 cache frames, which crashed the encoder
+        # with a 0-length attention query. For right_context>=1 this equals
+        # shift_frames, preserving the original behavior exactly.
+        self.first_chunk_frames = (
+            (self.pre_encode_cache_size + self.shift_frames - 1) // self.shift_frames
+        ) * self.shift_frames
         
         # Calculate silence padding for final chunk:
         # - right_context chunks for encoder lookahead
@@ -203,19 +260,21 @@ class NemotronASRModel:
         # With right_context=1, this is (1+1)*160ms = 320ms
         self.final_padding_frames = (RIGHT_CONTEXT + 1) * self.shift_frames
         padding_ms = self.final_padding_frames * hop_length_sec * 1000
-        
-        # Calculate audio overlap for mid-utterance reset continuity
-        # Use pre_encode_cache_size frames = 90ms of left-context
-        # This allows the encoder to have proper context when starting a new segment
-        self.overlap_samples = self.pre_encode_cache_size * self.hop_samples
-        overlap_ms = self.overlap_samples * 1000 / self.sample_rate
-        
+
+        # Sliding-window cap on the per-session audio buffer. Must always retain
+        # enough context for the next chunk's pre-encode cache plus margin.
+        self.keep_samples = max(
+            int(TRIM_KEEP_SECONDS * self.sample_rate),
+            (self.pre_encode_cache_size + CONTEXT_MARGIN_FRAMES + 2 * self.shift_frames + 2)
+            * self.hop_samples,
+        )
+
         shift_ms = self.shift_frames * hop_length_sec * 1000
         logger.info(f"Model loaded: {type(self.model).__name__}")
         logger.info(f"Shift size: {shift_ms:.0f}ms ({self.shift_frames} frames)")
         logger.info(f"Pre-encode cache: {self.pre_encode_cache_size} frames")
         logger.info(f"Final chunk padding: {padding_ms:.0f}ms ({self.final_padding_frames} frames)")
-        logger.info(f"Audio overlap for resets: {overlap_ms:.0f}ms ({self.overlap_samples} samples)")
+        logger.info(f"Audio buffer window: {self.keep_samples * 1000 // self.sample_rate}ms")
         
         # Warmup inference
         self._warmup()
@@ -226,100 +285,116 @@ class NemotronASRModel:
         # Active sessions
         self.sessions = {}
     
+    def _autocast(self):
+        """Autocast context matching NVIDIA's cache-aware streaming reference."""
+        return torch.autocast("cuda", dtype=self.amp_dtype, enabled=self.amp_dtype is not None)
+
     def _warmup(self):
-        """Run warmup inference using streaming API to claim GPU memory."""
-        
-        logger.info("Running warmup inference (streaming API) to claim GPU memory...")
+        """Warm the exact production code paths and tensor shapes.
+
+        Runs the real interim-chunk step (first-chunk and cached-chunk shapes)
+        and the real finalization step twice, so kernel compilation and
+        autotuning happen at container startup instead of on a live caller's
+        first turn (freshly autoscaled containers would otherwise stutter).
+        """
+
+        logger.info("Warmup: exercising streaming chunk + finalization paths...")
         start = time.perf_counter()
-        
-        # Generate 1 second of silence plus padding for warmup
-        warmup_samples = self.sample_rate + (self.final_padding_frames * self.hop_samples)
-        warmup_audio = np.zeros(warmup_samples, dtype=np.float32)
-        
-        # Run streaming inference to force all CUDA kernels to compile
-        with torch.inference_mode():
-            audio_tensor = torch.from_numpy(warmup_audio).unsqueeze(0).cuda()
-            audio_len = torch.tensor([len(warmup_audio)], device='cuda')
-            
-            # Preprocess
-            mel, mel_len = self.model.preprocessor(input_signal=audio_tensor, length=audio_len)
-            
-            # Get initial cache
-            cache = self.model.encoder.get_initial_cache_state(batch_size=1)
-            
-            # Run streaming step
-            _ = self.model.conformer_stream_step(
-                processed_signal=mel,
-                processed_signal_length=mel_len,
-                cache_last_channel=cache[0],
-                cache_last_time=cache[1],
-                cache_last_channel_len=cache[2],
-                keep_all_outputs=True,
-                previous_hypotheses=None,
-                previous_pred_out=None,
-                drop_extra_pre_encoded=0,
-                return_transcription=True,
-            )
-        
+
+        chunk_samples = (self.shift_frames + 1) * self.hop_samples
+        for _ in range(2):
+            session = ASRSession(id="warmup", websocket=None)
+            self._init_session(session)
+
+            # ~1s of silence fed through the interim chunk path
+            for _ in range(6):
+                session.accumulated_audio = np.concatenate(
+                    [session.accumulated_audio, np.zeros(chunk_samples, dtype=np.float32)]
+                )
+                if self._process_chunk(session) is None:
+                    raise RuntimeError("Warmup chunk step failed - see error above")
+
+            # Hard-reset finalization path (padding + keep_all_outputs=True)
+            padding = np.zeros(self.final_padding_frames * self.hop_samples, dtype=np.float32)
+            session.accumulated_audio = np.concatenate([session.accumulated_audio, padding])
+            if self._process_final_chunk(session) is None:
+                raise RuntimeError("Warmup finalization step failed - see error above")
+
         elapsed = (time.perf_counter() - start) * 1000
         logger.info(f"Warmup complete in {elapsed:.0f}ms - GPU memory claimed")
     
     def _init_session(self, session: ASRSession):
-        """Initialize a fresh session.
-        
-        If an overlap_buffer is present from a previous segment, it will be
-        prepended to the accumulated audio to provide encoder left-context.
-        This enables seamless transcription across mid-utterance resets.
-        """
-        
+        """Initialize a fresh session (also used to reset state after a hard reset)."""
+
         # Initialize encoder cache
         cache = self.model.encoder.get_initial_cache_state(batch_size=1)
         session.cache_last_channel = cache[0]
         session.cache_last_time = cache[1]
         session.cache_last_channel_len = cache[2]
-        
-        # Reset audio buffer and frame counter
-        # If overlap buffer exists, use it as the starting audio
-        if session.overlap_buffer is not None and len(session.overlap_buffer) > 0:
-            session.accumulated_audio = session.overlap_buffer.copy()
-            overlap_ms = len(session.overlap_buffer) * 1000 / self.sample_rate
-            logger.debug(
-                f"Session {session.id}: prepending {len(session.overlap_buffer)} samples "
-                f"({overlap_ms:.0f}ms) of overlap audio"
-            )
-            session.overlap_buffer = None  # Clear after use
-        else:
-            session.accumulated_audio = np.array([], dtype=np.float32)
-        
+
+        # Reset audio buffer and frame counters
+        session.accumulated_audio = np.array([], dtype=np.float32)
         session.emitted_frames = 0
-        
+        session.frame_offset = 0
+        session.pending_bytes = b""
+
         # Reset decoder state
         session.previous_hypotheses = None
         session.pred_out_stream = None
         session.current_text = ""
     
+    def _min_audio_for_chunk(self, session: ASRSession) -> int:
+        """Samples needed in the (possibly trimmed) buffer for one more chunk."""
+        local_emitted = session.emitted_frames - session.frame_offset
+        needed = self.first_chunk_frames if session.emitted_frames == 0 else self.shift_frames
+        return (local_emitted + needed + 1) * self.hop_samples
+
     async def _handle_audio(self, session: ASRSession, audio_bytes: bytes):
         """Accumulate audio and process when enough frames available."""
-        
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        
+
+        # int16 samples can be split across WebSocket messages; carry the odd
+        # trailing byte over instead of letting np.frombuffer raise and kill
+        # the whole connection.
+        raw = session.pending_bytes + audio_bytes
+        if len(raw) % 2:
+            session.pending_bytes = raw[-1:]
+            raw = raw[:-1]
+        else:
+            session.pending_bytes = b""
+        if not raw:
+            return
+
+        audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
         if DEBUG_ASR:
             chunk_hash = hashlib.md5(audio_bytes).hexdigest()[:8]
             logger.debug(f"Session {session.id}: recv chunk {len(audio_bytes)}B hash={chunk_hash}")
-        
+
         session.accumulated_audio = np.concatenate([session.accumulated_audio, audio_np])
-        
+
         # Process if we have enough audio for new frames
         # We need shift_frames worth of new mel frames (after skipping edge frame)
-        min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
-        
-        while len(session.accumulated_audio) >= min_audio_for_chunk:
+        while len(session.accumulated_audio) >= self._min_audio_for_chunk(session):
+            frames_before = session.emitted_frames
+
             async with self.inference_lock:
                 text = await asyncio.get_event_loop().run_in_executor(
                     None, self._process_chunk, session
                 )
-            
-            if text is not None and text != session.current_text:
+
+            if text is None:
+                # Chunk processing raised. Never retry in place: emitted_frames
+                # did not advance, so looping again would re-run the same
+                # failing inference forever under the shared lock.
+                session.error_count += 1
+                if session.error_count >= MAX_CONSECUTIVE_ERRORS:
+                    raise RuntimeError(
+                        f"ASR chunk processing failed {session.error_count} times in a row"
+                    )
+                break
+            session.error_count = 0
+
+            if text != session.current_text:
                 session.current_text = text
                 logger.debug(f"Session {session.id} interim: {text[-50:] if len(text) > 50 else text}")
                 await session.websocket.send_json({
@@ -327,9 +402,11 @@ class NemotronASRModel:
                     "text": text,
                     "is_final": False
                 })
-            
-            # Update minimum for next iteration
-            min_audio_for_chunk = (session.emitted_frames + self.shift_frames + 1) * self.hop_samples
+
+            if session.emitted_frames == frames_before:
+                # No forward progress (e.g. mel frame count came up short of the
+                # sample-based estimate) - wait for more audio instead of spinning.
+                break
     
     def _process_chunk(self, session: ASRSession) -> Optional[str]:
         """Process accumulated audio, extract new mel frames, run streaming inference."""
@@ -343,34 +420,52 @@ class NemotronASRModel:
                 audio_hash = _hash_audio(session.accumulated_audio)
                 logger.debug(f"Session {session.id}: process audio={len(session.accumulated_audio)} hash={audio_hash}")
             
-            with torch.inference_mode():
+            # Stage timing (DEBUG_ASR only): the cuda syncs needed for accurate
+            # per-stage numbers add latency, so this must stay opt-in.
+            if DEBUG_ASR:
+                torch.cuda.synchronize()
+                t_start = time.perf_counter()
+
+            with torch.inference_mode(), self._autocast():
                 mel, mel_len = self.model.preprocessor(
                     input_signal=audio_tensor,
                     length=audio_len
                 )
-                
+
+                if DEBUG_ASR:
+                    torch.cuda.synchronize()
+                    t_preprocess = time.perf_counter()
+
+                # Frame indices below are local to the trimmed buffer;
+                # session.emitted_frames is global (since turn start).
+                local_emitted = session.emitted_frames - session.frame_offset
+
                 # Available frames (excluding last edge frame)
                 available_frames = mel.shape[-1] - 1
-                new_frame_count = available_frames - session.emitted_frames
-                
-                if new_frame_count < self.shift_frames:
+                new_frame_count = available_frames - local_emitted
+
+                emit_frames = (
+                    self.first_chunk_frames if session.emitted_frames == 0
+                    else self.shift_frames
+                )
+                if new_frame_count < emit_frames:
                     return session.current_text  # Not enough new frames
-                
+
                 # Extract chunk with pre-encode cache
                 if session.emitted_frames == 0:
-                    # First chunk: just shift_frames, no cache
+                    # First chunk: no cache; sized so later chunk starts stay >= 0
                     chunk_start = 0
-                    chunk_end = self.shift_frames
+                    chunk_end = emit_frames
                     drop_extra = 0
                 else:
                     # Subsequent chunks: include pre_encode_cache frames before
-                    chunk_start = session.emitted_frames - self.pre_encode_cache_size
-                    chunk_end = session.emitted_frames + self.shift_frames
+                    chunk_start = local_emitted - self.pre_encode_cache_size
+                    chunk_end = local_emitted + emit_frames
                     drop_extra = self.drop_extra
-                
+
                 chunk_mel = mel[:, :, chunk_start:chunk_end]
                 chunk_len = torch.tensor([chunk_mel.shape[-1]], device='cuda')
-                
+
                 # Run streaming inference
                 (
                     session.pred_out_stream,
@@ -391,26 +486,60 @@ class NemotronASRModel:
                     drop_extra_pre_encoded=drop_extra,
                     return_transcription=True,
                 )
-                
+
+                if DEBUG_ASR:
+                    torch.cuda.synchronize()
+                    t_step = time.perf_counter()
+                    logger.debug(
+                        f"Session {session.id} chunk timing: "
+                        f"preprocess={(t_preprocess - t_start) * 1000:.2f}ms "
+                        f"encoder+decoder={(t_step - t_preprocess) * 1000:.2f}ms "
+                        f"(window={len(session.accumulated_audio)} samples)"
+                    )
+
                 # Update emitted frame count
-                session.emitted_frames += self.shift_frames
-                
+                session.emitted_frames += emit_frames
+
                 # Extract text
+                new_text = session.current_text
                 if transcribed_texts and transcribed_texts[0]:
                     hyp = transcribed_texts[0]
                     if hasattr(hyp, 'text'):
-                        return hyp.text
+                        new_text = hyp.text
                     elif isinstance(hyp, str):
-                        return hyp
+                        new_text = hyp
                     else:
-                        return str(hyp)
-                
-                return session.current_text
-        
+                        new_text = str(hyp)
+
+            # Keep the buffer bounded so per-chunk preprocessing and hard-reset
+            # finalization cost stay flat instead of growing with the utterance
+            self._trim_audio_buffer(session)
+            return new_text
+
         except Exception as e:
             logger.error(f"Session {session.id} chunk processing error: {e}")
             logger.error(traceback.format_exc())
             return None
+
+    def _trim_audio_buffer(self, session: ASRSession) -> None:
+        """Drop already-emitted audio beyond the keep window, in hop-aligned units.
+
+        Never drops the pre-encode cache + margin frames needed as left context
+        for the next chunk, so trimming does not change what the encoder sees.
+        """
+        excess_samples = len(session.accumulated_audio) - self.keep_samples
+        if excess_samples <= 0:
+            return
+
+        desired_drop = excess_samples // self.hop_samples
+        local_emitted = session.emitted_frames - session.frame_offset
+        max_drop = local_emitted - self.pre_encode_cache_size - CONTEXT_MARGIN_FRAMES
+        drop = min(desired_drop, max_drop)
+        if drop <= 0:
+            return
+
+        session.accumulated_audio = session.accumulated_audio[drop * self.hop_samples:]
+        session.frame_offset += drop
     
     async def _reset_session(self, session: ASRSession, finalize: bool = True):
         """Handle reset with soft or hard finalization.
@@ -422,10 +551,11 @@ class NemotronASRModel:
                       without forcing decoder output.
         
         Soft reset (finalize=False):
-        - Returns current_text as is_final (model's streaming output)
-        - No audio processing, no decoder finalization
-        - Decoder state preserved (no corruption)
-        - Used on VADUserStoppedSpeakingFrame for fast response
+        - Speculatively finalizes on COPIES of the caches: returns the same
+          text a hard reset would return right now (one extra inference,
+          ~10-30ms), while real decoder/encoder state stays untouched
+        - Used at silence onset so clients can start speculative LLM
+          generation on text that will match the hard-reset final
         
         Hard reset (finalize=True):
         - Adds padding and processes with keep_all_outputs=True
@@ -447,12 +577,24 @@ class NemotronASRModel:
         )
         
         if not finalize:
-            # SOFT RESET: Return current text without processing
-            # This is fast (~0ms) and doesn't corrupt decoder state.
-            # The model's current_text is already cumulative (contains all text
-            # from session start), so we just return it directly.
-            # We don't concatenate with cumulative_text to avoid duplication.
+            # SOFT RESET: speculatively finalize on *copies* of the session
+            # state, so the returned text matches the upcoming hard reset
+            # exactly while leaving encoder/decoder state untouched (the turn
+            # may continue). Raw current_text lags the audio by the lookahead
+            # and can end mid-word, which breaks clients that compare the soft
+            # text against the hard final (e.g. LiveKit preemptive generation
+            # only uses the speculative LLM reply on an exact text match).
             text = session.current_text
+            if session.accumulated_audio is not None and len(session.accumulated_audio) > 0:
+                spec_start = time.perf_counter()
+                async with self.inference_lock:
+                    spec_text = await asyncio.get_event_loop().run_in_executor(
+                        None, self._speculative_final, session
+                    )
+                if spec_text is not None:
+                    text = spec_text
+                spec_ms = (time.perf_counter() - spec_start) * 1000
+                logger.debug(f"Session {session.id} speculative finalization in {spec_ms:.1f}ms")
             
             logger.info(f"Session {session.id} soft reset: sending response")
             await session.websocket.send_json({
@@ -493,49 +635,19 @@ class NemotronASRModel:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.debug(f"Session {session.id} final chunk processed in {elapsed_ms:.1f}ms: '{final_text[-50:] if len(final_text) > 50 else final_text}'")
         
-        # Server-side deduplication: only send the delta (new portion)
-        # This avoids downstream duplication when aggregators concatenate transcripts
-        if final_text.startswith(session.last_emitted_text):
-            delta_text = final_text[len(session.last_emitted_text):].lstrip()
-        else:
-            # ASR corrected earlier text - send full text
-            # (This is rare but can happen with model corrections)
-            delta_text = final_text
-            logger.debug(
-                f"Session {session.id}: ASR correction detected, "
-                f"last='{session.last_emitted_text[-30:]}', new='{final_text[-30:]}'"
-            )
-        
-        # Update tracking state before sending
-        session.last_emitted_text = final_text
-        
-        # Send only the delta to client
-        logger.info(f"Session {session.id} hard reset: sending response with delta='{delta_text}'")
+        # Since all state resets after every hard reset, final_text is exactly
+        # this turn's transcript - the client emits it as-is.
+        logger.info(f"Session {session.id} hard reset: sending final='{final_text[-50:] if len(final_text) > 50 else final_text}'")
         await session.websocket.send_json({
             "type": "transcript",
-            "text": delta_text,
+            "text": final_text,
             "is_final": True,
             "finalize": True  # Tell client this was hard reset
         })
         logger.info(f"Session {session.id} hard reset: response sent")
-        
-        logger.debug(
-            f"Session {session.id} hard reset: delta='{delta_text}' "
-            f"(cumulative='{final_text[-50:] if len(final_text) > 50 else final_text}')"
-        )
-        
-        # MEMORY BOUNDING: Clear all state after hard reset
-        # This prevents unbounded memory growth by resetting completely each turn:
-        # - Audio buffer: cleared (no carryover between turns)
-        # - Decoder state: reset fresh (no hypothesis accumulation)
-        # - Encoder cache: re-initialized
-        #
-        # We considered keeping audio overlap for encoder context continuity,
-        # but since we reset the encoder cache, overlap audio would just be
-        # re-transcribed, causing duplicates. Clean reset avoids this.
 
-        session.last_emitted_text = ""
-        session.overlap_buffer = None
+        # Clear all state after hard reset: audio buffer, decoder state, and
+        # encoder cache all reset fresh so nothing carries over between turns.
         self._init_session(session)
 
         logger.debug(
@@ -544,6 +656,46 @@ class NemotronASRModel:
 
         logger.info(f"Session {session.id} _reset_session END: finalize={finalize}")
     
+    def _speculative_final(self, session: ASRSession) -> Optional[str]:
+        """Run hard-reset finalization on copies of the session state.
+
+        Produces the exact text a hard reset would produce right now, without
+        mutating the real session's caches, hypotheses, or counters. Caches are
+        cloned (defends against any in-place updates inside the encoder step)
+        and decoder hypotheses are deep-copied.
+        """
+        try:
+            scratch = ASRSession(id=f"{session.id}-spec", websocket=None)
+            scratch.emitted_frames = session.emitted_frames
+            scratch.frame_offset = session.frame_offset
+            scratch.current_text = session.current_text
+            scratch.cache_last_channel = (
+                session.cache_last_channel.clone()
+                if session.cache_last_channel is not None else None
+            )
+            scratch.cache_last_time = (
+                session.cache_last_time.clone()
+                if session.cache_last_time is not None else None
+            )
+            scratch.cache_last_channel_len = (
+                session.cache_last_channel_len.clone()
+                if session.cache_last_channel_len is not None else None
+            )
+            scratch.previous_hypotheses = copy.deepcopy(session.previous_hypotheses)
+            scratch.pred_out_stream = copy.deepcopy(session.pred_out_stream)
+
+            padding = np.zeros(
+                self.final_padding_frames * self.hop_samples, dtype=np.float32
+            )
+            scratch.accumulated_audio = np.concatenate(
+                [session.accumulated_audio, padding]
+            )
+            return self._process_final_chunk(scratch)
+        except Exception as e:
+            logger.error(f"Session {session.id} speculative finalization error: {e}")
+            logger.error(traceback.format_exc())
+            return None
+
     def _process_final_chunk(self, session: ASRSession) -> Optional[str]:
         """Process all remaining audio with keep_all_outputs=True."""
         
@@ -555,32 +707,34 @@ class NemotronASRModel:
             audio_tensor = torch.from_numpy(session.accumulated_audio).unsqueeze(0).cuda()
             audio_len = torch.tensor([len(session.accumulated_audio)], device='cuda')
             
-            with torch.inference_mode():
+            with torch.inference_mode(), self._autocast():
                 mel, mel_len = self.model.preprocessor(
                     input_signal=audio_tensor,
                     length=audio_len
                 )
-                
-                # For final chunk, use ALL remaining frames (including edge)
+
+                # For final chunk, use ALL remaining frames (including edge).
+                # Indices are local to the trimmed buffer.
+                local_emitted = session.emitted_frames - session.frame_offset
                 total_mel_frames = mel.shape[-1]
-                remaining_frames = total_mel_frames - session.emitted_frames
-                
+                remaining_frames = total_mel_frames - local_emitted
+
                 logger.debug(
                     f"Session {session.id} final chunk: "
                     f"total_mel={total_mel_frames}, emitted={session.emitted_frames}, "
-                    f"remaining={remaining_frames}"
+                    f"offset={session.frame_offset}, remaining={remaining_frames}"
                 )
-                
+
                 if remaining_frames <= 0:
                     logger.warning(f"Session {session.id}: No remaining frames to process!")
                     return session.current_text
-                
+
                 # Extract final chunk with pre-encode cache
                 if session.emitted_frames == 0:
                     chunk_start = 0
                     drop_extra = 0
                 else:
-                    chunk_start = session.emitted_frames - self.pre_encode_cache_size
+                    chunk_start = local_emitted - self.pre_encode_cache_size
                     drop_extra = self.drop_extra
                 
                 chunk_mel = mel[:, :, chunk_start:]
@@ -645,11 +799,24 @@ class NemotronASRModel:
                 "status": "healthy",
                 "model_loaded": self.model is not None,
                 "sample_rate": self.sample_rate,
+                "right_context": RIGHT_CONTEXT,
+                "precision": "bf16" if self.amp_dtype else "fp32",
             }
         
         @web_app.websocket("/")
         async def websocket_handler(websocket: WebSocket):
             """Handle WebSocket ASR streaming connection."""
+            # Auth: enforced only when the deployment has ASR_AUTH_TOKEN set.
+            # Client passes it as ?token=... on the WebSocket URL.
+            expected_token = os.environ.get("ASR_AUTH_TOKEN", "")
+            if expected_token:
+                provided = websocket.query_params.get("token", "")
+                if not hmac.compare_digest(provided, expected_token):
+                    # Reject before accepting the handshake
+                    await websocket.close(code=1008)
+                    logger.warning("Rejected WebSocket connection with bad/missing token")
+                    return
+
             await websocket.accept()
             
             session_id = str(uuid.uuid4())[:8]

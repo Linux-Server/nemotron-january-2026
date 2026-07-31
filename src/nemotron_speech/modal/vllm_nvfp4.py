@@ -11,7 +11,7 @@ from typing import Any
 import aiohttp
 import modal
 
-MODEL_NAME = "RedHatAI/Qwen3.5-9B-FP8-dynamic"
+MODEL_NAME = "unsloth/gemma-4-26B-A4B-it-NVFP4"
 # Alias the served model so bot clients can point at a stable name
 # (set NVIDIA_LLM_MODEL=llm) regardless of which checkpoint is deployed.
 SERVED_MODEL_NAME = "llm"
@@ -37,7 +37,7 @@ vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 
 FAST_BOOT = False
 
-APP_NAME = "qwen3p5-9b-vllm-voice"
+APP_NAME = "qwen3p5-26b-vllm-voice"
 app = modal.App(APP_NAME)
 
 N_GPU = 1
@@ -56,11 +56,11 @@ with vllm_image.imports():
     import torch
 
 @app.function(
-    region="ap", routing_region="ap-south",
+    # region="ap", #routing_region="ap-south",
     image=vllm_image,
-    gpu=f"L40S:{N_GPU}",
+    gpu=f"RTX-PRO-6000:{N_GPU}",
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
-    timeout=10 * MINUTES,  # how long should we wait for container start?
+    timeout=25 * MINUTES,  # how long should we wait for container start?
     volumes={
         "/root/.cache/huggingface": hf_cache_vol,
         "/root/.cache/vllm": vllm_cache_vol,
@@ -92,8 +92,6 @@ def serve():
         "0.0.0.0",
         "--port",
         str(VLLM_PORT),
-        "--dtype",
-        "bfloat16",
         "--max-num-seqs",
         str(MAX_NUM_SEQS),
         "--max-model-len",
@@ -111,24 +109,24 @@ def serve():
         "--trust-remote-code",
         # Qwen3.5 is a VLM; the voice pipeline is text-only, so refuse
         # multimodal inputs and reclaim the vision profiling memory.
-        "--limit-mm-per-prompt",
-        '\'{"image": 0, "video": 0}\'',
+        # "--limit-mm-per-prompt",
+        # '\'{"image": 0, "video": 0}\'',
         # Thinking mode is ON by default for Qwen3.5. Clients disable it per
         # request (chat_template_kwargs.enable_thinking=false); the parser is a
         # backstop so any reasoning that slips through lands in reasoning_content
         # instead of being spoken aloud by TTS.
-        "--reasoning-parser",
-        "qwen3",
+        # "--reasoning-parser",
+        # "qwen3",
         # Voice defaults. Qwen3.5's shipped generation_config uses thinking-mode
         # sampling (temp 1.0, presence_penalty 1.5), which rambles when spoken.
-        "--override-generation-config",
-        (
-            '\'{"temperature": 0.6, "top_p": 0.95, "top_k": 20, '
-            '"presence_penalty": 0.0, "max_tokens": 256}\''
-        ),
+        # "--override-generation-config",
+        # (
+        #     '\'{"temperature": 0.6, "top_p": 0.95, "top_k": 20, '
+        #     '"presence_penalty": 0.0, "max_tokens": 256}\''
+        # ),
         "--enable-auto-tool-choice",
         "--tool-call-parser",
-        "qwen3_coder",
+        "gemma4",
         # Quoted like the other JSON args above: the cmd is joined and run through
         # a shell, which would otherwise eat the double quotes and hand vLLM
         # `{method:...}` instead of valid JSON.
