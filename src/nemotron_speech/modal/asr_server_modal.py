@@ -158,13 +158,13 @@ with image.imports():
 
 # Modal class for ASR inference
 @app.cls(
-    region="ap",
+    region="ap-south",
     routing_region="ap-south",
     image=image,
     volumes={
         CACHE_PATH: model_cache,
     },
-    gpu="L4",
+    gpu="T4",
     # The Modal input timeout applies to the WebSocket's whole lifetime; the old
     # 3600 hard-killed any call at exactly 1 hour.
     timeout=24 * 60 * 60,
