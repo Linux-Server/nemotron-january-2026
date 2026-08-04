@@ -62,10 +62,10 @@ with vllm_image.imports():
     # CPU-only echo app: GET 188->59ms, POST 340->68ms, WS round-trip 176->45ms
     # (45ms is the raw client RTT, i.e. zero proxy overhead). That hop was ~75%
     # of the voice pipeline's LLM TTFT.
-    region=["ap"],
+    region=["ap-south"],
     routing_region="ap-south",
     image=vllm_image,
-    gpu=f"L40S:{N_GPU}",
+    gpu=["A100-80GB", "H100!", "B200"],
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
     timeout=10 * MINUTES,  # how long should we wait for container start?
     volumes={

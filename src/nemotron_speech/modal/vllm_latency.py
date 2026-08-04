@@ -149,7 +149,7 @@ VLLM_PORT = 8000
 
 @app.server(
     image=vllm_image,
-    gpu=f"L40S:{N_GPU}",
+    gpu=["A100-80GB", "H100!", "B200"],
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
     # Without this a Server scales from zero: `modal deploy` provisions nothing and
     # no GPU boots until a request arrives (and that request 503s while it does).
@@ -165,7 +165,7 @@ VLLM_PORT = 8000
     target_concurrency=100,  # how many requests can one replica handle? tune carefully!
     unauthenticated=True,  # to make the endpoint publicly accessible
     routing_region="ap-south",
-    compute_region=["ap"],
+    compute_region=["ap-south"],
     secrets=[
         modal.Secret.from_name("hf-token"),
     ],
