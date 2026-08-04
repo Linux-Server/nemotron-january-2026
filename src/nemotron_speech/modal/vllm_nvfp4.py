@@ -56,9 +56,9 @@ with vllm_image.imports():
     import torch
 
 @app.function(
-    # region="ap", #routing_region="ap-south",
+    region="ap-south", routing_region="ap-south",
     image=vllm_image,
-    gpu=f"RTX-PRO-6000:{N_GPU}",
+    gpu=f"B200:{N_GPU}",
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
     timeout=25 * MINUTES,  # how long should we wait for container start?
     volumes={

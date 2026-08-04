@@ -11,7 +11,7 @@ from typing import Any
 import aiohttp
 import modal
 
-MODEL_NAME = "Qwen/Qwen3.5-0.8B"
+MODEL_NAME = "Qwen/Qwen3.5-9B"
 # Alias the served model so bot clients can point at a stable name
 # (set NVIDIA_LLM_MODEL=llm) regardless of which checkpoint is deployed.
 SERVED_MODEL_NAME = "llm"
@@ -62,9 +62,10 @@ with vllm_image.imports():
     # CPU-only echo app: GET 188->59ms, POST 340->68ms, WS round-trip 176->45ms
     # (45ms is the raw client RTT, i.e. zero proxy overhead). That hop was ~75%
     # of the voice pipeline's LLM TTFT.
-    region="ap-south", routing_region="ap-south",
+    region=["ap"],
+    routing_region="ap-south",
     image=vllm_image,
-    gpu=f"L4:{N_GPU}",
+    gpu=f"L40S:{N_GPU}",
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
     timeout=10 * MINUTES,  # how long should we wait for container start?
     volumes={

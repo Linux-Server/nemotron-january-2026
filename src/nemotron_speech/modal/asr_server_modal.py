@@ -158,7 +158,7 @@ with image.imports():
 
 # Modal class for ASR inference
 @app.cls(
-    region="ap-south",
+    region=["ap-south"],
     routing_region="ap-south",
     image=image,
     volumes={
