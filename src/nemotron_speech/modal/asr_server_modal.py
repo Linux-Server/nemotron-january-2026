@@ -164,7 +164,7 @@ with image.imports():
     volumes={
         CACHE_PATH: model_cache,
     },
-    gpu="T4",
+    gpu=["T4", "L4", "A10"],
     # The Modal input timeout applies to the WebSocket's whole lifetime; the old
     # 3600 hard-killed any call at exactly 1 hour.
     timeout=24 * 60 * 60,
