@@ -145,8 +145,8 @@ def _find_voice_prompt(name: str | None) -> str | None:
 
 
 @app.cls(
-    region="ap", routing_region="ap-south",
-    gpu="L4",
+    region="ap-south", routing_region="ap-south",
+    gpu=["L40S", "A10", "A100", "H100!"],
     image=image,
     min_containers=1,
     scaledown_window=60 * 5,

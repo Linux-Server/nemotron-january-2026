@@ -25,7 +25,7 @@ import modal
 import numpy as np
 
 # Modal app definition
-app = modal.App("nemotron-asr-server")
+app = modal.App("sachin-asr")
 
 # Model cache volume
 model_cache = modal.Volume.from_name("nemotron-speech", create_if_missing=True)

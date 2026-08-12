@@ -57,7 +57,7 @@ import modal
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-app = modal.App("kokoro-tts")
+app = modal.App("sachin-kokoro-tts")
 
 # Persist HF weights + voice packs across container restarts
 model_cache = modal.Volume.from_name("kokoro-tts-model-cache", create_if_missing=True)

@@ -43,13 +43,17 @@ GEMMA4_MTP_PATCH = REPO_ROOT / "patches" / "apply-vllm-gemma4-mtp-suppress-token
 vllm_image = (
     modal.Image.from_registry("nvidia/cuda:12.9.0-devel-ubuntu22.04", add_python="3.12")
     .entrypoint([])
-    .uv_pip_install("vllm==0.26.0")
+    .uv_pip_install("vllm==0.26.0","transformers==5.10.1",)
     # ...but every release that understands the unified drafter also carries the
     # suppress_tokens bug, and this drafter's generation_config sets it. Patch it.
     .env(
         {
             "HF_XET_HIGH_PERFORMANCE": "1",  # faster model transfers
             "VLLM_LOG_STATS_INTERVAL": "1",  # more frequent metrics logging
+            # KV-cache profiling and CUDA graph capture leave the allocator
+            # fragmented; expandable segments let the sampler's logits buffers
+            # come out of the same pool instead of failing on a fresh 256MB block.
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         }
     )
 )
@@ -127,6 +131,16 @@ SPECULATIVE_MODEL_NAME = "google/gemma-4-12B-it-assistant"
 # small leaves the GPU free for KV cache and CUDA graphs.
 MAX_MODEL_LEN = 32000
 
+# vLLM defaults to 256. The sampler allocates [max_num_seqs, vocab_size] fp32
+# buffers (~256MB at 256 seqs with this model's ~262k vocab) *after* KV-cache
+# profiling has already taken its share, which OOMs warmup on smaller cards.
+# A voice agent runs effectively single-slot, so 32 is generous.
+MAX_NUM_SEQS = 32
+
+# Leave headroom for those post-profiling allocations. 0.90 (the default) left
+# 75MB free on a 24GB card and warmup died.
+GPU_MEMORY_UTILIZATION = 0.85
+
 # For more on the performance you can expect when serving your own LLMs, see
 # [our LLM engine performance benchmarks](https://modal.com/llm-almanac).
 
@@ -140,7 +154,7 @@ MAX_MODEL_LEN = 32000
 # once the model is spun up and the process is ready to listen on the configured port.
 
 
-app = modal.App("example-vllm-inference")
+app = modal.App("sachin-geema-4-12B")
 
 N_GPU = 1
 MINUTES = 60  # seconds
@@ -149,7 +163,8 @@ VLLM_PORT = 8000
 
 @app.server(
     image=vllm_image,
-    gpu=["L40S","A10","A100", "H100!"],
+    # No A10: 24GB does not fit these weights plus KV cache plus CUDA graphs.
+    gpu=["L40S", "H100!", "RTX-PRO-6000", "B200"],
     scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
     # Without this a Server scales from zero: `modal deploy` provisions nothing and
     # no GPU boots until a request arrives (and that request 503s while it does).
@@ -162,10 +177,10 @@ VLLM_PORT = 8000
         "/root/.cache/vllm": vllm_cache_vol,
     },
     port=VLLM_PORT,
-    target_concurrency=100,  # how many requests can one replica handle? tune carefully!
+    target_concurrency=MAX_NUM_SEQS,  # keep in step with the engine's --max-num-seqs
     unauthenticated=True,  # to make the endpoint publicly accessible
-    routing_region="ap-south",
-    compute_region=["ap"],
+    routing_region="eu-west",
+    compute_region=["eu-west"],
     secrets=[
         modal.Secret.from_name("hf-token"),
     ],
@@ -194,6 +209,10 @@ class Server:
             # has left after the 23.9GB of weights. Voice turns are short anyway.
             "--max-model-len",
             str(MAX_MODEL_LEN),
+            "--max-num-seqs",
+            str(MAX_NUM_SEQS),
+            "--gpu-memory-utilization",
+            str(GPU_MEMORY_UTILIZATION),
         ]
 
         # enforce-eager disables both Torch compilation and CUDA graph capture
